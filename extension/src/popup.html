@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ApplyShortly Autofill</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <header class="bar-head">
+    <img class="mark" src="../icons/logo.svg" width="32" height="32" alt="" aria-hidden="true">
+    <div class="grow">
+      <b>ApplyShortly Autofill</b>
+      <small id="conn" class="conn"><span class="status-dot" id="dot"></span><span id="connText">Checking connection…</span></small>
+    </div>
+    <button id="assistant" class="icon" type="button" title="Open assistant" aria-label="Open assistant">💬</button>
+    <button id="settings" class="icon" type="button" title="Settings" aria-label="Settings">⚙</button>
+  </header>
+
+  <main id="view" aria-live="polite">
+    <div class="loading"><span class="spin"></span>Checking this page…</div>
+  </main>
+
+  <section id="prefs" class="prefs" hidden>
+    <label class="switch-row">
+      <span>
+        Draft missing answers with AI automatically
+        <small class="muted">Uses AI credits. Drafts are marked “Check”.</small>
+      </span>
+      <input id="aiDrafts" type="checkbox" class="switch">
+    </label>
+  </section>
+
+  <footer id="foot" class="foot muted" hidden></footer>
+
+  <script src="panel-model.js"></script>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

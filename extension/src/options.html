@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ApplyShortly Autofill · Settings</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="page">
+  <main>
+    <header class="hero-head">
+      <img class="mark lg" src="../icons/logo.svg" width="48" height="48" alt="" aria-hidden="true">
+      <div>
+        <h1>ApplyShortly Autofill</h1>
+        <p class="muted">Fills job applications from your ApplyShortly profile. It never submits; you review and click Submit.</p>
+      </div>
+    </header>
+
+    <div id="connCard" class="card conn-card" role="status" aria-live="polite">
+      <span class="status-dot" id="dot"></span>
+      <div class="grow">
+        <b id="connTitle">Checking connection…</b>
+        <div id="connDetail" class="muted"></div>
+      </div>
+      <button id="retest" type="button">Test again</button>
+    </div>
+
+    <section class="card">
+      <h2><span class="num">1</span>Connect your account</h2>
+      <form id="form" novalidate>
+        <p id="accountSummary" hidden></p>
+        <div class="actions">
+          <button id="signin" type="button" class="primary">Sign in with ApplyShortly</button>
+          <button id="cancelSignin" type="button" hidden>Cancel sign-in</button>
+          <button id="disconnect" type="button">Disconnect account</button>
+        </div>
+        <button id="openWebsite" type="button">Open ApplyShortly</button>
+        <p id="pairingMsg" role="status" aria-live="polite"></p>
+        <details>
+          <summary>Advanced: manual API-key connection</summary>
+        <label>API key
+          <span class="input-with-btn">
+            <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key" required>
+            <button id="reveal" type="button" class="icon" title="Show key" aria-label="Show key">👁</button>
+          </span>
+        </label>
+        <p class="hint">For manual connection, create a per-user key in ApplyShortly → Settings → API keys.</p>
+        <div class="actions">
+          <button type="submit" class="primary">Save &amp; connect</button>
+          <span id="formMsg" role="status"></span>
+        </div>
+        </details>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2><span class="num">2</span>Apply to a job</h2>
+      <ol class="how">
+        <li><b>Start it.</b> In ApplyShortly, choose <b>Open &amp; Autofill</b> on a job. Or, on any application page, click
+          the extension icon<span id="shortcutHint"></span>.</li>
+        <li><b>Review.</b> A panel at the bottom right lists what was filled and what still needs you. Click a row to
+          jump to that field. Green means filled, amber means check it, red means it's your turn.</li>
+        <li><b>Submit.</b> Click the form's own Submit button. ApplyShortly moves the job to <i>Submitted</i> for you.</li>
+      </ol>
+      <p class="hint"><a href="#" id="shortcuts">Change the keyboard shortcut</a></p>
+    </section>
+
+    <section class="card">
+      <h2>AI drafting</h2>
+      <p id="aiMode">Connect your account to see AI settings.</p>
+      <label>AI funding
+        <select id="aiFunding" disabled><option value="platform">ApplyShortly credits</option></select>
+      </label>
+      <details id="advancedAI">
+        <summary>Advanced: use your own AI key</summary>
+        <form id="providerForm">
+          <label>Provider
+            <select id="provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select>
+          </label>
+          <label>Personal API key<input id="providerKey" type="password" autocomplete="off" spellcheck="false" required minlength="10" maxlength="4096"></label>
+          <label>Model identifier<input id="providerModel" type="text" autocomplete="off" spellcheck="false" required maxlength="100" pattern="[a-zA-Z0-9._:/\-]+"></label>
+          <button type="submit" id="saveProvider" disabled>Save and use</button>
+        </form>
+        <ul id="savedProviders"></ul>
+        <p class="hint">Provider requests are billed directly by your provider. Personal mode never automatically switches to ApplyShortly credits.</p>
+      </details>
+      <p id="aiMessage" role="status" aria-live="polite"></p>
+      <button type="button" id="manageAI">Open AI settings in ApplyShortly</button>
+      <p class="hint">Personal keys are stored encrypted on your ApplyShortly server. Your provider bills those requests directly. Profile and answer-bank fills are free.</p>
+      <h2>Preferences</h2>
+      <label class="switch-row">
+        <span>Draft missing answers with AI automatically
+          <small class="muted">Off: only your profile and answer bank are used (free). You can still click
+            “Draft with AI” on any question. AI drafts are always marked “Check”.</small></span>
+        <input id="aiDrafts" type="checkbox" class="switch">
+      </label>
+      <span id="prefMsg" class="hint good" role="status"></span>
+    </section>
+
+    <footer class="muted foot-page">Version <span id="version"></span> · Connection credentials stay inside the extension. Personal AI keys are encrypted on your ApplyShortly server.</footer>
+  </main>
+  <script src="panel-model.js"></script>
+  <script src="options.js" type="module"></script>
+</body>
+</html>

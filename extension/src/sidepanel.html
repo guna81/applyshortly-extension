@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ApplyShortly Assistant</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="side">
+  <header class="bar-head">
+    <img class="mark" src="../icons/logo.svg" width="28" height="28" alt="" aria-hidden="true">
+    <div class="grow">
+      <b>ApplyShortly Assistant</b>
+      <small id="conn" class="conn"><span class="status-dot" id="dot"></span><span id="connText">Checking connection…</span></small>
+    </div>
+    <button id="settings" class="icon" type="button" title="Settings" aria-label="Settings">⚙</button>
+  </header>
+
+  <nav id="tabs" class="tabs" role="tablist" aria-label="Assistant sections"></nav>
+
+  <label class="switch-row page-share" id="pageShare">
+    <span>
+      Share this page with the assistant
+      <small class="muted" id="pageLabel">Off. Only the page address and title are sent.</small>
+    </span>
+    <input id="sharePage" type="checkbox" class="switch">
+  </label>
+
+  <main id="view" class="side-view" aria-live="polite">
+    <div class="loading"><span class="spin"></span>Loading…</div>
+  </main>
+
+  <form id="composer" class="composer" autocomplete="off">
+    <textarea id="input" rows="1" maxlength="4000" placeholder="Ask about your jobs, applications or this page…" aria-label="Message"></textarea>
+    <button id="send" class="primary" type="submit">Send</button>
+  </form>
+
+  <script src="chat-model.js"></script>
+  <script src="sidepanel.js" type="module"></script>
+</body>
+</html>

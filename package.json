@@ -1,0 +1,21 @@
+{
+  "name": "applyshortly-extension",
+  "version": "0.3.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test extension/test/*.test.mjs",
+    "typecheck": "tsc -p extension-bridge/tsconfig.json",
+    "test:packaging": "python3 -m unittest discover -s scripts -p 'test_build_extension.py'",
+    "check": "npm test && npm run typecheck && npm run test:packaging",
+    "build": "python3 scripts/build_extension.py",
+    "build:source": "python3 scripts/build_extension.py --source"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3"
+  }
+}
