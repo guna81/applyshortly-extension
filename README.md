@@ -18,6 +18,19 @@ The build creates `dist/extension/` and a versioned ZIP. In `chrome://extensions
 
 The platform URL is selected from `--platform-url`, `FRONTEND_URL` in the environment, `FRONTEND_URL` in a local `.env`, then `http://localhost:3000`. Only the public origin is packaged. Never add credentials to source files.
 
+The familiar Make commands are also available from this repository root:
+
+```sh
+make install
+make extension-build platform_url=https://applyshortly.com
+make extension-test
+make extension-source platform_url=https://applyshortly.com
+```
+
+Run `make help` for the command list. Without `platform_url`, builds use the same
+environment, local `.env` and localhost defaults as the npm commands. In Chrome's
+**Load unpacked** picker, select `dist/extension/` inside this repository.
+
 For automatic browser sign-in, the server operator must register the installed extension ID in `EXTENSION_IDS`. Unregistered installations can use user-approved code pairing. See the [extension guide](extension/README.md) for setup, manual connection, AI settings, form behavior and limitations.
 
 ## Development

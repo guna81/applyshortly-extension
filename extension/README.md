@@ -17,11 +17,12 @@ For Chrome Web Store releases, see the [publishing guide](../docs/operations/ext
 From the repository root:
 
 ```sh
-npm run build
+make extension-build
 # Reads FRONTEND_URL from environment or root .env. Optional explicit override:
-npm run build -- --platform-url https://your-applyshortly-host.example
-npm run build:source
-npm run check
+make extension-build platform_url=https://applyshortly.com
+make extension-source
+make install
+make extension-test
 ```
 
 The build writes `dist/extension/` and `dist/applyshortly-extension-0.3.1.zip`.

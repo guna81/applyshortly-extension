@@ -112,7 +112,7 @@ def build(destination, base_url=None, source=False):
         source_files["scripts/test_build_extension.py"] = (
             ROOT / "scripts/test_build_extension.py"
         ).read_bytes()
-        for name in ["package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py"]:
+        for name in ["Makefile", "package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py"]:
             source_files[name] = (ROOT / name).read_bytes()
         for item in (ROOT / "docs").rglob("*.md"):
             if item.is_file() and not item.is_symlink():

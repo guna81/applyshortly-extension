@@ -23,12 +23,13 @@ class BuildTest(unittest.TestCase):
             with zipfile.ZipFile(source) as archive:
                 names = archive.namelist()
                 self.assertIn("package-lock.json", names)
+                self.assertIn("Makefile", names)
                 self.assertIn(".github/workflows/ci.yml", names)
                 self.assertFalse(any(name.startswith(("frontend/", "backend/", ".git/")) for name in names))
                 self.assertFalse(any(Path(name).name == ".env" for name in names))
                 archive.extractall(root / "source")
             subprocess.run(
-                ["python3", "scripts/build_extension.py", "--source", "--platform-url", "https://platform.example"],
+                ["make", "extension-source", "platform_url=https://platform.example"],
                 cwd=root / "source", check=True, capture_output=True,
             )
             rebuilt = root / "source/dist" / package.name
