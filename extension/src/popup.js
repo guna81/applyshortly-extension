@@ -31,16 +31,6 @@ async function openTab(url) {
   window.close();
 }
 
-$("assistant").addEventListener("click", async () => {
-  const [current] = await chrome.tabs.query({ active: true, currentWindow: true });
-  try {
-    await chrome.sidePanel.open({ tabId: current.id });
-    window.close();
-  } catch (error) {
-    setConn("bad", error?.message || "Could not open the assistant.");
-  }
-});
-
 $("settings").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
   window.close();
@@ -58,10 +48,12 @@ async function shortcut() {
   }
 }
 
-async function start(allowUntracked, btn) {
+const AUTO_APPLY_HINT = "Auto apply fills the form, then clicks Submit after a 3-second countdown you can cancel. It stops and tells you what's missing if any required answer is still open.";
+
+async function start(allowUntracked, btn, autoSubmit = false) {
   btn.disabled = true;
   btn.textContent = "Starting…";
-  const r = await chrome.runtime.sendMessage({ type: "start", tabId: tab.id, url: tab.url, allowUntracked });
+  const r = await chrome.runtime.sendMessage({ type: "start", tabId: tab.id, url: tab.url, allowUntracked, autoSubmit });
   if (!r?.ok) {
     const e = P.friendlyError(r?.error, r?.status);
     show(el("div", { class: "card bad" }, el("b", {}, e.title), el("p", {}, e.detail)));
@@ -127,24 +119,26 @@ async function render(s, { notFound = false } = {}) {
 
   if (s.app) {
     const sent = !["saved", "queued", "filling", "ready_for_review"].includes(s.app.status);
-    const fill = button(sent ? "Fill it again anyway" : "Autofill this form", (e) => void start(false, e.currentTarget), sent ? "block" : "primary block");
+    const fill = button(sent ? "Fill it again anyway" : "Autofill this form", (e) => void start(false, e.currentTarget), "block");
     return show(el("div", { class: "card" },
       el("div", { class: "eyebrow" }, "This page is in ApplyShortly"),
       el("b", { class: "title" }, s.app.title || "Application"),
       el("div", { class: "muted" }, s.app.company_name ?? ""),
       s.app.status ? el("span", { class: "pill" }, s.app.status.replace(/_/g, " ")) : null,
       sent ? el("p", { class: "hint good" }, "✓ You've already applied to this job.") : null,
+      sent ? null : button("⚡ Auto apply", (e) => void start(false, e.currentTarget, true), "primary block"),
       fill,
-      sent ? null : el("p", { class: "hint" }, "Fills what it can from your profile. You review and click Submit on the form."),
+      sent ? null : el("p", { class: "hint" }, AUTO_APPLY_HINT),
     ));
   }
 
-  const untracked = button("Fill without tracking", (e) => void start(true, e.currentTarget), "primary block");
   return show(el("div", { class: "card" },
     el("b", {}, notFound ? "This page isn't in ApplyShortly yet" : "Fill this page"),
     el("p", { class: "muted" },
       "To track this application, add the job in ApplyShortly first. Or just fill the form now; nothing is recorded."),
-    untracked,
+    button("⚡ Auto apply", (e) => void start(true, e.currentTarget, true), "primary block"),
+    button("Fill without tracking", (e) => void start(true, e.currentTarget), "block"),
+    el("p", { class: "hint" }, AUTO_APPLY_HINT),
     button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/apply-queue?${new URLSearchParams({ add: "1", url: tab.url })}`), "block"),
   ));
 }

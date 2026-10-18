@@ -52,7 +52,6 @@ class BuildTest(unittest.TestCase):
                         manifest["background"]["service_worker"],
                         manifest["action"]["default_popup"],
                         manifest["options_ui"]["page"],
-                        manifest["side_panel"]["default_path"],
                         *manifest["icons"].values(),
                     ]
                     references.extend(

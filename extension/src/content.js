@@ -1,6 +1,7 @@
 // Runs on every page but stays idle unless the page was opened with #jobhunt-autofill=<id>,
 // is a later page of a form already being filled in this tab, or the popup says "Autofill".
-// It fills and reports; it never submits. The user clicks the site's own submit button.
+// It fills and reports. It submits only on the user's explicit "Auto apply", once every required
+// field is answered and after a cancellable countdown; otherwise the user clicks the site's button.
 
 (() => {
   if (globalThis.__jobhuntContentLoaded) return;
@@ -10,6 +11,11 @@
   const P = globalThis.JobHuntPanel;
   let state = null; // {appId, ctx, resume, results}
   let submittedReported = false;
+  let autoSubmitting = false; // Auto apply clicked Submit; its own report covers the submit event
+  const AUTO_APPLY_DELAY_S = 3;
+  // The Assistant tab's conversation for this page; reset with `state`.
+  const newChat = () => ({ lines: [], draft: "", pending: false });
+  let chat = newChat();
 
   function send(message) {
     return new Promise((resolve, reject) => {
@@ -18,6 +24,7 @@
         if (!res?.ok) {
           const err = new Error(res?.error ?? "No response from the extension");
           err.status = res?.status;
+          err.code = res?.code;
           return reject(err);
         }
         resolve(res.data);
@@ -76,18 +83,24 @@
   }
 
   /** Writes one answer into a field and returns its result row. */
-  function applyAnswer(field, answer) {
+  async function applyAnswer(field, answer) {
     if (!answer) {
-      return field.required ? { field, status: "unresolved", reason: "Not in your profile or answer bank yet" } : null;
+      if (field.required) return { field, status: "unresolved", reason: "Not in your profile or answer bank yet" };
+      // Optional and still empty: listed (and offered to the assistant) without counting as a to-do.
+      return { field, status: "optional", optional: true, reason: "Optional" };
     }
     if (field.kind === "dropdown") {
-      return { field, status: "unresolved", reason: `Pick “${answer.value}” from the list`, suggestion: answer.value };
+      const picked = field.custom ? await F.pickDropdown(field, answer.value) : null;
+      if (picked === null) {
+        return { field, status: "unresolved", reason: `Pick “${answer.value}” from the list`, suggestion: answer.value };
+      }
+      return { field, status: "filled", value: picked, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
     }
     const written = F.apply(field, answer.value);
     if (written === null) {
       return { field, status: "unresolved", reason: `None of the options match “${answer.value}”`, suggestion: answer.value };
     }
-    return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview };
+    return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
   }
 
   async function fillAll({ allowGenerate }) {
@@ -102,7 +115,7 @@
     for (const field of fields) {
       if (field.kind === "checkbox") {
         if (field.required && !answeredNow(field)) {
-          results.push({ field, status: "unresolved", reason: "Tick it yourself if you agree" });
+          results.push({ field, status: "unresolved", reason: field.options?.length ? "Select the options that apply on the form" : "Tick it yourself if you agree" });
         }
         continue;
       }
@@ -127,10 +140,51 @@
         continue;
       }
       if (!answerFor.has(field)) continue; // already had a value
-      const row = applyAnswer(field, answerFor.get(field));
+      const row = await applyAnswer(field, answerFor.get(field));
       if (row) results.push(row);
     }
+    return validate(results, fields);
+  }
+
+  const SETTLE_MS = 300; // pages re-validate a moment after a value is written
+
+  /**
+   * Looks at what the page itself says about the filled values: a value the site rejects is retried
+   * as a plain number ("5.6 years" → "5.6") and otherwise handed back to the user with the site's
+   * message. Fields that were already filled but are flagged invalid join the list too.
+   */
+  async function validate(results, fields) {
+    await new Promise((r) => setTimeout(r, SETTLE_MS));
+    for (const row of results) {
+      if (row.status !== "filled" || !F.isInvalid(row.field)) continue;
+      if (!(await repair(row))) {
+        const why = F.invalidReason(row.field);
+        Object.assign(row, { status: "unresolved", reason: why ? `The site says: “${why}”` : "The site doesn't accept this answer", suggestion: row.value });
+      }
+    }
+    const known = new Set(results.map((r) => r.field.el));
+    for (const field of fields) {
+      if (known.has(field.el) || !["text", "select", "radio", "dropdown"].includes(field.kind) || F.isEmpty(field) || !F.isInvalid(field)) continue;
+      const why = F.invalidReason(field);
+      results.push({ field, status: "unresolved", reason: why ? `The site says: “${why}”` : "The site doesn't accept this answer" });
+    }
     return results;
+  }
+
+  /** Tries the number-only spellings of a rejected text answer; true when the site accepts one. */
+  async function repair(row) {
+    if (row.field.kind !== "text") return false;
+    const original = row.value;
+    for (const candidate of F.numericVariants(original)) {
+      F.apply(row.field, candidate);
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+      if (!F.isInvalid(row.field)) {
+        row.value = candidate;
+        return true;
+      }
+    }
+    F.apply(row.field, original);
+    return false;
   }
 
   async function loadResume() {
@@ -157,6 +211,7 @@
         panel.busy("Loading your profile…");
         const [ctx, resume] = await Promise.all([send({ type: "context", appId }), loadResume()]);
         state = { appId, ctx, resume, results: [] };
+        chat = newChat();
         await report("opened");
       }
       const generate = allowGenerate ?? state.ctx.aiDrafts;
@@ -165,9 +220,11 @@
       outline();
       await reportFilled();
       panel.idle();
+      return true;
     } catch (err) {
       panel.fail(err);
       await report("failed", { note: err.message });
+      return false;
     }
   }
 
@@ -177,7 +234,7 @@
     panel.idle();
     const answer = await resolveAnswer(row.field, true);
     row.drafting = false;
-    const next = answer ? applyAnswer(row.field, answer) : null;
+    const next = answer ? await applyAnswer(row.field, answer) : null;
     if (next?.status === "filled") {
       state.results = merge(state.results, [next]);
       outline();
@@ -189,31 +246,150 @@
     panel.idle();
   }
 
+  // ------------------------------------------------------------------ assistant tab
+
+  /** Writes the assistant's validated values into the page; returns the labels it filled. */
+  async function applyAssistantUpdates(updates, rows) {
+    const changed = [];
+    for (const [key, value] of Object.entries(updates ?? {})) {
+      const r = rows[key];
+      if (!r || typeof value !== "string" || !value.trim()) continue;
+      const next = await applyAnswer(r.field, { value, source: "assistant", needsReview: false });
+      if (next) changed.push(next);
+    }
+    if (!changed.length) return [];
+    state.results = merge(state.results, changed);
+    outline();
+    void reportFilled();
+    return changed.filter((r) => r.status === "filled").map((r) => r.field.label || "answer");
+  }
+
+  const DONE_TEXT = "That's everything. Review the form and click its own Submit button when you're ready.";
+
+  /** "Draft it for me": the per-field AI draft (profile + job), started from the chat. */
+  async function assistantDraft(row) {
+    const answer = await resolveAnswer(row.field, true);
+    const next = answer ? await applyAnswer(row.field, answer) : null;
+    if (next?.status !== "filled") return { text: "I couldn't draft this one. Tell me what you'd like to say and I'll put it in." };
+    state.results = merge(state.results, [next]);
+    outline();
+    void reportFilled();
+    return { text: "Here's a draft based on your profile and this job. Read it over in the form, or tell me what to change.", filled: [row.field.label || "answer"], next: true };
+  }
+
+  /** Quick replies the panel handles itself: nothing is sent to the assistant. */
+  async function localReply(message, row) {
+    const markDone = () => {
+      Object.assign(row, { status: "done", manual: true, source: "you" });
+      outline();
+    };
+    if (message === P.DRAFT_REPLY && row.status === "optional" && row.field.kind === "text") return assistantDraft(row);
+    if (message === P.SKIP_REPLY && row.status === "optional") {
+      row.skipped = true;
+      return { text: "OK, leaving it blank.", next: true };
+    }
+    if (message === P.AGREE_REPLY && row.field.kind === "checkbox" && !row.field.options?.length) {
+      // A deterministic click on the user's explicit "I agree", never a model decision.
+      if (!answeredNow(row.field)) row.field.el.click();
+      if (!answeredNow(row.field)) return { text: "I couldn't tick it. Please tick it on the form yourself." };
+      markDone();
+      return { text: "Ticked.", next: true };
+    }
+    if (message === P.SHOW_REPLY) {
+      panel.focus(row.field);
+      return { text: "It's highlighted on the page.", choices: row.field.kind === "checkbox" && !row.field.options?.length ? [P.AGREE_REPLY] : [P.DONE_REPLY] };
+    }
+    if (message === P.DONE_REPLY && row.status === "unresolved") {
+      if (row.field.options?.length && row.field.kind === "checkbox" && !answeredNow(row.field)) {
+        return { text: "Select at least one option on the form first.", choices: [P.SHOW_REPLY, P.DONE_REPLY] };
+      }
+      markDone();
+      return { text: "Great.", next: true };
+    }
+    return null;
+  }
+
+  /** The reply line, followed by whatever the chat should bring up next. */
+  function withNext(reply) {
+    if (!reply.next) return reply;
+    const next = P.nextPrompt(state.results);
+    return { ...reply, text: `${reply.text} ${next ? next.text : DONE_TEXT}`, choices: next?.choices ?? [] };
+  }
+
+  /** One chat turn. Like the web app's review assistant: it fills fields, the user submits. */
+  async function askAssistant(text) {
+    const message = text.trim();
+    if (!message || chat.pending || !state?.ctx) return;
+    const target = P.LOCAL_REPLIES.includes(message) ? P.promptTarget(state.results) : null;
+    if (target) {
+      const turn = chat;
+      if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...P.assistantGreeting(state.results) });
+      turn.lines.push({ role: "user", text: message });
+      turn.pending = true;
+      panel.idle();
+      try {
+        const reply = await localReply(message, target);
+        if (turn !== chat) return;
+        turn.lines.push({ role: "assistant", local: true, ...withNext(reply ?? { text: "Tell me what you'd like to do." }) });
+      } finally {
+        turn.pending = false;
+        panel.idle();
+      }
+      return;
+    }
+    const { fields, current, rows } = P.assistantFields(state.results);
+    if (!fields.length) {
+      panel.toast("There are no questions on this page the assistant can answer.");
+      return;
+    }
+    const turn = chat;
+    if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...P.assistantGreeting(state.results) });
+    turn.lines.push({ role: "user", text: message });
+    turn.draft = "";
+    turn.pending = true;
+    panel.idle();
+    try {
+      const res = await send({ type: "assist", appId: state.appId, messages: P.chatHistory(turn.lines), fields, current });
+      if (turn !== chat) return; // another application started meanwhile
+      const filled = await applyAssistantUpdates(res.updates, rows);
+      // Once the questions it can answer are done, bring up the optional and manual steps.
+      const moveOn = !P.openQuestions(state.results).length && (res.done || !res.choices?.length);
+      const reply = { text: res.reply, filled, warnings: res.warnings ?? [], choices: res.done ? [] : res.choices ?? [], next: moveOn };
+      turn.lines.push({ role: "assistant", ...withNext(reply) });
+    } catch (err) {
+      turn.lines.pop();
+      if (turn.lines.length === 1) turn.lines = [];
+      turn.draft = message;
+      panel.toast(`Assistant unavailable: ${err.message}`);
+    } finally {
+      turn.pending = false;
+      panel.idle();
+    }
+  }
+
   // ------------------------------------------------------------------ live re-check
 
   /** Whether the user has answered a field, by looking at the page as it is now. */
   function answeredNow(field) {
     switch (field.kind) {
       case "checkbox":
+        if (field.options?.length) return field.options.some((o) => o.el.checked === true);
         return field.el.checked === true || field.el.getAttribute("aria-checked") === "true";
-      case "dropdown": {
-        const sel = field.el.querySelector('[role="option"][aria-selected="true"]');
-        if (!sel) return false;
-        const value = sel.getAttribute("data-value") ?? sel.textContent.trim();
-        return Boolean(value) && !/^choose$/i.test(sel.textContent.trim());
-      }
+      case "dropdown":
+        return Boolean(F.dropdownValue(field)) && !F.isInvalid(field);
       case "picker": // Google Forms hides "Add file" once the file is attached
         return ![...field.el.querySelectorAll('[role="button"]')].some(
           (b) => /add file|upload/i.test(b.textContent) && b.getClientRects().length > 0,
         );
       default:
-        return !F.isEmpty(field);
+        return !F.isEmpty(field) && !F.isInvalid(field);
     }
   }
 
   function currentValue(field) {
     if (field.kind === "text") return field.el.value;
     if (field.kind === "select") return field.el.selectedOptions[0]?.text ?? "";
+    if (field.kind === "dropdown" && field.custom) return F.dropdownValue(field);
     return null;
   }
 
@@ -222,11 +398,15 @@
     if (!state?.results.length) return;
     let changed = false;
     for (const r of state.results) {
-      if (r.status === "unresolved" && answeredNow(r.field)) {
+      if ((r.status === "unresolved" || r.status === "optional") && answeredNow(r.field)) {
         Object.assign(r, { status: "done", source: "you", value: currentValue(r.field) });
         changed = true;
-      } else if (r.status === "done" && !r.manual && !answeredNow(r.field)) {
-        r.status = "unresolved";
+      } else if (r.status === "done" && (!r.manual || r.field.kind === "checkbox" && r.field.options?.length) && !answeredNow(r.field)) {
+        r.status = r.optional ? "optional" : "unresolved";
+        changed = true;
+      } else if (r.status === "filled" && F.isInvalid(r.field)) {
+        const why = F.invalidReason(r.field);
+        Object.assign(r, { status: "unresolved", reason: why ? `The site says: “${why}”` : "The site doesn't accept this answer" });
         changed = true;
       } else if (r.status === "filled" || r.status === "done") {
         const now = currentValue(r.field);
@@ -270,6 +450,7 @@
 
   function outline() {
     for (const r of state.results) {
+      if (r.status === "optional") continue; // optional and empty: nothing to flag on the page
       const el = outlineTarget(r.field);
       if (!el?.style) continue;
       const kind = r.status === "unresolved" ? "todo" : r.status === "filled" && r.needsReview && !r.reviewed ? "check" : "filled";
@@ -292,6 +473,45 @@
     panel.idle();
   }
 
+  /**
+   * "Auto apply": clicks the form's own Submit button, but only when every required field is
+   * answered, there is exactly one submit button, and the user doesn't cancel the countdown.
+   */
+  async function autoApply() {
+    if (!state?.ctx || autoSubmitting || submittedReported) return;
+    recheck();
+    const blocked = P.autoApplyBlockers(state.results, state.ctx.app);
+    if (blocked.length) return panel.stop(`Not submitted: ${blocked.join(". ")}.`);
+    const button = F.findSubmitButton(document, state.results.map((r) => r.field), { includeDisabled: true });
+    if (!button) return panel.stop("Not submitted: couldn't find a single Submit button. Click the form's own Submit button.");
+    if (button.disabled || button.getAttribute("aria-disabled") === "true") {
+      return panel.stop("Not submitted: the form's Submit button is still disabled, so something on the form isn't complete yet.");
+    }
+    const form = button.form ?? button.closest("form");
+    if (form && !form.checkValidity()) {
+      form.reportValidity();
+      return panel.stop("Not submitted: the form says a field isn't valid yet.");
+    }
+    if (!(await panel.countdown(AUTO_APPLY_DELAY_S))) return panel.toast("Submit cancelled. Nothing was submitted.");
+    // The user may have edited the form during the countdown.
+    recheck();
+    const currentFields = F.collectFields(document);
+    const currentButton = F.findSubmitButton(document, currentFields, { includeDisabled: true });
+    if (P.autoApplyBlockers(state.results, state.ctx.app).length ||
+        currentFields.some((field) => (field.required && !answeredNow(field)) || F.isInvalid(field)) ||
+        currentButton !== button || !button.isConnected || button.disabled ||
+        button.getAttribute("aria-disabled") === "true" || (form && !form.checkValidity())) {
+      return panel.stop("Not submitted: the form changed. Check it and try again.");
+    }
+    autoSubmitting = true;
+    await report("submission_attempted", { note: "auto apply clicked the form's submit button; confirmation not yet detected" });
+    if (state.ctx.app) state.ctx.app = { ...state.ctx.app, status: "submission_unconfirmed" };
+    button.click();
+    panel.idle();
+    panel.toast("Submission attempted. Check the page for the site's confirmation.");
+    // Keep this page locked after an attempt; another click must not submit it twice.
+  }
+
   // ------------------------------------------------------------------ panel (shadow DOM)
 
   const panel = (() => {
@@ -304,7 +524,10 @@
       toast: null,
       minimized: false,
       confirmSubmit: false,
-      open: { todo: true, check: true, filled: false },
+      countdown: null, // {left, cancel} while Submit waits to click the form's button
+      tab: null, // "assistant" | "form"; null until chosen: Assistant first when it can help
+      chatSeen: 0,
+      open: { todo: true, check: true, optional: true, filled: false },
       expanded: new WeakSet(),
     };
     let toastTimer = 0;
@@ -324,15 +547,16 @@
           --warn: #fcd34d; --warn-soft: #78350f66; --bad: #fca5a5; --bad-soft: #7f1d1d55;
         }
       }
-      .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 380px;
-        max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+      .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 440px;
+        max-width: calc(100vw - 32px); min-height: min(560px, calc(100vh - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
         background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
         box-shadow: 0 18px 48px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.08); overflow: hidden;
-        animation: in .18s ease-out; }
+        }
+      .p.enter { animation: in .18s ease-out; }
       @keyframes in { from { opacity: 0; transform: translateY(8px); } }
       .h { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 14px; }
       .mark { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-        /* Embedded from icons/logo.svg so the panel needs no exposed extension resources. */
+        /* Embedded from frontend/public/favicon.svg so the panel needs no exposed extension resources. */
         background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%0A%20%20%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%234f46e5%22%2F%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%223.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20d%3D%22M8%2024%2015%208h2l4%209%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M12%2019h13m-4-4%204%204-4%204%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E%0A") center / contain no-repeat; }
       .t { flex: 1; min-width: 0; }
       .t b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -346,7 +570,7 @@
       .bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .3s; }
       .bar.full i { background: var(--good); }
       .meta { color: var(--muted); font-size: 12px; }
-      .body { overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
+      .body { flex: 1 1 auto; overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
       .steps { list-style: none; margin: 2px 0 6px; padding: 0; }
       .steps li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 4px; }
       .dot { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line);
@@ -386,6 +610,7 @@
       button.b:disabled { opacity: .6; cursor: default; }
       button.b.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
       button.b.primary:hover { filter: brightness(1.08); background: var(--accent); }
+      button.b:disabled { opacity: .45; cursor: not-allowed; filter: none; }
       button.b.ghost { border-color: transparent; background: transparent; color: var(--accent); padding: 5px 6px; }
       button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .f { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
@@ -403,9 +628,35 @@
       .toast { margin: 0 12px 10px; padding: 8px 10px; border-radius: 8px; background: var(--fg); color: var(--bg);
         font-size: 13px; animation: in .15s ease-out; }
       .empty { color: var(--muted); padding: 6px 4px; }
+      .tabs { display: flex; gap: 4px; margin: 0 12px 10px; padding: 3px; border-radius: 10px; background: var(--soft); }
+      .tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0;
+        border-radius: 8px; padding: 6px 8px; background: transparent; color: var(--muted); font: inherit;
+        font-size: 13px; font-weight: 600; cursor: pointer; }
+      .tabs button[aria-selected="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+      .tabs .n { background: var(--bad-soft); color: var(--bad); border-radius: 99px; padding: 0 7px; font-size: 11px; }
+      .chat { display: flex; flex-direction: column; gap: 8px; min-height: 140px; }
+      .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+      .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+      .bubble.assistant { align-self: flex-start; background: var(--soft); border-bottom-left-radius: 4px; }
+      .bubble .filled { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; color: var(--muted); font-size: 12px; }
+      .bubble .filled .chip { background: var(--good-soft); color: var(--good); border-color: transparent; }
+      .bubble .warn { margin-top: 4px; color: var(--bad); font-size: 12px; }
+      .quick { display: flex; flex-wrap: wrap; gap: 6px; }
+      .quick button { font: inherit; font-size: 12.5px; border-radius: 99px; padding: 4px 11px; cursor: pointer;
+        border: 1px solid var(--accent); color: var(--accent); background: var(--bg); }
+      .quick button:hover:not(:disabled) { background: var(--accent-soft); }
+      .quick button:disabled { opacity: .6; cursor: default; }
+      .thinking { align-self: flex-start; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+      .thinking .spin { width: 14px; height: 14px; }
+      .composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
+      .composer textarea { flex: 1; min-height: 38px; max-height: 120px; resize: none; font: inherit; font-size: 13.5px;
+        padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+      .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      .composer .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
       .pill { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; display: flex; align-items: center; gap: 8px;
         padding: 6px 14px 6px 6px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-        box-shadow: 0 8px 24px rgba(0,0,0,.18); cursor: pointer; font: inherit; font-weight: 600; animation: in .15s ease-out; }
+        box-shadow: 0 8px 24px rgba(0,0,0,.18); cursor: pointer; font: inherit; font-weight: 600; }
+      .pill.enter { animation: in .15s ease-out; }
       .pill .mark { width: 26px; height: 26px; }
       .pill .badge { background: #dc2626; color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
       .pill .badge.ok { background: #16a34a; }
@@ -462,6 +713,7 @@
     }
 
     function setMinimized(value) {
+      if (value) view.countdown?.cancel(); // never submit from a panel the user can't see
       view.minimized = value;
       chrome.runtime.sendMessage({ type: "panelPreference", minimized: value }).catch(() => {});
       render();
@@ -472,7 +724,7 @@
         el("div", { class: "mark", "aria-hidden": "true" }),
         el("div", { class: "t" }, el("b", { title }, title), subtitle ? el("small", { title: subtitle }, subtitle) : null),
         el("button", { class: "icon", type: "button", title: "Minimise (Esc)", "aria-label": "Minimise", onclick: () => setMinimized(true) }, "–"),
-        el("button", { class: "icon", type: "button", title: "Close", "aria-label": "Close", onclick: () => host.remove() }, "×"),
+        el("button", { class: "icon", type: "button", title: "Close", "aria-label": "Close", onclick: () => { view.countdown?.cancel(); host.remove(); } }, "×"),
       );
     }
 
@@ -520,6 +772,16 @@
         el("div", { class: "acts" },
           btn("Go to field →", () => focusField(r.field)),
           btn("✓ Looks good", () => { r.reviewed = true; outline(); render(); }, "ghost"),
+        ),
+      );
+    }
+
+    function optionalRow(r) {
+      return el("div", { class: "row" },
+        el("div", { class: "q" }, el("span", {}, r.field.label || "(question without a label)"), el("span", { class: "chip" }, "Optional")),
+        el("div", { class: "acts" },
+          btn("Go to field →", () => focusField(r.field)),
+          r.field.kind === "text" ? btn(r.drafting ? "Drafting…" : "✨ Draft with AI", () => draftOne(r), "", { disabled: r.drafting, title: "Uses AI credits" }) : null,
         ),
       );
     }
@@ -574,8 +836,70 @@
       );
     }
 
+    function tabsBar(summary) {
+      const tab = (id, label, badge) => el("button", {
+        type: "button", role: "tab", "aria-selected": String(view.tab === id),
+        onclick: () => { view.tab = id; render(); },
+      }, label, badge ? el("span", { class: "n", "aria-label": `${badge} to do` }, String(badge)) : null);
+      return el("div", { class: "tabs", role: "tablist", "aria-label": "ApplyShortly panel" },
+        tab("assistant", "Assistant"),
+        tab("form", "Form", summary.todo),
+      );
+    }
+
+    function chatView(results) {
+      const lines = chat.lines.length ? chat.lines : [{ role: "assistant", greeting: true, ...P.assistantGreeting(results) }];
+      const log = el("div", { class: "chat", "aria-live": "polite" });
+      lines.forEach((line, i) => {
+        log.append(el("div", { class: `bubble ${line.role}` },
+          line.text,
+          line.filled?.length ? el("div", { class: "filled" }, "Filled:", line.filled.map((f) => el("span", { class: "chip", title: f }, f.length > 40 ? `${f.slice(0, 40)}…` : f))) : null,
+          line.warnings?.map((w) => el("div", { class: "warn" }, w)),
+        ));
+        if (i === lines.length - 1 && line.role === "assistant" && line.choices?.length) {
+          log.append(el("div", { class: "quick", role: "group", "aria-label": "Quick replies" },
+            line.choices.map((c) => el("button", { type: "button", disabled: chat.pending, onclick: () => void askAssistant(c) }, c))));
+        }
+      });
+      if (chat.pending) log.append(el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), "Thinking…"));
+      return log;
+    }
+
+    function composer() {
+      const input = el("textarea", {
+        class: "composer-input", rows: "1", "aria-label": "Message the assistant",
+        placeholder: "Type your answer, or ask to change one…",
+      });
+      input.value = chat.draft;
+      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
+      input.addEventListener("input", () => { chat.draft = input.value; grow(); });
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation(); // keep the job site's own shortcuts out of the chat box
+        if (e.key === "Escape") setMinimized(true);
+        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void askAssistant(input.value); }
+      });
+      queueMicrotask(grow);
+      return el("div", { class: "composer" },
+        el("div", { style: "flex:1;display:flex;flex-direction:column" }, input,
+          el("small", { class: "hint" }, "Fills the form for you to review. Uses AI credits.")),
+        btn("Send", () => void askAssistant(input.value), "primary", { disabled: chat.pending, "aria-label": "Send" }),
+      );
+    }
+
+    // The stylesheet stays in place between renders; only the content is swapped, so nothing
+    // restyles or flashes when the user changes tabs.
+    const styleEl = el("style", {}, css);
+    function mount(wrap) {
+      if (!root.contains(styleEl)) root.replaceChildren(styleEl);
+      const old = root.querySelector(".wrap");
+      if (old) old.replaceWith(wrap);
+      else root.append(wrap);
+    }
+
     function render() {
       ensure();
+      // Re-rendering replaces the panel; keep the chat box focused while the user is typing.
+      const typing = root.activeElement?.classList?.contains("composer-input") ? root.activeElement.selectionStart : null;
       const prevScroll = root.querySelector(".body")?.scrollTop ?? 0;
       const app = state?.ctx?.app;
       const results = state?.results ?? [];
@@ -589,15 +913,17 @@
       if (view.minimized) {
         const badge = submittedReported ? "Submitted ✓" : summary.todo ? `${summary.todo} to do` : "All set";
         wrap.append(el("button", {
-          class: "pill", type: "button", title: "Open ApplyShortly autofill",
+          class: root.querySelector(".pill") ? "pill" : "pill enter", type: "button", title: "Open ApplyShortly autofill",
           onclick: () => setMinimized(false),
         }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
           view.busy ? el("span", { class: "spin" }) : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
-        root.replaceChildren(el("style", {}, css), wrap);
+        mount(wrap);
         return;
       }
 
-      const p = el("div", { class: "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
+      // Slide in only when the panel appears, not on every re-render (tab switches, typing).
+      const entering = !root.querySelector(".p");
+      const p = el("div", { class: entering ? "p enter" : "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
       p.addEventListener("keydown", (e) => { if (e.key === "Escape") setMinimized(true); });
       p.append(header(title, subtitle));
 
@@ -605,10 +931,12 @@
         p.append(el("div", { class: "busy", role: "status" }, el("span", { class: "spin" }), view.busy));
       } else if (view.error) {
         const e = view.error;
+        const retry = (kind) => btn("Try again", () => { view.error = null; void run(state?.appId ?? retryAppId); }, kind);
         const action = {
           settings: btn("Open settings", () => void send({ type: "openOptions" }), "primary"),
           reload: btn("Reload page", () => location.reload(), "primary"),
-          retry: btn("Try again", () => { view.error = null; void run(state?.appId ?? retryAppId); }, "primary"),
+          retry: retry("primary"),
+          profile: el("div", { class: "acts" }, btn("Set up profile", () => void send({ type: "openProfile" }).catch(() => {}), "primary"), retry("")),
         }[e.action];
         p.append(el("div", { class: "body" },
           el("div", { class: "msg bad", role: "alert" }, el("b", {}, e.title), el("p", {}, e.detail), action)));
@@ -621,8 +949,15 @@
           el("div", { class: "meta" }, submittedReported ? "Tracked in ApplyShortly" : summary.total ? `${summary.answered} of ${summary.total} answered` : "Try again once the form has loaded"),
         ));
 
+        if (!submittedReported) {
+          view.tab ??= P.assistantFirst(results) ? "assistant" : "form";
+          p.append(tabsBar(summary));
+        }
+        const assistant = !submittedReported && view.tab === "assistant";
         const body = el("div", { class: "body" });
-        if (submittedReported) {
+        if (assistant) {
+          body.append(chatView(results));
+        } else if (submittedReported) {
           body.append(el("div", { class: "msg good" },
             el("b", {}, "Saved in ApplyShortly"),
             el("p", {}, state.appId != null ? "This application is now marked Submitted. Good luck!" : "Done."),
@@ -632,31 +967,63 @@
           body.append(stepsList(summary, results));
           const todo = results.filter((r) => r.status === "unresolved");
           const check = results.filter((r) => r.status === "filled" && r.needsReview && !r.reviewed);
-          const ok = results.filter((r) => !todo.includes(r) && !check.includes(r));
+          const optional = results.filter((r) => r.status === "optional");
+          const ok = results.filter((r) => !todo.includes(r) && !check.includes(r) && !optional.includes(r));
           if (!results.length) body.append(el("div", { class: "empty" }, "No form fields found yet. If the form is still loading, click Fill again."));
           body.append(
             el("div", {}, section("todo", "Needs you", todo, todoRow)),
             el("div", {}, section("check", "Double-check", check, checkRow)),
+            el("div", {}, section("optional", "Optional", optional, optionalRow)),
             el("div", {}, section("filled", "Filled", ok, okRow)),
           );
         }
         p.append(body);
-        queueMicrotask(() => { body.scrollTop = prevScroll; });
+        const newLines = assistant && chat.lines.length + Number(chat.pending) !== view.chatSeen;
+        if (assistant) view.chatSeen = chat.lines.length + Number(chat.pending);
+        queueMicrotask(() => { body.scrollTop = newLines ? body.scrollHeight : prevScroll; });
 
         if (view.toast) p.append(el("div", { class: "toast", role: "status" }, view.toast));
 
-        if (!submittedReported) {
+        // Submit is on both tabs. It runs the guarded flow: refuses and says why unless every required
+        // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
+        const submit = () => {
+          const blockers = P.autoApplyBlockers(results, state.ctx.app);
+          // Enabled only when every required answer is in; the tooltip says what's missing.
+          return btn("Submit", () => void autoApply(), "primary", {
+            disabled: blockers.length > 0,
+            title: blockers.length
+              ? `Not ready: ${blockers.join(". ")}.`
+              : `Clicks the form's Submit button for you after a ${AUTO_APPLY_DELAY_S}-second countdown.`,
+          });
+        };
+        const countdown = () => el("div", { class: "f", role: "alert" },
+          el("span", { class: "grow" }, `Submitting in ${view.countdown.left}s…`),
+          btn("Cancel", view.countdown.cancel, "primary"),
+        );
+        if (assistant) {
+          if (view.countdown) p.append(countdown());
+          p.append(composer());
+          if (!view.countdown && !submittedReported) p.append(el("div", { class: "f" }, el("span", { class: "grow" }), submit()));
+        } else if (view.countdown) {
+          p.append(countdown());
+        } else if (!submittedReported) {
           const draftable = results.filter((r) => r.status === "unresolved" && r.field.kind === "text").length;
           p.append(el("div", { class: "f" },
             btn("↻ Fill again", () => run(state.appId, { allowGenerate: false }), "", { title: "Fill fields that are still empty. Your edits are kept." }),
             el("span", { class: "grow" }),
             draftable ? btn(`✨ Draft ${draftable} with AI`, () => run(state.appId, { allowGenerate: true }), "primary", { title: "Uses AI credits. Drafts are marked Check." }) : null,
+            submit(),
           ));
         }
       }
 
       wrap.append(p);
-      root.replaceChildren(el("style", {}, css), wrap);
+      mount(wrap);
+      if (typing !== null) {
+        const input = root.querySelector(".composer-input");
+        input?.focus({ preventScroll: true });
+        input?.setSelectionRange(typing, typing);
+      }
     }
 
     let retryAppId = null;
@@ -667,10 +1034,33 @@
       idle() { view.busy = null; render(); },
       fail(err) {
         view.busy = null;
-        view.error = P.friendlyError(err.message, err.status, state?.ctx?.baseUrl);
+        view.error = P.friendlyError(err.message, err.status, state?.ctx?.baseUrl, err.code);
         render();
       },
       setRetry(appId) { retryAppId = appId; },
+      /** Shows the Form tab with a message, e.g. why Auto apply didn't submit. */
+      stop(text) {
+        Object.assign(view, { tab: "form", minimized: false });
+        toast(text);
+      },
+      /** Counts down before Auto apply submits; resolves false if the user cancels. */
+      countdown(seconds) {
+        return new Promise((resolve) => {
+          const c = { left: seconds };
+          const finish = (go) => {
+            if (view.countdown !== c) return;
+            clearInterval(c.timer);
+            view.countdown = null;
+            render();
+            resolve(go);
+          };
+          c.cancel = () => finish(false);
+          c.timer = setInterval(() => (--c.left <= 0 ? finish(true) : render()), 1000);
+          Object.assign(view, { countdown: c, tab: "form", minimized: false });
+          render();
+        });
+      },
+      focus: focusField,
       async restore({ show = false } = {}) {
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);
@@ -685,28 +1075,23 @@
   document.addEventListener(
     "submit",
     () => {
-      if (state?.appId != null && state.results.length) void report("submission_attempted", { note: "form submit event; confirmation not yet detected" });
+      if (!autoSubmitting && state?.appId != null && state.results.length) void report("submission_attempted", { note: "form submit event; confirmation not yet detected" });
     },
     true,
   );
 
-  async function start(appId, opts) {
+  async function start(appId, opts = {}) {
     panel.setRetry(appId);
     await panel.restore(opts);
-    await run(appId);
+    if ((await run(appId)) && opts.autoSubmit) await autoApply();
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id) return;
-    if (msg?.type === "pageInfo" && window === window.top) {
-      // Only on request from the side panel, which is opt-in; the fragment is left out.
-      sendResponse({ url: location.href.split("#")[0], title: document.title });
-      return;
-    }
     if (msg?.type === "run") {
       // Same application: keep what's been filled and answered; another one starts over.
-      if (state && state.appId !== (msg.appId ?? null)) state = null;
-      void start(msg.appId ?? null, { show: true });
+      if (state && state.appId !== (msg.appId ?? null)) { state = null; chat = newChat(); }
+      void start(msg.appId ?? null, { show: true, autoSubmit: msg.autoSubmit === true });
       sendResponse({ ok: true });
     }
   });
@@ -732,6 +1117,18 @@
     await new Promise((r) => setTimeout(r, 800));
     await start(hello.appId);
   }
+
+  // The ApplyShortly website marks whether it is signed in, so the extension can follow it.
+  // The background accepts this only from the ApplyShortly origin.
+  let sessionMark;
+  function followWebsiteSession() {
+    const mark = document.documentElement.dataset.applyshortlySession;
+    if (!mark || mark === sessionMark) return;
+    sessionMark = mark;
+    send({ type: "webSession", signedIn: mark === "signed-in" }).catch(() => {});
+  }
+  new MutationObserver(followWebsiteSession).observe(document.documentElement, { attributes: true, attributeFilter: ["data-applyshortly-session"] });
+  followWebsiteSession();
 
   void boot();
 })();

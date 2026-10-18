@@ -1,6 +1,6 @@
 # ApplyShortly Autofill
 
-An MIT-licensed Chrome extension that fills job applications from your ApplyShortly profile and answer bank. You review the answers and submit on the employer's site.
+An MIT-licensed Chrome extension that fills job applications from your ApplyShortly profile and answer bank. Review the answers and submit on the employer's site, or explicitly choose Auto apply with a cancellable countdown.
 
 This repository contains the extension, typed API bridge, tests and packaging tools. It requires a compatible ApplyShortly server and an account; the backend and website are maintained separately. Personal AI keys also require a server because they are stored and used there.
 
@@ -22,6 +22,10 @@ For automatic browser sign-in, the server operator must register the installed e
 
 ## Development
 
+This repository is the extension's development home. The private platform is maintained
+separately. With sibling checkouts, open `applyshortly.code-workspace` from the platform root.
+See [Contributing](CONTRIBUTING.md#working-across-repositories) for API coordination.
+
 ```sh
 npm test                 # DOM, service worker, options and panel tests
 npm run typecheck        # typed bridge and example
@@ -40,3 +44,14 @@ python3 scripts/extension_openapi.py < /path/to/platform-openapi.json > extensio
 CI runs unit tests, type checking and packaging checks. Browser integration tests require the platform's disposable local ATS fixtures and remain in the platform repository.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [LICENSE](LICENSE) and [BRANDING.md](BRANDING.md).
+
+## Documentation
+
+- [Extension guide](extension/README.md): installation, account connection, autofill and Auto apply.
+- [API bridge](extension-bridge/README.md): authentication, contract and event semantics.
+- [Publishing](docs/operations/extension-publishing.md): packaging and release checks.
+- [Store copy](docs/operations/extension-store-auto-apply.md): v0.3.1 description and permissions.
+- [Privacy disclosure](docs/security/extension-privacy-policy.md): extension data processing.
+
+Migrated from platform source commit `7b210d72fb4ec12466aa17df0912e25ac83fbfa7`.
+Only extension-owned files and the generated API subset were transferred; Git history remains separate.

@@ -35,6 +35,58 @@ const PROFILE = {
   ],
 };
 
+test("Contact Form 7: required questions, option groups and hidden anti-spam field", () => {
+  const fixture = `<!doctype html>
+<!-- Contact Form 7 structure from AkraTech's AI Developer form. No external scripts. -->
+<form class="wpcf7-form" novalidate>
+  <p><label>Name*<br><span class="wpcf7-form-control-wrap"><input name="your-name" aria-required="true"></span></label></p>
+  <p><label>Email*<br><span class="wpcf7-form-control-wrap"><input name="your-email" type="email" aria-required="true"></span></label></p>
+  <p><label>Qualification*<br><span class="wpcf7-form-control-wrap"><input name="your-qualification" aria-required="true"></span></label></p>
+  <p><label>Exp. in IT Industry*<br><span class="wpcf7-form-control-wrap"><input name="ExpInItIndustry" type="number" min="1" max="50"></span></label></p>
+  <p><label>Willing to Relocate*</label><br>
+    <span class="wpcf7-form-control-wrap"><span class="wpcf7-radio">
+      <span class="wpcf7-list-item"><label><input type="radio" name="radio-743" value="Yes" checked><span>Yes</span></label></span>
+      <span class="wpcf7-list-item"><label><input type="radio" name="radio-743" value="No"><span>No</span></label></span>
+    </span></span>
+  </p>
+  <p><label>Programming Languages*</label><br>
+    <span class="wpcf7-form-control-wrap"><span class="wpcf7-checkbox wpcf7-validates-as-required">
+      <span class="wpcf7-list-item"><input type="checkbox" name="programming-languages[]" value="Python"><span class="wpcf7-list-item-label">Python</span></span>
+      <span class="wpcf7-list-item"><input type="checkbox" name="programming-languages[]" value="SQL"><span class="wpcf7-list-item-label">SQL</span></span>
+    </span></span>
+  </p>
+  <p><label>Post Resume [.pdf/.doc/.docx]*<br><span class="wpcf7-form-control-wrap"><input type="file" name="resume" aria-required="true"></span></label></p>
+  <p style="display:none !important"><label>Δ<textarea name="_wpcf7_ak_hp_textarea"></textarea></label></p>
+  <input type="submit" value="Send">
+</form>`;
+  const { doc, F } = page(fixture);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields.length, 7);
+  assert.ok(fields.every((f) => f.required));
+  assert.ok(fields.every((f) => f.el.name !== "_wpcf7_ak_hp_textarea"));
+  const radio = fields.find((f) => f.kind === "radio");
+  assert.equal(radio.label, "Willing to Relocate");
+  assert.deepEqual(plain(radio.options.map((o) => o.text)), ["Yes", "No"]);
+  const group = fields.find((f) => f.kind === "checkbox");
+  assert.equal(group.label, "Programming Languages");
+  assert.deepEqual(plain(group.options.map((o) => o.text)), ["Python", "SQL"]);
+  assert.ok(group.options.every((o) => !o.el.checked), "leaves skill choices to the user");
+  assert.equal(F.apply(group, "SQL"), null, "does not auto-tick checkbox groups");
+  assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false })?.value, "Send");
+  assert.equal(F.profileAnswer("Qualification", PROFILE, null).value, "M.Sc. Computing");
+  assert.equal(F.profileAnswer("Exp. in IT Industry", PROFILE, null).value, "5.6 years");
+});
+
+test("Send is accepted only as a native submit in the identified application form", () => {
+  const { doc, F } = page(`<form><input name="name"><button type="button">Send</button></form>
+    <form><input type="submit" value="Send"></form>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false }), null);
+  doc.querySelector('button').type = "submit";
+  assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false }), doc.querySelector('button'));
+  assert.equal(F.findSubmitButton(doc, [], { checkLayout: false }), null);
+});
+
 // Mirrors the markup of a live Google Form (attributes trimmed): the heading carries the question,
 // the input points at it with aria-labelledby, and "Required question" marks required items.
 const gformItem = (n, question, input = '<input type="text" required>') => `
@@ -191,4 +243,111 @@ test("an unlinked label next to the field beats a sample-value placeholder", () 
     <div class="field"><label>Email *</label><div class="wrap"><input type="email" placeholder="arjun@example.com"></div></div>`);
   const labels = F.collectFields(doc, { checkLayout: false }).map((f) => f.label);
   assert.deepEqual(plain(labels), ["First Name", "Email"]);
+});
+
+test("findSubmitButton: the one submit button of the form being filled", () => {
+  const { doc, F } = page(`
+    <button type="button">Apply with LinkedIn</button>
+    <form id="app">
+      <input id="name" type="text">
+      <button type="button">Upload resume</button>
+      <button type="button">Back</button>
+      <button type="submit">Submit application</button>
+    </form>
+    <form><input type="text"><button>Apply</button></form>`);
+  const fields = F.collectFields(doc, { checkLayout: false }).filter((f) => f.el.closest("#app"));
+  assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false })?.textContent, "Submit application");
+});
+
+test("findSubmitButton: Google Forms' role=button Submit; ambiguous or missing gives null", () => {
+  const gform = page(
+    gformItem(1, "Full Name ?") + `<div role="button"><span>Submit</span></div><div role="button">Clear form</div>`,
+    "https://docs.google.com/forms/d/e/x/viewform",
+  );
+  const gfields = gform.F.collectFields(gform.doc, { checkLayout: false });
+  assert.equal(gform.F.findSubmitButton(gform.doc, gfields, { checkLayout: false })?.textContent, "Submit");
+
+  const two = page(`<input type="text"><button>Submit</button><button>Apply now</button>`);
+  assert.equal(two.F.findSubmitButton(two.doc, two.F.collectFields(two.doc, { checkLayout: false }), { checkLayout: false }), null);
+
+  const next = page(`<form><input type="text"><button type="submit">Next</button><button disabled>Submit</button></form>`);
+  assert.equal(next.F.findSubmitButton(next.doc, next.F.collectFields(next.doc, { checkLayout: false }), { checkLayout: false }), null);
+});
+
+// A Material-style dropdown: a combobox host whose options only exist, in an overlay, while open.
+const MATERIAL = `
+  <label id="gl">Gender*</label>
+  <mat-select id="gender" role="combobox" aria-required="true" aria-labelledby="gl"><span class="mat-mdc-select-placeholder">Gender*</span></mat-select>
+  <input id="auto" role="combobox" type="text">`;
+
+function openOnClick(win, select, names) {
+  select.addEventListener("click", () => {
+    const panel = win.document.createElement("div");
+    panel.setAttribute("role", "listbox");
+    for (const name of names) {
+      const option = win.document.createElement("mat-option");
+      option.setAttribute("role", "option");
+      option.textContent = name;
+      option.addEventListener("click", () => {
+        select.textContent = name;
+        panel.remove();
+      });
+      panel.append(option);
+    }
+    win.document.body.append(panel);
+  });
+}
+
+test("custom dropdowns are found with their question and empty until an option is chosen", async () => {
+  const { doc, F, win } = page(MATERIAL);
+  openOnClick(win, doc.querySelector("#gender"), ["Male", "Female", "Prefer not to say"]);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  const dropdown = fields.find((f) => f.kind === "dropdown");
+  assert.deepEqual(plain({ label: dropdown.label, required: dropdown.required, custom: dropdown.custom }), { label: "Gender", required: true, custom: true });
+  // A text input with role=combobox stays a plain text field.
+  assert.equal(fields.filter((f) => f.kind === "dropdown").length, 1);
+  assert.equal(fields.find((f) => f.el.id === "auto").kind, "text");
+  assert.equal(F.isEmpty(dropdown), true);
+
+  assert.equal(await F.pickDropdown(dropdown, "female", { pollMs: 1 }), "Female");
+  assert.equal(F.isEmpty(dropdown), false);
+  assert.equal(F.dropdownValue(dropdown), "Female");
+  assert.equal(doc.querySelector('[role="listbox"]'), null);
+});
+
+test("pickDropdown leaves the dropdown alone when no option matches", async () => {
+  const { doc, F, win } = page(MATERIAL);
+  openOnClick(win, doc.querySelector("#gender"), ["Male", "Female"]);
+  const dropdown = F.collectFields(doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
+  assert.equal(await F.pickDropdown(dropdown, "30 days", { pollMs: 1 }), null);
+  assert.equal(F.isEmpty(dropdown), true);
+});
+
+test("isInvalid reads what the page itself rejects; an empty field is only unanswered", () => {
+  const { doc, F } = page(`<input id="a" aria-invalid="true" value="INR 1,900,000"><input id="b" value="5"><input id="c" aria-invalid="true">
+    <input id="d" type="number" value="1" max="0"><div class="err">Enter numbers only</div>`);
+  const [a, b, , d] = F.collectFields(doc, { checkLayout: false });
+  assert.equal(F.isInvalid(a), true);
+  assert.equal(F.isInvalid(b), false);
+  assert.equal(F.isInvalid(d), true); // native validation
+});
+
+test("invalidReason returns the site's own message", () => {
+  const { doc, F } = page(`<div class="form-field"><input id="a" aria-invalid="true" aria-describedby="m" value="x"><span id="m">Please enter a valid Current CTC.</span></div>`);
+  assert.equal(F.invalidReason(F.collectFields(doc, { checkLayout: false })[0]), "Please enter a valid Current CTC.");
+});
+
+test("numericVariants spells a rejected value as just the number", () => {
+  const { F } = page("");
+  assert.deepEqual(plain(F.numericVariants("5.6 years")), ["5.6"]);
+  assert.deepEqual(plain(F.numericVariants("INR 1,900,000")), ["1,900,000", "1900000"]);
+  assert.deepEqual(plain(F.numericVariants("London")), []);
+  assert.deepEqual(plain(F.numericVariants("1900000")), []);
+});
+
+test("findSubmitButton can report a Submit button that is still disabled", () => {
+  const { doc, F } = page(`<form><input type="text"><button type="submit" disabled>Submit</button></form>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false }), null);
+  assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false, includeDisabled: true })?.textContent, "Submit");
 });

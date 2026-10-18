@@ -104,18 +104,8 @@ export class JobHuntBridge {
     return this.request("/api/extension/answers/suggest", { method: "POST", body: JSON.stringify(body) });
   }
 
-  assistantChat(body) {
-    return this.request("/api/extension/assistant/chat", { method: "POST", body: JSON.stringify(body) });
-  }
-
-  runAction(body) {
-    return this.request("/api/extension/actions", { method: "POST", body: JSON.stringify(body) });
-  }
-
-  todayMatches() { return this.request("/api/extension/matches/today"); }
-
-  applications(status) {
-    return this.request(`/api/extension/applications${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+  assistFill(body) {
+    return this.request("/api/extension/assistant/fill", { method: "POST", body: JSON.stringify(body) });
   }
 
   report(event) {

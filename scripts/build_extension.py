@@ -114,6 +114,10 @@ def build(destination, base_url=None, source=False):
         ).read_bytes()
         for name in ["package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py"]:
             source_files[name] = (ROOT / name).read_bytes()
+        for item in (ROOT / "docs").rglob("*.md"):
+            if item.is_file() and not item.is_symlink():
+                source_files[item.relative_to(ROOT).as_posix()] = item.read_bytes()
+        source_files["scripts/extension_store_fixture.py"] = (ROOT / "scripts/extension_store_fixture.py").read_bytes()
         archive(destination / f"applyshortly-extension-source-{version}.zip", source_files)
     return package
 

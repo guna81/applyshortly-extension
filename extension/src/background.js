@@ -51,7 +51,12 @@ async function profile() {
   if (profileCache && profileCache.key === key && Date.now() - profileCache.at < PROFILE_TTL_MS) {
     return profileCache.profile;
   }
-  const p = await (await bridge()).profile();
+  let p;
+  try { p = await (await bridge()).profile(); }
+  catch (error) {
+    if (error.status === 404) error.code = "profile_missing"; // Setup isn't finished on the website.
+    throw error;
+  }
   profileCache = { at: Date.now(), key, profile: p };
   return p;
 }
@@ -86,8 +91,8 @@ async function hello(tabId, url) {
   return { appId: null, mode: "idle" };
 }
 
-/** Popup → "Autofill this page": find the application for the page, or fill untracked. */
-async function start(tabId, url, allowUntracked) {
+/** Popup → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
+async function start(tabId, url, allowUntracked, autoSubmit = false) {
   const origin = new URL(url).origin;
   const current = await getTab(tabId);
   const existing = autofillIdFromUrl(url) ?? (current?.origin === origin ? current.appId : null);
@@ -95,7 +100,7 @@ async function start(tabId, url, allowUntracked) {
   if (!app && !allowUntracked) return { found: false };
   const appId = app?.id ?? null;
   await setTab(tabId, { appId, origin, tracked: appId !== null });
-  await sendToTab(tabId, { type: "run", appId });
+  await sendToTab(tabId, { type: "run", appId, autoSubmit });
   return { found: true, appId };
 }
 
@@ -195,7 +200,7 @@ async function browserSignIn(rawOrigin, interactive = true) {
 }
 
 async function performBrowserSignIn(rawOrigin, interactive) {
-  if ((await settings()).token) throw new Error("Disconnect your current account before connecting another account.");
+  if ((await settings()).token) throw new Error("Sign out of ApplyShortly before connecting another account.");
   if ((await chrome.storage.session.get("browserLogin")).browserLogin) throw new Error("Sign-in is already in progress. Cancel it before trying again.");
   const baseUrl = validatedOrigin(rawOrigin);
   const redirectUri = chrome.identity.getRedirectURL("applyshortly");
@@ -224,7 +229,8 @@ async function performBrowserSignIn(rawOrigin, interactive) {
   const state = randomSecret();
   await chrome.storage.session.set({ browserLogin: state });
   try {
-    const url = `${baseUrl}/extension-authorize?${new URLSearchParams({ redirect_uri: redirectUri, challenge, state })}`;
+    // A silent check (prompt=none) has the website answer at once instead of showing sign-in.
+    const url = `${baseUrl}/extension-authorize?${new URLSearchParams({ redirect_uri: redirectUri, challenge, state, ...(interactive ? {} : { prompt: "none" }) })}`;
     let callback;
     try {
       callback = await chrome.identity.launchWebAuthFlow({ url, interactive, ...(interactive ? {} : { abortOnLoadForNonInteractive: false, timeoutMsForNonInteractive: 15000 }) });
@@ -234,7 +240,9 @@ async function performBrowserSignIn(rawOrigin, interactive) {
     }
     if ((await chrome.storage.session.get("browserLogin")).browserLogin !== state) throw new Error("Sign-in cancelled.");
     const returned = new URL(callback);
-    if (`${returned.origin}${returned.pathname}` !== redirectUri || returned.searchParams.get("state") !== state || !returned.searchParams.get("code")) throw new Error("Invalid sign-in response. Start again.");
+    if (`${returned.origin}${returned.pathname}` !== redirectUri || returned.searchParams.get("state") !== state) throw new Error("Invalid sign-in response. Start again.");
+    if (!interactive && returned.searchParams.get("error")) return { state: "signin_required" };
+    if (!returned.searchParams.get("code")) throw new Error("Invalid sign-in response. Start again.");
     const response = await fetch(`${baseUrl}/api/extension-auth/browser/exchange`, {
       method: "POST", credentials: "omit", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: returned.searchParams.get("code"), verifier, redirect_uri: redirectUri }),
@@ -253,9 +261,24 @@ async function performBrowserSignIn(rawOrigin, interactive) {
   }
 }
 
+/** The website in this browser signed in or out: drop a revoked connection, then follow it. */
+async function websiteSession(signedIn) {
+  if ((await settings()).token) {
+    try {
+      await (await bridge()).account();
+      return { connected: true }; // Still valid; manual keys stay independent of the website.
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      await clearConnection();
+    }
+  }
+  if (!signedIn || signingIn) return { connected: false };
+  return { connected: (await browserSignIn(await platformOrigin(), false)).state === "connected" };
+}
+
 // Fixed destinations, plus the queue's add-job dialog prefilled with an http(s) job URL.
 function isWebsitePath(path) {
-  if (["/dashboard", "/apply-queue", "/settings#extension-ai"].includes(path)) return true;
+  if (["/dashboard", "/apply-queue", "/profile", "/settings#extension-ai"].includes(path)) return true;
   if (typeof path !== "string" || !path.startsWith("/apply-queue?")) return false;
   const q = new URLSearchParams(path.slice("/apply-queue?".length));
   if ([...q.keys()].some((k) => k !== "add" && k !== "url") || q.get("add") !== "1") return false;
@@ -274,88 +297,7 @@ async function openWebsite(path = "/dashboard") {
   return true;
 }
 
-// ---- side-panel assistant ----
-
-const CHAT_TABS = ["chat", "today", "apply", "board", "profile"];
-const CHAT_STATUSES = ["saved", "queued", "assessment", "interview", "offer", "rejected", "withdrawn", "ghosted"];
-
-/** A page the assistant may see: http(s) address (no fragment) and title, nothing else. */
-function sharedPage(page) {
-  if (!page || typeof page.url !== "string" || page.url.length > 2000 || !/^https?:/.test(page.url)) return null;
-  return { url: page.url.split("#")[0], title: String(page.title ?? "").slice(0, 200) };
-}
-
-async function pageInfo(tabId) {
-  try { return sharedPage(await chrome.tabs.sendMessage(tabId, { type: "pageInfo" })); }
-  catch { return null; } // No content script (browser page, or not reloaded since install).
-}
-
-async function activePage() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const info = tab?.id !== undefined ? await pageInfo(tab.id) : null;
-  if (!info) return null;
-  const app = await (await bridge()).lookup(info.url).catch((error) => {
-    if (error.status === 401) throw error;
-    return null;
-  });
-  return { ...info, app: app && { id: app.id, title: app.title, company_name: app.company_name, status: app.status } };
-}
-
-async function tabData(tab) {
-  const b = await bridge();
-  if (tab === "today") return b.todayMatches();
-  if (tab === "apply") return (await Promise.all(["saved", "queued", "ready_for_review"].map((s) => b.applications(s)))).flat();
-  if (tab === "board") return b.applications();
-  if (tab === "profile") return profile();
-  throw new Error("Unknown tab.");
-}
-
-/** "Autofill" from the assistant: fill the open page if it is this application, else open it. */
-async function autofillApplication(appId) {
-  if (!Number.isInteger(appId)) throw new Error("Unknown application.");
-  const b = await bridge();
-  const app = await b.application(appId);
-  if ((await chrome.storage.local.get("sharePage")).sharePage) {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    const info = tab?.id !== undefined ? await pageInfo(tab.id) : null;
-    const here = info ? await b.lookup(info.url).catch(() => null) : null;
-    if (here?.id === appId) {
-      await start(tab.id, info.url, false);
-      return { ok: true, message: "Filling this page. Review it, then submit it yourself." };
-    }
-  }
-  const target = app.apply_url ? new URL(app.apply_url) : null;
-  if (!target || !/^https?:$/.test(target.protocol)) throw new Error("This application has no apply link.");
-  target.hash = `jobhunt-autofill=${appId}`;
-  await chrome.tabs.create({ url: target.toString() });
-  return { ok: true, message: "Opened the application page. I'll fill it in; you review and submit." };
-}
-
-async function chatAction(action) {
-  if (!action || typeof action !== "object") throw new Error("Invalid action.");
-  if (action.type === "autofill") return autofillApplication(action.application_id);
-  if (!["queue_job", "dismiss_job", "set_status"].includes(action.type)) throw new Error("Unknown action.");
-  if (action.type === "set_status" && !CHAT_STATUSES.includes(action.status)) throw new Error("Invalid status.");
-  return (await bridge()).runAction({
-    type: action.type,
-    job_id: action.job_id ?? null,
-    application_id: action.application_id ?? null,
-    status: action.status ?? null,
-  });
-}
-
 const handlers = {
-  chat: async (msg) => {
-    if (!Array.isArray(msg.messages) || !msg.messages.length) throw new Error("Nothing to send.");
-    return (await bridge()).assistantChat({
-      messages: msg.messages,
-      tab: CHAT_TABS.includes(msg.tab) ? msg.tab : "chat",
-      page: sharedPage(msg.page),
-    });
-  },
-  chatAction: (msg) => chatAction(msg.action),
-  tabData: (msg) => tabData(msg.tab),
-  activePage: () => activePage(),
   browserSignIn: async (msg) => browserSignIn(await platformOrigin(), msg.interactive !== false),
   aiSettings: async () => (await bridge()).aiSettings(),
   selectAI: async (msg) => (await bridge()).selectAI({ mode: msg.mode, provider: msg.provider }),
@@ -374,7 +316,7 @@ const handlers = {
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();
-    if ((await settings()).token) throw new Error("Disconnect your current account before replacing its API key.");
+    if ((await settings()).token) throw new Error("Revoke the current API key in ApplyShortly before replacing it.");
     if (typeof msg.token !== "string" || !msg.token.trim()) throw new Error("Enter your API key.");
     await clearConnection();
     await chrome.storage.local.set({ baseUrl, token: msg.token.trim(), connectionType: "manual" });
@@ -394,13 +336,24 @@ const handlers = {
     return Boolean((await chrome.storage.local.get("panelMinimized")).panelMinimized);
   },
   hello: (msg, sender) => hello(sender.tab.id, msg.url),
-  start: (msg) => start(msg.tabId, msg.url, Boolean(msg.allowUntracked)),
+  webSession: async (msg, sender) => {
+    if (new URL(sender.url).origin !== await platformOrigin()) throw new Error("Message not permitted.");
+    return websiteSession(msg.signedIn === true);
+  },
+  start: (msg) => start(msg.tabId, msg.url, Boolean(msg.allowUntracked), msg.autoSubmit === true),
   context: (msg) => context(msg.appId ?? null),
   suggest: async (msg) =>
     (await bridge()).suggestAnswer({
       question: msg.question,
       application_id: msg.appId ?? null,
       allow_generate: Boolean(msg.allowGenerate),
+    }),
+  // The panel's Assistant tab: fields and values come from the page, nothing is stored.
+  assist: async (msg) =>
+    (await bridge()).assistFill({
+      messages: msg.messages,
+      fields: msg.fields,
+      current: msg.current ?? {},
     }),
   resume: async () => {
     const p = await profile();
@@ -414,6 +367,7 @@ const handlers = {
   },
   status: (msg) => status(msg.tabId, msg.url),
   openOptions: () => chrome.runtime.openOptionsPage(),
+  openProfile: () => openWebsite("/profile"),
   test: async () => {
     profileCache = null;
     return status(undefined);
@@ -427,22 +381,23 @@ chrome.commands?.onCommand.addListener((command, tab) => {
   start(tab.id, tab.url, true).catch((err) => console.warn("[JobHunt] shortcut failed:", err.message));
 });
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "resume", "report", "openOptions", "panelPreference"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession"]);
 
 async function dispatch(msg, sender) {
   await storageReady;
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/options.html", "src/popup.html", "src/sidepanel.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/options.html", "src/popup.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
-    if (["context", "suggest", "report"].includes(msg.type)) {
+    if (["context", "suggest", "assist", "report"].includes(msg.type)) {
       const current = await getTab(sender.tab.id);
       const appId = msg.type === "report" ? msg.event?.application_id : (msg.appId ?? null);
       if (appId !== (current?.appId ?? null) || (current && current.origin !== new URL(sender.url).origin)) throw new Error("Application context changed. Start autofill again.");
     }
   }
+  if (msg.type === "assist" && (!Array.isArray(msg.messages) || !msg.messages.length || !Array.isArray(msg.fields) || !msg.fields.length)) throw new Error("Nothing to send.");
   if (msg.type === "suggest" && (typeof msg.question !== "string" || msg.question.length < 3 || msg.question.length > 1000)) throw new Error("Invalid question.");
   try { return await handler(msg, sender); }
   catch (error) { if (error.status === 401) await clearConnection(); throw error; }
@@ -451,7 +406,7 @@ async function dispatch(msg, sender) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   dispatch(msg, sender)
     .then((data) => sendResponse({ ok: true, data }))
-    .catch((err) => sendResponse({ ok: false, error: err?.message ?? String(err), status: err?.status }));
+    .catch((err) => sendResponse({ ok: false, error: err?.message ?? String(err), status: err?.status, code: err?.code }));
   return true;
 });
 

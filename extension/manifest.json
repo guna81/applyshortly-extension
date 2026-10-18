@@ -1,65 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "ApplyShortly Autofill",
-  "version": "0.3.0",
-  "description": "Fills job application forms from your ApplyShortly profile and answer bank. It never submits; you do.",
+  "name": "Apply Shortly Form Assistant",
+  "version": "0.3.1",
+  "description": "Fills job application forms from your ApplyShortly profile and answer bank. It submits only when you choose Auto apply.",
   "minimum_chrome_version": "116",
-  "background": {
-    "service_worker": "src/background.js",
-    "type": "module"
-  },
-  "permissions": [
-    "storage",
-    "scripting",
-    "activeTab",
-    "identity",
-    "sidePanel"
-  ],
-  "host_permissions": [
-    "http://localhost/*",
-    "http://127.0.0.1/*",
-    "http://localhost:3000/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://*/*"
-  ],
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "permissions": ["storage", "scripting", "activeTab", "identity"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "src/fill.js",
-        "src/panel-model.js",
-        "src/content.js"
-      ],
+      "matches": ["<all_urls>"],
+      "js": ["src/fill.js", "src/panel-model.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],
-  "side_panel": {
-    "default_path": "src/sidepanel.html"
-  },
-  "action": {
-    "default_title": "ApplyShortly Autofill",
-    "default_popup": "src/popup.html",
-    "default_icon": "icons/icon-48.png"
-  },
+  "action": { "default_title": "Apply Shortly Form Assistant", "default_popup": "src/popup.html", "default_icon": "icons/icon-48.png" },
   "commands": {
-    "autofill": {
-      "suggested_key": {
-        "default": "Alt+Shift+F"
-      },
-      "description": "Autofill this page"
-    }
+    "autofill": { "suggested_key": { "default": "Alt+Shift+F" }, "description": "Autofill this page" }
   },
-  "options_ui": {
-    "page": "src/options.html",
-    "open_in_tab": true
-  },
-  "icons": {
-    "16": "icons/icon-16.png",
-    "48": "icons/icon-48.png",
-    "128": "icons/icon-128.png"
-  }
+  "options_ui": { "page": "src/options.html", "open_in_tab": true },
+  "icons": { "16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" }
 }

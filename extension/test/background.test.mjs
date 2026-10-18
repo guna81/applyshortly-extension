@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 
-function harness({ blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, packagedOrigin = "http://localhost:3000" } = {}) {
+function harness({ blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, packagedOrigin = "http://localhost:3000" } = {}) {
   const local = { baseUrl: 'http://localhost:3000', token: 'fixture-bearer', aiDrafts: false };
   const session = {};
   const access = [];
@@ -28,12 +28,11 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }
     deleteAIProvider(provider) { calls.push({ deletedProvider: provider }); return { mode: "personal", provider, configured: [] }; }
     account() { if (accountRevoked) throw new BridgeError(401, 'Revoked'); return { name: 'Fixture', email: 'fixture@example.com', credits: 30, plan: "pro", billing_enabled: true, ai: { mode: 'platform' } }; }
-    profile() { return { full_name: 'Fixture' }; }
+    profile() { if (noProfile) throw new BridgeError(404, 'Profile not created yet'); return { full_name: 'Fixture' }; }
     application(id) { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return { id }; }
     lookup() { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return null; }
     websiteTicket() { return { ticket: 'fixture-short-lived-ticket' }; }
-    assistantChat(body) { calls.push({ chat: body }); return { reply: 'ok', choices: [], actions: [] }; }
-    runAction(body) { calls.push({ action: body }); return { ok: true, message: 'Done.' }; }
+    assistFill(body) { calls.push({ assist: body }); return { reply: 'ok', updates: {}, warnings: [], done: false, choices: [] }; }
     disconnect() { calls.push('revoke'); if (revoked) throw new BridgeError(401, 'Revoked'); }
   }
   const chrome = {
@@ -45,10 +44,11 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
         if (signedOut && !interactive) throw new Error("Not signed in");
         const params = new URL(url).searchParams;
         const callback = wrongCallback ? 'https://evil.example/applyshortly' : params.get('redirect_uri');
-        return `${callback}?${new URLSearchParams({ code: 'fixture-one-time-code', state: wrongState ? 'wrong-state' : params.get('state') })}`;
+        const answer = declined && params.get('prompt') === 'none' ? { error: 'login_required' } : { code: 'fixture-one-time-code' };
+        return `${callback}?${new URLSearchParams({ ...answer, state: wrongState ? 'wrong-state' : params.get('state') })}`;
       },
     },
-    tabs: { onRemoved: { addListener() {} }, create: async (value) => calls.push(value), sendMessage: async () => {}, query: async () => [] },
+    tabs: { onRemoved: { addListener() {} }, create: async (value) => calls.push(value), sendMessage: async () => {} },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
   const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/m, 'const { BridgeError, JobHuntBridge, autofillIdFromUrl } = fixtures;');
@@ -68,8 +68,9 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
   } });
   const ui = { id: runtime.id, url: runtime.getURL('src/options.html') };
   const content = { id: runtime.id, url: 'https://example.com/apply', tab: { id: 10, url: 'https://example.com/apply' } };
+  const website = { id: runtime.id, url: `${packagedOrigin}/dashboard`, tab: { id: 11, url: `${packagedOrigin}/dashboard` } };
   const send = (msg, sender = ui) => new Promise((resolve) => listener(msg, sender, resolve));
-  return { local, session, calls, access, send, content };
+  return { local, session, calls, access, send, content, website };
 }
 
 test('credentials are restricted to trusted storage and privileged UI messages', async () => {
@@ -158,6 +159,20 @@ test('website sign-in uses a one-time ticket fragment and never exposes the bear
   assert.equal(new URLSearchParams(new URL(tab.url).hash.slice(1)).get('ticket'), 'fixture-short-lived-ticket');
   assert.equal(tab.url.includes('fixture-bearer'), false);
   assert.equal((await h.send({ type: 'openWebsite', path: '//evil.example' })).ok, false);
+});
+
+test('a missing profile is marked for the panel, which may open only the profile page', async () => {
+  const h = harness({ noProfile: true });
+  const result = await h.send({ type: 'context', appId: null }, h.content);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.equal(result.code, 'profile_missing');
+  assert.equal(h.local.token, 'fixture-bearer');
+  h.local.connectionType = 'automatic';
+  assert.equal((await h.send({ type: 'openProfile', path: '/billing' }, h.content)).ok, true);
+  const tab = h.calls.find((call) => call.url?.includes('/extension-session#'));
+  assert.equal(new URLSearchParams(new URL(tab.url).hash.slice(1)).get('next'), '/profile');
+  assert.equal((await h.send({ type: 'openWebsite', path: '/profile' }, h.content)).ok, false);
 });
 
 test('revoked authentication clears cached data and privileged messages reject content scripts', async () => {
@@ -259,30 +274,49 @@ test('AI settings are available only to trusted UI and return metadata', async (
 });
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const panelUi = (h) => ({ id: 'fixture-extension', url: 'chrome-extension://fixture-extension/src/sidepanel.html' });
 
-test('assistant chat is for the side panel only and only forwards a sanitized page', async () => {
+test('the panel assistant forwards page fields only for the application in this tab', async () => {
   const h = harness();
-  const messages = [{ role: 'user', text: 'hi' }];
-  assert.equal((await h.send({ type: 'chat', messages }, h.content)).ok, false);
-  assert.equal((await h.send({ type: 'chatAction', action: { type: 'queue_job', job_id: 1 } }, h.content)).ok, false);
-
-  const page = { url: 'https://jobs.example/apply/1#jobhunt-autofill=3', title: 'Engineer', extra: 'x' };
-  assert.equal((await h.send({ type: 'chat', messages, tab: 'bogus', page }, panelUi(h))).ok, true);
-  assert.deepEqual(plain(h.calls.find((c) => c.chat).chat), { messages, tab: 'chat', page: { url: 'https://jobs.example/apply/1', title: 'Engineer' } });
-
-  await h.send({ type: 'chat', messages, tab: 'today', page: { url: 'file:///etc/passwd', title: 't' } }, panelUi(h));
-  assert.equal(h.calls.filter((c) => c.chat).at(-1).chat.page, null);
-  assert.equal((await h.send({ type: 'chat', messages: [] }, panelUi(h))).ok, false);
+  h.session['tab:10'] = { appId: 5, origin: 'https://example.com' };
+  const body = { messages: [{ role: 'user', text: 'Yes' }], fields: [{ key: 'f0', label: 'Relocate?', kind: 'radio', options: ['Yes', 'No'] }], current: { f0: '' } };
+  assert.equal((await h.send({ type: 'assist', appId: 5, ...body }, h.content)).ok, true);
+  assert.deepEqual(plain(h.calls.find((c) => c.assist).assist), body);
+  assert.equal((await h.send({ type: 'assist', appId: 6, ...body }, h.content)).ok, false);
+  assert.equal((await h.send({ type: 'assist', appId: 5, ...body, fields: [] }, h.content)).ok, false);
+  assert.equal(h.calls.filter((c) => c.assist).length, 1);
 });
 
-test('assistant actions are limited to known types and statuses', async () => {
+test('website sign-in connects silently, and only the ApplyShortly origin may report it', async () => {
   const h = harness();
-  const ok = await h.send({ type: 'chatAction', action: { type: 'set_status', application_id: 4, status: 'interview' } }, panelUi(h));
-  assert.equal(ok.ok, true);
-  assert.deepEqual(plain(h.calls.find((c) => c.action).action), { type: 'set_status', job_id: null, application_id: 4, status: 'interview' });
-  for (const action of [{ type: 'set_status', application_id: 4, status: 'submitted' }, { type: 'delete_everything' }, null]) {
-    assert.equal((await h.send({ type: 'chatAction', action }, panelUi(h))).ok, false);
-  }
-  assert.equal(h.calls.filter((c) => c.action).length, 1);
+  delete h.local.token;
+  assert.equal((await h.send({ type: 'webSession', signedIn: true }, h.content)).ok, false);
+  assert.equal(h.calls.some((call) => call.loginUrl), false);
+  const result = await h.send({ type: 'webSession', signedIn: true }, h.website);
+  assert.equal(result.data.connected, true);
+  assert.equal(h.local.token, 'fixture-automatic-key');
+  const login = h.calls.find((call) => call.loginUrl);
+  assert.equal(login.interactive, false);
+  assert.equal(new URL(login.loginUrl).searchParams.get('prompt'), 'none');
+});
+
+test('website sign-out drops a revoked connection but leaves a working one alone', async () => {
+  const revoked = harness({ accountRevoked: true });
+  assert.equal((await revoked.send({ type: 'webSession', signedIn: false }, revoked.website)).data.connected, false);
+  assert.equal(revoked.local.token, undefined);
+  assert.equal(revoked.calls.some((call) => call.loginUrl), false);
+  const manual = harness();
+  assert.equal((await manual.send({ type: 'webSession', signedIn: false }, manual.website)).data.connected, true);
+  assert.equal(manual.local.token, 'fixture-bearer');
+});
+
+test('a declined silent check reports sign-in required without exchanging a code', async () => {
+  const h = harness({ declined: true });
+  delete h.local.token;
+  const result = await h.send({ type: 'browserSignIn', interactive: false });
+  assert.equal(result.data.state, 'signin_required');
+  assert.equal(h.local.token, undefined);
+  assert.equal(h.calls.some((call) => call.url?.endsWith('/browser/exchange')), false);
+  const forged = harness({ declined: true, wrongState: true });
+  delete forged.local.token;
+  assert.equal((await forged.send({ type: 'browserSignIn', interactive: false })).ok, false);
 });

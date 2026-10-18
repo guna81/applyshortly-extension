@@ -99,63 +99,34 @@ export interface AnswerSuggestion {
   matched_question?: string | null;
 }
 
-export type ChatStatus = "saved" | "queued" | "assessment" | "interview" | "offer" | "rejected" | "withdrawn" | "ghosted";
-
-export interface ChatMessage {
+export interface AssistMessage {
   role: "user" | "assistant";
   text: string;
 }
 
-export interface ChatRequest {
-  messages: ChatMessage[];
-  page?: { url: string; title?: string } | null;
-  tab?: "chat" | "today" | "apply" | "board" | "profile";
-}
-
-export interface ChatAction {
-  type: "queue_job" | "dismiss_job" | "set_status" | "autofill";
+/** A question on the page, as the panel's Assistant tab describes it. */
+export interface AssistFormField {
+  key: string;
   label: string;
-  job_id?: number | null;
-  application_id?: number | null;
-  status?: ChatStatus | null;
+  kind: string;
+  options?: string[];
+  required?: boolean;
 }
 
-export interface ChatResponse {
+export interface AssistRequest {
+  messages: AssistMessage[];
+  fields: AssistFormField[];
+  /** Field key → the value currently on the page. */
+  current?: Record<string, string>;
+}
+
+export interface AssistResponse {
   reply: string;
+  /** Field key → value to write into the page; option fields use one of their options. */
+  updates: Record<string, string>;
+  warnings: string[];
+  done: boolean;
   choices: string[];
-  actions: ChatAction[];
-}
-
-export interface ActionRequest {
-  type: "queue_job" | "dismiss_job" | "set_status";
-  job_id?: number | null;
-  application_id?: number | null;
-  status?: ChatStatus | null;
-}
-
-export interface ActionResult {
-  ok: boolean;
-  message: string;
-  application_id?: number | null;
-}
-
-export interface JobCard {
-  job_id: number;
-  title: string;
-  company_name: string;
-  location: string | null;
-  work_mode: string | null;
-  match_score: number | null;
-  fit_summary: string | null;
-  apply_url: string | null;
-}
-
-export interface ApplicationCard {
-  id: number;
-  company_name: string | null;
-  title: string | null;
-  status: string;
-  apply_url: string | null;
 }
 
 /** Fragment the platform's "Open & Autofill" button appends to the posting URL. */
@@ -248,18 +219,8 @@ export class JobHuntBridge {
     return this.request("/api/extension/answers/suggest", { method: "POST", body: JSON.stringify(body) });
   }
 
-  assistantChat(body: ChatRequest): Promise<ChatResponse> {
-    return this.request("/api/extension/assistant/chat", { method: "POST", body: JSON.stringify(body) });
-  }
-
-  runAction(body: ActionRequest): Promise<ActionResult> {
-    return this.request("/api/extension/actions", { method: "POST", body: JSON.stringify(body) });
-  }
-
-  todayMatches(): Promise<JobCard[]> { return this.request("/api/extension/matches/today"); }
-
-  applications(status?: string): Promise<ApplicationCard[]> {
-    return this.request(`/api/extension/applications${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+  assistFill(body: AssistRequest): Promise<AssistResponse> {
+    return this.request("/api/extension/assistant/fill", { method: "POST", body: JSON.stringify(body) });
   }
 
   report(event: ExtensionEvent): Promise<ExtensionEventResult> {

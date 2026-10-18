@@ -1,9 +1,10 @@
-# ApplyShortly Autofill (Chrome extension, Tier B)
+# Apply Shortly Form Assistant (Chrome extension, Tier B)
 
 Fills job application forms in **your own** Chrome, from your ApplyShortly profile and answer bank.
 Use it for forms the server-side browser can't handle: anything behind your login (Google Forms,
-Workday, iCIMS), CAPTCHAs, and unknown layouts. Like Tier A, **it fills and never submits**. You
-review the form and click the site's own submit button.
+Workday, iCIMS), CAPTCHAs, and unknown layouts. Like Tier A, **it fills and never submits on its
+own**. You review the form and click the site's own submit button, or choose **⚡ Auto apply**
+(below) to have it click that button for you once every required field is answered.
 
 Plain JavaScript with no compilation step. The build packages an allowlisted set of runtime files;
 it never reads `.env` or includes local credentials. An ApplyShortly account and compatible server
@@ -11,18 +12,19 @@ are required, including when using a personal AI key. See `../extension-bridge/R
 
 ## Build and install
 
+For Chrome Web Store releases, see the [publishing guide](../docs/operations/extension-publishing.md).
+
 From the repository root:
 
 ```sh
-npm ci
 npm run build
-# Optional explicit platform origin:
+# Reads FRONTEND_URL from environment or root .env. Optional explicit override:
 npm run build -- --platform-url https://your-applyshortly-host.example
 npm run build:source
 npm run check
 ```
 
-The build writes `dist/extension/` and `dist/applyshortly-extension-0.3.0.zip`.
+The build writes `dist/extension/` and `dist/applyshortly-extension-0.3.1.zip`.
 Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select
 `dist/extension/` (not the ZIP). Source `extension/` checkouts default to localhost; use the built directory for `.env` configuration.
 After rebuilding, click **Reload** in Chrome and reload the application page.
@@ -37,9 +39,13 @@ displays the generated connection credential.
 Use **Open ApplyShortly** to open the website with your extension account. A different website
 account or an unrecognized browser asks for confirmation first.
 
-Website logout and extension disconnect invalidate that browser's linked connection; other
-devices stay signed in. Disconnect before connecting another account. To revoke access, click
-**Disconnect account**, revoke the named automatic key, or revoke a linked website session.
+Sign-in stays in sync with the website in this browser. Signing in to ApplyShortly connects the
+extension on its own: any open ApplyShortly page reports it, and settings re-check when opened or
+revisited. **Log out** in extension settings or on the website signs this browser out of both; the
+other side notices on its next request, or when its tab regains focus. Other devices stay signed
+in. To switch accounts, log out and sign in as the other account. To revoke access, log out,
+revoke the named automatic key, or revoke a linked website session. Manual API-key connections
+are independent of the website; logging out of the extension revokes that key.
 
 For automatic sign-in, operators set `EXTENSION_IDS` to the ID shown at `chrome://extensions`.
 The exact callback is `https://<extension-id>.chromiumapp.org/applyshortly`.
@@ -52,6 +58,21 @@ A saved profile is needed for autofill, but not for connecting an account.
 Manual connection remains available: create a per-user `jh_…` key in **Settings → API keys** and
 paste it under **Advanced: manual API-key connection** in extension settings. Old `EXTENSION_API_TOKEN`/`extension-config` instructions no longer
 apply. No shared token or credential-seeding file is distributed or loaded.
+
+### Assistant and Form tabs
+
+The floating autofill panel has two tabs. **Assistant** (opened first when a question needs you)
+asks the unanswered questions one at a time, shows the form's options as tappable replies, and
+fills the fields as you answer; you can also ask it to change an answer ("set notice period to
+60 days"). Optional questions nothing could answer (like "Why are you a good fit?") are offered
+next: **Draft it for me** writes an AI draft from your profile and the job, **Leave it blank** skips
+it. Last, it brings up what only you can do: a consent checkbox (**I agree, tick it** ticks it only
+when you tap it, or tick it yourself) and file uploads (**Show me** highlights the field). **Form** shows the checklist and the Needs you / Double-check / Optional / Filled sections, with
+a badge counting what's left (optional questions aren't counted). Answers from chat are marked **From chat**. The conversation stays in
+the page and is gone when you leave it. Only the page's question labels, options and current
+values are sent with each message, never the rest of the page. The AI never answers checkboxes
+or uploads. Each reply costs 1 credit unless you use a personal AI key, and the
+assistant never submits.
 
 ### Choose how AI drafts are paid for
 
@@ -70,13 +91,12 @@ are off by default. A provider may reject an invalid key, unsupported model, quo
 
 ### Standalone source archive
 
-`npm run build:source` additionally writes `dist/applyshortly-extension-source-0.3.0.zip`.
+`npm run build:source` additionally writes `dist/applyshortly-extension-source-0.3.1.zip`.
 It contains extension and bridge source, tests, packaging scripts, MIT license and brand notes;
 it contains no backend code, credentials, or repository history. It is ready for a separate public
 repository, but this command does not publish anything. See `LICENSE` and `BRANDING.md`.
 
 For an extracted source archive, run `npm ci`, `npm run check` and `npm run build`.
-The root README describes development tools and CI.
 
 ## Use
 
@@ -95,6 +115,16 @@ The panel at the bottom right has:
   3. Double-check flagged answers.
   4. Click the form's own Submit. **I already submitted it** covers sites where it can't detect
      the submit.
+- **Submit** (bottom of the panel on both the Assistant and Form tabs; disabled until every required answer is in) and **⚡ Auto apply** (the first
+  button in the popup, for tracked pages and **Fill without tracking** pages alike; it fills the
+  form straight away first): click the
+  form's own Submit button after a 3-second countdown with **Cancel**. It refuses, and
+  says why, when a required field (including a consent checkbox or an upload) still needs you,
+  when it can't find exactly one Submit button (multi-step forms stop at **Next**), when that
+  button is still disabled, when the browser or the site reports an invalid field, or when the
+  application is already sent or waiting for verification. Minimising or closing the panel cancels the countdown. AI drafts you haven't
+  checked are submitted as filled, so use it when you trust your answer bank. The attempt is
+  reported as *submission attempted* until a confirmation is detected or you mark it.
   Steps tick off as you go.
 - **Needs you:** each row has **Go to field →** (scrolls to it and highlights it) and **✨ Draft
   with AI** for text questions. Dropdown rows have **Copy answer**. Rows the extension can't check
@@ -110,12 +140,9 @@ remaining text question (uses your selected AI payment mode). **–** or Esc shr
 left. It stays minimised on later pages until you open it again.
 
 On the page, green fields are filled, amber means check it, and dashed red means it's your turn.
-Hover over a field to see why. Errors say what to do: a rejected key offers **Open settings**, and
-an unreachable platform offers **Try again**.
-
-## Assistant side panel
-
-Open the assistant from the toolbar popup for chat, page-aware actions, and application tracking. It requires a compatible server with the assistant endpoints. Review drafts and submit applications yourself.
+Hover over a field to see why. Errors say what to do: a rejected key offers **Open settings**, an
+account without a profile yet offers **Set up profile** (the website's profile setup), and an
+unreachable platform offers **Try again**.
 
 ## How answers are chosen
 
@@ -133,6 +160,13 @@ For each empty field, in order:
 
 Selects and radio groups (native and Google Forms' ARIA ones) are set when an answer matches one
 option exactly, by yes/no, or by unambiguous containment. Otherwise they're left for you.
+Custom dropdowns (Angular Material `mat-select` and other ARIA comboboxes) are opened, and the
+matching option is clicked the same way.
+
+After filling, the extension waits a moment for the page to validate and reads what the site says.
+A value the site rejects is retried as a plain number ("5.6 years" → "5.6"); one it still rejects
+is listed under **Needs you** with the site's own message. The panel only says *All set* when
+nothing is left.
 `<input type=file>` gets your résumé when its label says résumé/CV or it's the only upload.
 
 ## What it reports
@@ -150,7 +184,8 @@ and tracked too.
 
 ## Brand assets
 
-The ApplyShortly A/arrow mark is in `icons/logo.svg` for the popup and settings page. The toolbar PNGs are rasterized from the same
+The ApplyShortly A/arrow mark is defined in the platform website and copied to
+`icons/logo.svg` for the popup and settings page. The toolbar PNGs are rasterized from the same
 vector at 16, 48, and 128 pixels. The on-page panel embeds this SVG as a CSS data URL so it does
 not need additional extension resource permissions. Keep these copies in sync when changing the mark.
 
@@ -158,23 +193,23 @@ not need additional extension resource permissions. Keep these copies in sync wh
 
 | File | Role |
 |---|---|
-| `manifest.json` | MV3 manifest. Has loopback host access; the build adds the selected platform origin. |
+| `manifest.json` | MV3 manifest. Has host access to `localhost`/`127.0.0.1` and the public origin selected by packaging. |
 | `platform.json` | Public default platform origin, generated by the build. Contains no credentials. |
 | `src/background.js` | Service worker. Holds the API key and makes every platform request, so job sites never see the key or hit CORS. Tracks which application each tab is filling. |
 | `src/bridge.js` | JS port of `extension-bridge/client.ts`. Keep the two in sync. |
 | `src/fill.js` | Field discovery, labels, profile answers, writing values (pure DOM, tested in jsdom) |
 | `src/content.js` | Runs the fill on the page, the review panel (closed shadow DOM), live re-check, submit detection |
-| `src/sidepanel.*`, `src/chat-model.js` | Assistant side panel and chat helpers |
 | `src/panel-model.js` | Pure helpers shared by the panel and popup: checklist and counts, friendly error messages |
 | `src/popup.*`, `src/options.*`, `src/ui.css` | Toolbar popup and settings page |
-| `test/*.test.mjs` | `npm test` (DOM tests use the root jsdom development dependency) |
+| `test/*.test.mjs` | `node --test extension/test/*.test.mjs` (tests use the root npm dependencies) |
 
 ## Limits
 
 - **Google Forms file uploads** go through Google's own picker, which a page script can't fill.
   Use **Download CV**, then **Add file**.
-- **Custom dropdowns** (ARIA listboxes, e.g. Google Forms' "Choose") are listed with the answer to
-  pick, but not opened.
+- **Google Forms' dropdowns** ("Choose") are listed with the answer to pick, but not opened.
+  Other custom dropdowns are opened and filled; one that behaves unlike the ARIA combobox pattern
+  stays under **Needs you**.
 - **Forms inside iframes** (e.g. an embedded Greenhouse board on a company site) aren't filled.
   Open the board's own URL instead.
 - **Submits done with `fetch`** on single-page apps aren't detected; use **Mark as submitted**.

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>ApplyShortly Autofill · Settings</title>
+  <title>Apply Shortly Form Assistant · Settings</title>
   <link rel="stylesheet" href="ui.css">
 </head>
 <body class="page">
@@ -10,8 +10,8 @@
     <header class="hero-head">
       <img class="mark lg" src="../icons/logo.svg" width="48" height="48" alt="" aria-hidden="true">
       <div>
-        <h1>ApplyShortly Autofill</h1>
-        <p class="muted">Fills job applications from your ApplyShortly profile. It never submits; you review and click Submit.</p>
+        <h1>Apply Shortly Form Assistant</h1>
+        <p class="muted">Fills job applications from your ApplyShortly profile. You review and click Submit, or choose Auto apply to submit a complete form for you.</p>
       </div>
     </header>
 
@@ -21,7 +21,7 @@
         <b id="connTitle">Checking connection…</b>
         <div id="connDetail" class="muted"></div>
       </div>
-      <button id="retest" type="button">Test again</button>
+      <button id="retest" type="button" hidden>Try again</button>
     </div>
 
     <section class="card">
@@ -31,11 +31,12 @@
         <div class="actions">
           <button id="signin" type="button" class="primary">Sign in with ApplyShortly</button>
           <button id="cancelSignin" type="button" hidden>Cancel sign-in</button>
-          <button id="disconnect" type="button">Disconnect account</button>
+          <button id="logout" type="button" hidden>Log out</button>
         </div>
+        <p id="logoutHint" class="hint" hidden></p>
         <button id="openWebsite" type="button">Open ApplyShortly</button>
         <p id="pairingMsg" role="status" aria-live="polite"></p>
-        <details>
+        <details id="manual">
           <summary>Advanced: manual API-key connection</summary>
         <label>API key
           <span class="input-with-btn">
@@ -59,7 +60,9 @@
           the extension icon<span id="shortcutHint"></span>.</li>
         <li><b>Review.</b> A panel at the bottom right lists what was filled and what still needs you. Click a row to
           jump to that field. Green means filled, amber means check it, red means it's your turn.</li>
-        <li><b>Submit.</b> Click the form's own Submit button. ApplyShortly moves the job to <i>Submitted</i> for you.</li>
+        <li><b>Submit.</b> Click the form's own Submit button. ApplyShortly moves the job to <i>Submitted</i> for you.
+          Or use <b>⚡ Auto apply</b>: once every required field is answered, it clicks Submit for you after a
+          3-second countdown you can cancel.</li>
       </ol>
       <p class="hint"><a href="#" id="shortcuts">Change the keyboard shortcut</a></p>
     </section>

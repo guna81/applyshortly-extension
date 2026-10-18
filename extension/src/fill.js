@@ -2,9 +2,13 @@
 // run it in jsdom. Exposed as globalThis.JobHuntFill for content.js (content scripts aren't modules).
 //
 // Rules shared with the server-side filler: fill only empty fields, never tick a checkbox (consent
-// boxes are always the user's call), never click submit.
+// boxes are always the user's call). Submitting is only ever the user's explicit "Auto apply"
+// (content.js); this file just finds the button.
 
 (() => {
+  // Custom dropdowns that aren't a <select> or a Google Forms listbox: Angular Material's mat-select
+  // and the ARIA combobox / listbox-popup pattern. Their options only exist while open.
+  const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
   const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input:not([type]), textarea';
 
   /** Question text without required markers and runs of whitespace. */
@@ -60,6 +64,11 @@
    * Placeholders are sample values on many forms ("Arjun"), so this must win over them.
    */
   function nearbyLabel(el) {
+    const cf7 = el.closest('.wpcf7-form-control-wrap');
+    if (cf7) {
+      const label = cf7.parentElement?.querySelector('label');
+      if (label && !cf7.contains(label)) return cleanLabel(label.textContent);
+    }
     let node = el;
     for (let depth = 0; node && depth < 3; depth++, node = node.parentElement) {
       for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
@@ -78,6 +87,10 @@
 
   function isRequired(el) {
     if (el.required || el.getAttribute("aria-required") === "true") return true;
+    if (el.closest('.wpcf7-validates-as-required')) return true;
+    const cf7 = el.closest('.wpcf7-form-control-wrap');
+    const cf7Label = cf7?.closest('label') || cf7?.parentElement?.querySelector('label');
+    if (cf7 && /\*/.test(cf7Label?.textContent ?? '')) return true;
     const item = el.closest('[role="listitem"]');
     return Boolean(item?.querySelector('[aria-label="Required question"]'));
   }
@@ -127,7 +140,7 @@
     for (const radios of radioGroups.values()) {
       const first = radios[0];
       const group = first.closest('fieldset, [role="radiogroup"]');
-      const label = group ? labelOf(group) || labelOf(first) : labelOf(first);
+      const label = group ? labelOf(group) || labelOf(first) : nearbyLabel(first) || labelOf(first);
       const options = radios.map((r) => ({ text: labelOfOption(r), el: r }));
       fields.push({ kind: "radio", el: first, label, required: radios.some(isRequired), options });
     }
@@ -136,8 +149,18 @@
       if (!options.length || !visible(group)) continue;
       fields.push({ kind: "radio", el: group, label: labelOf(group), required: isRequired(group), options, aria: true });
     }
+    const seenCheckboxGroups = new Set();
     for (const el of doc.querySelectorAll('input[type=checkbox], [role="checkbox"]')) {
       if (!visible(el)) continue;
+      const cf7 = el.closest('.wpcf7-checkbox');
+      if (cf7) {
+        if (seenCheckboxGroups.has(cf7)) continue;
+        seenCheckboxGroups.add(cf7);
+        const inputs = [...cf7.querySelectorAll('input[type=checkbox]')].filter(visible);
+        const options = inputs.map((input) => ({ text: labelOfOption(input), el: input }));
+        fields.push({ kind: "checkbox", el, label: nearbyLabel(el), required: inputs.some(isRequired), options });
+        continue;
+      }
       fields.push({ kind: "checkbox", el, label: labelOf(el) || optionText(el), required: isRequired(el) });
     }
     for (const el of doc.querySelectorAll("input[type=file]")) {
@@ -147,6 +170,22 @@
     for (const el of doc.querySelectorAll('[role="listbox"]')) {
       if (!visible(el) || el.closest("select")) continue;
       fields.push({ kind: "dropdown", el, label: labelOf(el), required: isRequired(el) });
+    }
+    const dropdowns = fields.filter((f) => f.kind === "dropdown").map((f) => f.el);
+    for (const el of doc.querySelectorAll(CUSTOM_DROPDOWN)) {
+      if (!visible(el) || !isEditable(el) || el.matches("input, textarea, select") || el.closest("select")) continue;
+      if (dropdowns.some((d) => d === el || d.contains(el) || el.contains(d))) continue;
+      dropdowns.push(el);
+      const label = dropdownLabel(el);
+      const marked = /\*/.test(el.getAttribute("aria-label") ?? "") || /\*/.test(el.textContent ?? "");
+      fields.push({
+        kind: "dropdown",
+        custom: true,
+        layout: checkLayout,
+        el,
+        label,
+        required: isRequired(el) || el.hasAttribute("required") || marked,
+      });
     }
     // Uploads with no <input type=file> on the page (Google Forms opens Google's own picker).
     for (const item of doc.querySelectorAll('[role="listitem"]')) {
@@ -158,6 +197,132 @@
     }
     // Document order, so the panel lists questions the way the page shows them.
     return fields.sort((a, b) => (a.el.compareDocumentPosition(b.el) & 4 ? -1 : 1));
+  }
+
+  /** The question a custom dropdown answers, never the value it currently shows. */
+  function dropdownLabel(el) {
+    const doc = el.ownerDocument;
+    const ids = (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean);
+    const own = ids.map((id) => doc.getElementById(id)).filter((n) => n && !el.contains(n));
+    const fromIds = cleanLabel(own.map((n) => n.textContent).join(" "));
+    if (fromIds) return fromIds;
+    const aria = cleanLabel(el.getAttribute("aria-label") ?? "");
+    if (aria) return aria;
+    const id = el.getAttribute("id");
+    const forLabel = id && doc.querySelector(`label[for="${CSS.escape(id)}"]`);
+    if (forLabel && cleanLabel(forLabel.textContent)) return cleanLabel(forLabel.textContent);
+    const box = el.closest("mat-form-field, .form-group, [class*=form-field i]");
+    const inBox = box && [...box.querySelectorAll("mat-label, label")].find((n) => !el.contains(n));
+    if (inBox && cleanLabel(inBox.textContent)) return cleanLabel(inBox.textContent);
+    const near = nearbyLabel(el);
+    if (near) return near;
+    // The placeholder is often the question ("Gender*").
+    return cleanLabel(el.textContent ?? "");
+  }
+
+  /** What a dropdown currently shows as its answer; "" while nothing is chosen. */
+  function dropdownValue(field) {
+    const el = field.el;
+    const selected = el.querySelector('[role="option"][aria-selected="true"]');
+    if (selected) {
+      const text = selected.textContent.trim();
+      return /^choose$/i.test(text) ? "" : (selected.getAttribute("data-value") ?? text);
+    }
+    if (!field.custom) return "";
+    if (el.matches(".mat-mdc-select-empty, .mat-select-empty") || el.querySelector(".mat-mdc-select-placeholder, .mat-select-placeholder")) return "";
+    const shown = cleanLabel(el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text")?.textContent ?? el.textContent ?? "");
+    const same = normalise(shown) === normalise(field.label ?? "");
+    return !shown || same || /^(select|choose|please select|-+)$/i.test(shown) ? "" : shown;
+  }
+
+  /** Visible options of a custom dropdown that is open (Material renders them in an overlay). */
+  function openOptions(field) {
+    const el = field.el;
+    const doc = el.ownerDocument;
+    const owned = ["aria-controls", "aria-owns"].map((a) => el.getAttribute(a)).filter(Boolean).map((id) => doc.getElementById(id)).filter(Boolean);
+    const scopes = owned.length ? owned : [doc];
+    return scopes
+      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option')])
+      .filter((o) => isVisible(o, field.layout))
+      .map((o) => ({ text: optionText(o), el: o }));
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function press(el, types) {
+    const win = el.ownerDocument.defaultView;
+    for (const type of types) el.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, view: win }));
+  }
+
+  function dismiss(el) {
+    const win = el.ownerDocument.defaultView;
+    for (const target of [el, el.ownerDocument.activeElement]) {
+      target?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+  }
+
+  /**
+   * Opens a custom dropdown, clicks the option an answer refers to and returns its text, or null
+   * when it isn't there. Libraries differ on whether click or mousedown opens, so try one then the other.
+   */
+  async function pickDropdown(field, answer, { polls = 6, pollMs = 50 } = {}) {
+    const el = field.el;
+    el.focus?.();
+    let options = [];
+    for (const open of [["click"], ["mousedown", "mouseup"]]) {
+      press(el, open);
+      for (let i = 0; i < polls && !options.length; i++) {
+        options = openOptions(field);
+        if (!options.length) await sleep(pollMs);
+      }
+      if (options.length) break;
+    }
+    const option = options.length ? chooseOption(options, answer) : null;
+    if (!option) {
+      dismiss(el);
+      return null;
+    }
+    press(option.el, ["mousedown", "mouseup", "click"]);
+    await sleep(pollMs);
+    return option.text;
+  }
+
+  // ---------------------------------------------------------------- what the page says is wrong
+
+  /**
+   * Whether the page itself rejects what a field holds (Angular/Material, Bootstrap, ARIA or native
+   * validation). An empty field is just unanswered, not invalid.
+   */
+  function isInvalid(field) {
+    const el = field.kind === "radio" && !field.aria ? field.options[0]?.el : field.el;
+    if (!el?.getAttribute) return false;
+    if (el.getAttribute("aria-invalid") === "true") return true;
+    if (el.matches(".ng-invalid.ng-touched, .is-invalid, .mat-form-field-invalid *")) return true;
+    if (field.kind === "text" && el.value && el.validity && !el.validity.valid) return true;
+    return false;
+  }
+
+  /** The site's own error text for a field, when it shows one. */
+  function invalidReason(field) {
+    const el = field.el;
+    const doc = el.ownerDocument;
+    const ids = `${el.getAttribute("aria-errormessage") ?? ""} ${el.getAttribute("aria-describedby") ?? ""}`;
+    const described = cleanLabel(textOfIds(doc, ids.trim()));
+    const box = el.closest("mat-form-field, .form-group, [class*=form-field i], [class*=field i]") ?? el.parentElement?.parentElement;
+    const shown = box?.querySelector('mat-error, [role="alert"], .invalid-feedback, [class*=error i]');
+    const text = described || cleanLabel(shown?.textContent ?? "") || (el.validationMessage ?? "");
+    return text.length > 140 ? `${text.slice(0, 137)}…` : text;
+  }
+
+  /**
+   * Other ways to write a value the page rejected: just the number ("5.6 years" → "5.6", "INR 1,900,000"
+   * → "1,900,000" or "1900000"). Empty unless it has both digits and other characters.
+   */
+  function numericVariants(value) {
+    const s = String(value ?? "");
+    const core = /\d[\d,]*(\.\d+)?/.exec(s)?.[0];
+    if (!core || core === s || !/[a-z]/i.test(s)) return [];
+    return [...new Set([core, core.replace(/,/g, "")])].filter((v) => v !== s);
   }
 
   function labelOfOption(radio) {
@@ -214,7 +379,7 @@
     if (/^(current )?(location|city)\b|current (city|location)|where are you (currently )?(based|located)/.test(l)) {
       return sure(profile.location);
     }
-    if (/\b(total|overall)\b.{0,40}\bexperience\b|^(how many )?years of (total |overall |professional |work |full[- ]time )?experience\W*$/.test(l)) {
+    if (/\b(total|overall)\b.{0,40}\bexperience\b|^(how many )?years of (total |overall |professional |work |full[- ]time )?experience\W*$|^exp\.? in it industry\W*$/.test(l)) {
       return sure(years(profile.total_experience_years));
     }
     const job = latestExperience(profile);
@@ -225,7 +390,7 @@
       return job?.is_current ? sure(job.title) : check(job?.title);
     }
     const edu = highestEducation(profile);
-    if (/highest (educational |education )?(qualification|degree|education)/.test(l)) {
+    if (/highest (educational |education )?(qualification|degree|education)|^(educational )?qualification\W*$/.test(l)) {
       return sure(edu && [edu.degree, edu.field_of_study].filter(Boolean).join(" "));
     }
     if (/college|university|institut(e|ion)|alma mater/.test(l)) {
@@ -287,6 +452,8 @@
           : !field.options.some((o) => o.el.checked);
       case "file":
         return !field.el.files?.length;
+      case "dropdown":
+        return !dropdownValue(field);
       default:
         return true;
     }
@@ -342,6 +509,34 @@
     return false;
   }
 
+  const SUBMIT_TEXT = /\b(submit|apply|send( my)? application)\b/i;
+  // "Apply with LinkedIn", "Save and continue", "Next": not the final submit of this form.
+  const NOT_SUBMIT = /\b(next|continue|back|previous|save|draft|cancel|later|linkedin|indeed|google|sign ?in|log ?in|upload|attach)\b/i;
+
+  function buttonText(el) {
+    return cleanLabel(el.getAttribute("aria-label") || (el.tagName === "INPUT" ? el.value : el.textContent));
+  }
+
+  /**
+   * The one button that submits the form these fields belong to, or null when there is none
+   * or it's ambiguous. Auto apply never guesses between candidates.
+   */
+  function findSubmitButton(doc, fields, { checkLayout = true, includeDisabled = false } = {}) {
+    const forms = new Set(fields.map((f) => f.el.closest?.("form")).filter(Boolean));
+    const scope = forms.size === 1 ? [...forms][0] : doc;
+    const usable = (el) => isVisible(el, checkLayout) && (includeDisabled || (!el.disabled && el.getAttribute("aria-disabled") !== "true"));
+    const candidates = [...scope.querySelectorAll('button, input[type=submit], [role="button"]')].filter((el) => {
+      if (!usable(el) || el.type === "reset") return false;
+      const text = buttonText(el);
+      const formSend = forms.size === 1 && forms.has(el.form) &&
+        el.matches('input[type="submit"], button[type="submit"]') && /^send$/i.test(text);
+      return (SUBMIT_TEXT.test(text) || formSend) && !NOT_SUBMIT.test(text);
+    });
+    // A <div role=button> wrapping a <button> counts once.
+    const outermost = candidates.filter((el) => !candidates.some((other) => other !== el && other.contains(el)));
+    return outermost.length === 1 ? outermost[0] : null;
+  }
+
   /** "Current CTC? Mention fixed and variable…" → "Current CTC?" */
   function firstSentence(label) {
     const m = /^(.{6,}?[?.:])\s+\S/.exec(label);
@@ -356,8 +551,14 @@
     profileAnswer,
     chooseOption,
     isEmpty,
+    isInvalid,
+    invalidReason,
+    numericVariants,
+    dropdownValue,
+    pickDropdown,
     apply,
     attachFile,
+    findSubmitButton,
     looksSubmitted,
   };
 })();
