@@ -559,14 +559,14 @@
       :host { all: initial; }
       .wrap {
         --bg: #ffffff; --fg: #18181b; --muted: #6b7280; --line: #e5e7eb; --soft: #f4f4f6; --hover: #ececf1;
-        --accent: #4f46e5; --accent-soft: #eef2ff; --good: #15803d; --good-soft: #dcfce7;
+        --accent: #078651; --accent-soft: #ecfdf5; --accent-fg: #ffffff; --good: #15803d; --good-soft: #dcfce7;
         --warn: #b45309; --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2;
         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg);
       }
       @media (prefers-color-scheme: dark) {
         .wrap {
           --bg: #17181e; --fg: #ececf1; --muted: #9ca3af; --line: #2c2d36; --soft: #20212a; --hover: #2a2b35;
-          --accent: #818cf8; --accent-soft: #272a4a; --good: #86efac; --good-soft: #14532d55;
+          --accent: #34d399; --accent-soft: #064e3b88; --accent-fg: #052e1f; --good: #86efac; --good-soft: #14532d55;
           --warn: #fcd34d; --warn-soft: #78350f66; --bad: #fca5a5; --bad-soft: #7f1d1d55;
         }
       }
@@ -580,7 +580,7 @@
       .h { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 14px; }
       .mark { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
         /* Embedded from frontend/public/favicon.svg so the panel needs no exposed extension resources. */
-        background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%0A%20%20%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%234f46e5%22%2F%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%223.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20d%3D%22M8%2024%2015%208h2l4%209%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M12%2019h13m-4-4%204%204-4%204%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E%0A") center / contain no-repeat; }
+        background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%0A%20%20%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%23059669%22%2F%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%223.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20d%3D%22M8%2024%2015%208h2l4%209%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M12%2019h13m-4-4%204%204-4%204%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E%0A") center / contain no-repeat; }
       .t { flex: 1; min-width: 0; }
       .t b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .t small { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -631,7 +631,7 @@
         background: var(--bg); color: var(--fg); cursor: pointer; white-space: nowrap; }
       button.b:hover:not(:disabled) { background: var(--hover); }
       button.b:disabled { opacity: .6; cursor: default; }
-      button.b.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.b.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
       button.b.primary:hover { filter: brightness(1.08); background: var(--accent); }
       button.b:disabled { opacity: .45; cursor: not-allowed; filter: none; }
       button.b.ghost { border-color: transparent; background: transparent; color: var(--accent); padding: 5px 6px; }
@@ -665,7 +665,7 @@
       .tabs .n { background: var(--bad-soft); color: var(--bad); border-radius: 99px; padding: 0 7px; font-size: 11px; }
       .chat { display: flex; flex-direction: column; gap: 8px; min-height: 140px; }
       .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
-      .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+      .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
       .bubble.assistant { align-self: flex-start; background: var(--soft); border-bottom-left-radius: 4px; }
       .bubble .filled { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; color: var(--muted); font-size: 12px; }
       .bubble .filled .chip { background: var(--good-soft); color: var(--good); border-color: transparent; }

@@ -7,8 +7,9 @@
   --line: #e5e7eb;
   --soft: #f4f4f6;
   --hover: #ececf1;
-  --accent: #4f46e5;
-  --accent-soft: #eef2ff;
+  --accent: #078651;
+  --accent-soft: #ecfdf5;
+  --accent-fg: #ffffff;
   --good: #15803d;
   --good-soft: #dcfce7;
   --warn: #b45309;
@@ -23,8 +24,9 @@
     --line: #2c2d36;
     --soft: #20212a;
     --hover: #2a2b35;
-    --accent: #818cf8;
-    --accent-soft: #272a4a;
+    --accent: #34d399;
+    --accent-soft: #064e3b88;
+    --accent-fg: #052e1f;
     --good: #86efac;
     --good-soft: #14532d55;
     --warn: #fcd34d;
@@ -51,7 +53,7 @@ button {
 }
 button:hover:not(:disabled) { background: var(--hover); }
 button:disabled { opacity: .6; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 button.block { display: block; width: 100%; margin-top: 8px; }
 button.icon { border: 0; background: transparent; width: 32px; height: 32px; padding: 0; border-radius: 8px; color: var(--muted); font-size: 16px; }
@@ -112,7 +114,7 @@ input.switch:checked::after { transform: translateX(16px); }
 .page .hero-head p { margin: 2px 0 0; }
 .page .card { padding: 20px; }
 .page h2 { display: flex; align-items: center; gap: 10px; font-size: 16px; margin: 0 0 14px; }
-.page .num { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; display: grid; place-items: center; }
+.page .num { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-size: 13px; display: grid; place-items: center; }
 .page .conn-card { display: flex; gap: 12px; align-items: center; }
 .page .conn-card.good { border-color: #22c55e66; }
 .page .conn-card.bad { background: var(--bad-soft); }
