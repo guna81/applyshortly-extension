@@ -120,3 +120,38 @@ test("autoApplyBlockers: submits only a complete, not-yet-sent application", () 
   ]);
   assert.deepEqual(plain(P.autoApplyBlockers(complete, { status: "submitted" })), ["This application is already submitted"]);
 });
+
+test("an unresolved custom dropdown with options read from the page offers them as choices", () => {
+  // content.js readChoices fills field.options as [{ text }] for custom dropdowns.
+  const dropdown = { kind: "dropdown", custom: true, label: "Gender", required: true, options: [{ text: "Male" }, { text: "Female" }] };
+  const results = [{ field: dropdown, status: "unresolved" }];
+  assert.deepEqual(plain(P.assistantGreeting(results).choices), ["Male", "Female"]);
+  const { fields, current } = P.assistantFields(results);
+  assert.deepEqual(plain(fields), [{ key: "f0", label: "Gender", kind: "dropdown", options: ["Male", "Female"], required: true }]);
+  assert.deepEqual(plain(current), { f0: "" });
+
+  const optional = [{ field: { ...dropdown, required: false }, status: "optional", optional: true }];
+  assert.deepEqual(plain(P.nextPrompt(optional).choices), ["Male", "Female", P.SKIP_REPLY]);
+  // Without readable options there's nothing to offer.
+  assert.deepEqual(plain(P.assistantGreeting([{ field: { ...dropdown, options: [] }, status: "unresolved" }]).choices), []);
+});
+
+test("optional personal facts are not offered as an AI draft", () => {
+  const optional = (label, el = {}) => [{ field: { kind: "text", label, el }, status: "optional", optional: true }];
+  for (const [label, el] of [["Middle Name", {}], ["Date of birth", {}], ["PAN number", {}], ["Phone", { type: "tel" }], ["Contact", { type: "email" }], ["Portfolio", { type: "url" }]]) {
+    const prompt = P.nextPrompt(optional(label, el));
+    assert.deepEqual(plain(prompt.choices), [P.SKIP_REPLY], label);
+    assert.match(prompt.text, /is optional: tell me what to put, or leave it blank\.$/, label);
+    assert.equal(P.draftable(optional(label, el)[0].field), false, label);
+  }
+});
+
+test("optional open questions still offer a draft", () => {
+  for (const label of ["Why do you want to join us?", "Tell us about a project you're proud of", "Why are you a good candidate?", "Personal statement", "Describe your capacity to lead"]) {
+    const field = { kind: "text", label, el: { type: "textarea" } };
+    assert.equal(P.draftable(field), true, label);
+    assert.deepEqual(plain(P.nextPrompt([{ field, status: "optional", optional: true }]).choices), [P.DRAFT_REPLY, P.SKIP_REPLY], label);
+  }
+  assert.equal(P.draftable({ kind: "select", label: "Why do you want to join us?" }), false);
+  assert.equal(P.draftable(null), false);
+});

@@ -1,10 +1,16 @@
 # ApplyShortly Autofill
 
-An MIT-licensed Chrome extension that fills job applications from your ApplyShortly profile and answer bank. Review the answers and submit on the employer's site, or explicitly choose Auto apply with a cancellable countdown.
+An MIT-licensed Chrome extension that fills job applications from your ApplyShortly profile and answer bank, including multi-step forms, pop-ups and embedded forms with its step-by-step form agent. Review the answers and submit on the employer's site, or explicitly choose Auto apply with a cancellable countdown.
 
 This repository contains the extension, typed API bridge, tests and packaging tools. It requires a compatible ApplyShortly server and an account; the backend and website are maintained separately. Personal AI keys also require a server because they are stored and used there.
 
-## Build and install
+## Install
+
+Install **Apply Shortly Form Assistant** from the [Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd), then open the extension's settings and sign in with your ApplyShortly account. The store version connects to `https://applyshortly.com` and updates automatically.
+
+To use a self-hosted ApplyShortly server, or to develop the extension, build it yourself as below.
+
+## Build from source
 
 Use Node.js 22+ and Python 3.10+.
 

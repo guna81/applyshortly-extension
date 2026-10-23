@@ -43,6 +43,19 @@ When the extension fills a field or attaches your résumé, that information bec
 the employer website. The website may read or transmit it before submission. Review that site's
 privacy policy. The extension cannot control employer page scripts.
 
+## The form agent
+
+When you start the form agent, the extension uses Chrome's debugger permission on that tab only,
+until it finishes or you stop it (Chrome shows a bar while it is attached). After each step it
+sends your ApplyShortly server a description of the application form on the page: the page URL
+and title, the form's questions, options, buttons, the values currently in the fields, and the
+page's own error messages. When the agent is stuck it also sends a screenshot of the visible part
+of the tab. The server uses these to choose the next step, sending them to the selected AI provider
+when a step needs AI; it keeps a short-lived session (about two hours) and does not store page
+descriptions or screenshots. Buttons the agent clicked to get through a form (their labels only,
+no answers) are kept per website so later visits need no AI. Answers you type in reply to the
+agent's questions are saved to your answer bank.
+
 ## Auto apply and submission records
 
 Ordinary filling does not submit. In versions that offer Auto apply, choosing it authorises

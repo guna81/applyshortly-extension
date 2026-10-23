@@ -58,3 +58,21 @@ Storage and identity: retain current explanations only if they still match the n
 Current checked categories already cover profile/contact data, compensation, credentials, assistant messages, location, application URLs, fill/submission events and form content. Auto apply does not justify removing any checked category. Health remains unchecked only while the actual package does not process health information; review sensitive screening questions if adding support for them.
 
 Reconfirm all three limited-use declarations against the revised purpose and policy: no sale/transfer outside permitted uses; no unrelated use; no creditworthiness/lending use. Employer submission is a user-requested transfer for the disclosed application-completion purpose. Do not certify before reviewing the exact release package and approving its public policy.
+
+## Draft for v0.4.0 (form agent): not submitted
+
+Review against the actual v0.4.0 package before submitting.
+
+- **Summary (manifest description):** Fills job application forms from your ApplyShortly profile
+  and answer bank, including multi-step forms with its agent. It submits only when you choose Auto
+  apply.
+- **New permission, debugger:** Used only after the user chooses "Fill with the agent", on the tab
+  they started it in, until it finishes or they stop it. It reads the application form in every
+  frame of that tab (including employer forms embedded from another domain) and types and clicks
+  with real input events so modern form frameworks accept the answers. It never submits the
+  application, never solves CAPTCHAs, and detaches when done; Chrome shows its debugging bar the
+  whole time.
+- **Single purpose:** unchanged; the agent completes the same application forms.
+- **Privacy answers:** add the form-structure descriptions and the occasional screenshot of the
+  visible tab sent while the agent runs (see the privacy disclosure's "The form agent" section).
+- **Minimum Chrome version:** 125.

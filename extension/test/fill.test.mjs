@@ -351,3 +351,162 @@ test("findSubmitButton can report a Submit button that is still disabled", () =>
   assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false }), null);
   assert.equal(F.findSubmitButton(doc, fields, { checkLayout: false, includeDisabled: true })?.textContent, "Submit");
 });
+
+// Like openOnClick, but the overlay closes on Escape the way Material and most libraries do.
+function openOnClickCloseOnEscape(win, select, names) {
+  openOnClick(win, select, names);
+  win.document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") win.document.querySelectorAll('[role="listbox"]').forEach((p) => p.remove());
+  });
+}
+
+test("readDropdownOptions reads a closed custom dropdown's options without choosing one", async () => {
+  const { doc, F, win } = page(MATERIAL);
+  const select = doc.querySelector("#gender");
+  openOnClickCloseOnEscape(win, select, ["Select", "Male", "Female", "Female", "Prefer not to say"]);
+  const dropdown = F.collectFields(doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
+  assert.equal(doc.querySelector('[role="option"]'), null, "options only exist while open");
+
+  const options = await F.readDropdownOptions(dropdown, { pollMs: 1 });
+  assert.deepEqual(plain(options), [{ text: "Male" }, { text: "Female" }, { text: "Prefer not to say" }]);
+  assert.equal(doc.querySelector('[role="listbox"]'), null, "left closed");
+  assert.equal(F.isEmpty(dropdown), true, "nothing selected");
+  assert.equal(F.dropdownValue(dropdown), "");
+});
+
+test("readDropdownOptions opens on mousedown too, and returns [] when no options appear", async () => {
+  const { doc, F, win } = page(MATERIAL);
+  const select = doc.querySelector("#gender");
+  // An async-search dropdown: opening it shows nothing until the user types.
+  let opened = 0;
+  select.addEventListener("click", () => opened++);
+  select.addEventListener("mousedown", () => opened++);
+  const dropdown = F.collectFields(doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
+  assert.deepEqual(plain(await F.readDropdownOptions(dropdown, { polls: 2, pollMs: 1 })), []);
+  assert.equal(opened, 2, "tried click, then mousedown");
+  assert.equal(F.isEmpty(dropdown), true);
+
+  const other = page(MATERIAL);
+  const host = other.doc.querySelector("#gender");
+  host.addEventListener("mousedown", () => {
+    const panel = other.doc.createElement("div");
+    panel.setAttribute("role", "listbox");
+    panel.innerHTML = '<div role="option">Yes</div><div role="option">No</div>';
+    other.doc.body.append(panel);
+    other.win.document.addEventListener("keydown", () => panel.remove(), { once: true });
+  });
+  const field = other.F.collectFields(other.doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
+  assert.deepEqual(plain(await other.F.readDropdownOptions(field, { polls: 2, pollMs: 1 })), [{ text: "Yes" }, { text: "No" }]);
+  assert.equal(other.doc.querySelector('[role="listbox"]'), null);
+});
+
+// A searchable "Select" box whose list is plain <li>s with no ARIA roles. Escape doesn't close it;
+// a click elsewhere does.
+const ROLELESS = `
+  <h2>Contact Information</h2>
+  <label for="sal">Salutation *</label>
+  <input id="sal" role="combobox" placeholder="Select" required>
+  <ul class="menu" hidden><li>Miss</li><li>Mr.</li><li>Mrs.</li><li>Ms.</li><li>Mx.</li></ul>
+  <label for="em">Email *</label><input id="em" type="email">`;
+
+function roleless() {
+  const p = page(ROLELESS);
+  const input = p.doc.querySelector("#sal");
+  const menu = p.doc.querySelector(".menu");
+  input.addEventListener("click", () => { menu.hidden = false; });
+  p.doc.addEventListener("mousedown", (e) => { if (e.target !== input && !menu.contains(e.target)) menu.hidden = true; });
+  for (const li of menu.children) li.addEventListener("click", () => { input.value = li.textContent; menu.hidden = true; });
+  return { ...p, input, menu };
+}
+
+test("a dropdown whose options have no ARIA roles still offers them, and is closed again", async () => {
+  const { doc, F, menu } = roleless();
+  const field = F.collectFields(doc, { checkLayout: false }).find((f) => f.label.startsWith("Salutation"));
+  assert.equal(field.kind, "dropdown");
+  const options = await F.readDropdownOptions(field, { pollMs: 1 });
+  assert.deepEqual(plain(options).map((o) => o.text), ["Miss", "Mr.", "Mrs.", "Ms.", "Mx."]);
+  assert.equal(menu.hidden, true, "closed by a click elsewhere when Escape didn't");
+  assert.equal(F.isEmpty(field), true, "nothing chosen");
+});
+
+test("a role-less dropdown option is picked by clicking it", async () => {
+  const { doc, F, input, menu } = roleless();
+  const field = F.collectFields(doc, { checkLayout: false }).find((f) => f.label.startsWith("Salutation"));
+  assert.equal(await F.pickDropdown(field, "Mr", { pollMs: 1 }), "Mr.");
+  assert.equal(input.value, "Mr.");
+  assert.equal(menu.hidden, true);
+  assert.equal(F.dropdownValue(field), "Mr.");
+  assert.equal(F.isEmpty(field), false);
+});
+
+test("a combobox input is a dropdown only when it says Select or can't be typed in; typeaheads stay text", () => {
+  const { doc, F } = page(`
+    <label for="a">City</label><input id="a" role="combobox" placeholder="Start typing">
+    <label for="b">Country</label><input id="b" role="combobox" readonly>
+    <label for="c">Notice period</label><input id="c" role="combobox" placeholder="-- Select --">`);
+  const kinds = F.collectFields(doc, { checkLayout: false }).map((f) => [f.label, f.kind]);
+  assert.deepEqual(plain(kinds), [["City", "text"], ["Country", "dropdown"], ["Notice period", "dropdown"]]);
+});
+
+test("react-select style: the input stays empty and the choice shows beside it", () => {
+  const { doc, F } = page(`
+    <label for="s">Salutation</label>
+    <div class="control"><div class="value"><div class="single">Ms.</div><div><input id="s" role="combobox" aria-haspopup="listbox" placeholder="Select"></div></div></div>
+    <label for="t">Title</label>
+    <div class="control"><div class="value"><div class="placeholder">Select...</div><div><input id="t" role="combobox" aria-haspopup="listbox"></div></div></div>`);
+  const [sal] = F.collectFields(doc, { checkLayout: false });
+  assert.equal(sal.kind, "dropdown");
+  assert.equal(F.dropdownValue(sal), "Ms.");
+  const title = { kind: "dropdown", custom: true, el: doc.querySelector("#t") };
+  assert.equal(F.dropdownValue(title), "", "a placeholder is not a value");
+});
+
+test("strict chooseOption (AI drafts) never ticks an option a sentence merely contains", () => {
+  const { F } = page("");
+  const auth = ["I am legally authorized", "I am not legally authorized"].map((text) => ({ text }));
+  const drafted = "I am not sure if I am legally authorized";
+  assert.equal(F.chooseOption(auth, drafted, { strict: true }), null);
+  // Non-strict (profile / answer bank) keeps the containment match.
+  assert.equal(F.chooseOption(auth, drafted)?.text, "I am legally authorized");
+  assert.equal(F.chooseOption(auth, drafted, { strict: false })?.text, "I am legally authorized");
+  // Exact and leading yes/no still count when strict.
+  assert.equal(F.chooseOption(auth, "i am NOT legally authorized.", { strict: true })?.text, "I am not legally authorized");
+  const yesNo = ["Yes", "No"].map((text) => ({ text }));
+  assert.equal(F.chooseOption(yesNo, "Yes, I can relocate within a month.", { strict: true })?.text, "Yes");
+  assert.equal(F.chooseOption(yesNo, "No - I would not need sponsorship", { strict: true })?.text, "No");
+  const degrees = ["Bachelor's degree", "Master's degree"].map((text) => ({ text }));
+  assert.equal(F.chooseOption(degrees, "Master's degree in Computing", { strict: true }), null);
+  assert.equal(F.chooseOption(degrees, "Master's degree in Computing")?.text, "Master's degree");
+});
+
+test("strict apply leaves selects and radios empty for a drafted sentence", () => {
+  const { doc, F } = page(`
+    <label for="auth">Work authorization</label>
+    <select id="auth"><option value="">Choose</option><option value="y">I am legally authorized</option><option value="n">I am not legally authorized</option></select>
+    <fieldset><legend>Highest degree</legend>
+      <label><input type="radio" name="deg" value="b"> Bachelor's degree</label>
+      <label><input type="radio" name="deg" value="m"> Master's degree</label>
+    </fieldset>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  const select = fields.find((f) => f.kind === "select");
+  const radio = fields.find((f) => f.kind === "radio");
+  assert.equal(F.apply(select, "I am not sure if I am legally authorized", { strict: true }), null);
+  assert.equal(F.isEmpty(select), true);
+  assert.equal(F.apply(radio, "Master's degree in Computing", { strict: true }), null);
+  assert.equal(F.isEmpty(radio), true);
+  assert.equal(F.apply(radio, "Master's degree in Computing"), "Master's degree");
+  assert.equal(doc.querySelector('input[value="m"]').checked, true);
+});
+
+test("strict pickDropdown leaves a custom dropdown alone on a contained match", async () => {
+  const { doc, F, win } = page(MATERIAL);
+  openOnClick(win, doc.querySelector("#gender"), ["Engineering", "Design"]);
+  const dropdown = F.collectFields(doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
+  assert.equal(await F.pickDropdown(dropdown, "Software engineering", { pollMs: 1, strict: true }), null);
+  assert.equal(F.isEmpty(dropdown), true);
+
+  const loose = page(MATERIAL);
+  openOnClick(loose.win, loose.doc.querySelector("#gender"), ["Engineering", "Design"]);
+  const other = loose.F.collectFields(loose.doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
+  assert.equal(await loose.F.pickDropdown(other, "Software engineering", { pollMs: 1 }), "Engineering");
+});

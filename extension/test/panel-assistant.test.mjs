@@ -40,6 +40,8 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
     assist: (msg) => assist(msg),
     webSession: () => ({ connected: true }),
     openProfile: () => true,
+    agentStart: () => ({ started: true, appId: 5 }),
+    agentControl: () => true,
   };
   const respond = async (msg) => {
     sent.push(plain(msg));
@@ -56,7 +58,8 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
   for (const name of ["fill.js", "panel-model.js", "content.js"]) win.eval(src(name));
   const shadow = () => win.document.querySelector("jobhunt-autofill-panel")?.shadowRoot;
   const start = (extra = {}) => onMessage({ type: "run", appId: 5, ...extra }, { id: "fixture" }, () => {});
-  return { win, sent, start, shadow };
+  const message = (msg) => onMessage(msg, { id: "fixture" }, () => {});
+  return { win, sent, start, shadow, message };
 }
 
 async function until(check, label) {
@@ -365,6 +368,44 @@ test("dropdowns are filled, values the site rejects are retried or flagged, and 
 });
 
 
+test("an unanswered custom dropdown's options are read once, offered as quick replies and sent to the assistant", async () => {
+  const form = `
+    <label for="name">Full name</label><input id="name" required>
+    <label id="gl">Gender</label>
+    <mat-select id="gender" role="combobox" aria-required="true" aria-labelledby="gl"><span class="mat-mdc-select-placeholder">Gender*</span></mat-select>`;
+  const page = panelPage((msg) => ({ reply: "Done.", updates: { [msg.fields.find((f) => f.kind === "dropdown").key]: "Female" }, warnings: [], done: false, choices: [] }), { form });
+  const doc = page.win.document;
+  const select = doc.querySelector("#gender");
+  let opens = 0;
+  select.addEventListener("click", () => {
+    opens++;
+    const list = doc.createElement("div");
+    list.setAttribute("role", "listbox");
+    for (const name of ["Male", "Female"]) {
+      const option = doc.createElement("mat-option");
+      option.setAttribute("role", "option");
+      option.textContent = name;
+      option.addEventListener("click", () => { select.textContent = name; list.remove(); });
+      list.append(option);
+    }
+    doc.body.append(list);
+  });
+  doc.addEventListener("keydown", (e) => { if (e.key === "Escape") doc.querySelectorAll('[role="listbox"]').forEach((l) => l.remove()); });
+  page.start();
+  await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
+  assert.equal(doc.querySelector('[role="listbox"]'), null, "closed again after reading");
+  assert.equal(select.textContent, "Gender*", "nothing chosen while reading");
+  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Male", "Female"]);
+
+  [...page.shadow().querySelectorAll(".quick button")][1].click();
+  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
+  const call = page.sent.find((m) => m.type === "assist");
+  assert.deepEqual(call.fields.find((f) => f.kind === "dropdown").options, ["Male", "Female"]);
+  await until(() => select.textContent === "Female" || null, "dropdown picked");
+  assert.ok(opens >= 2, "opened once to read, once to pick");
+});
+
+
 test("Auto apply rechecks newly required fields and changed submit buttons after the countdown", async () => {
   const changes = [
     (doc) => doc.querySelector("form").insertAdjacentHTML("beforeend", '<label>New required answer<input required></label>'),
@@ -383,4 +424,135 @@ test("Auto apply rechecks newly required fields and changed submit buttons after
     assert.match(page.shadow().textContent, /Not submitted: the form changed/);
     page.win.close();
   }));
+});
+
+test("the agent runs inside the Assistant tab: progress while it works, then the chat again", async () => {
+  const page = panelPage(() => ({ reply: "", updates: {}, warnings: [], done: true, choices: [] }));
+  page.start();
+  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
+  tabs[1].click();
+  await until(() => [...page.shadow().querySelectorAll("button")].filter((b) => b.textContent.includes("Fill again")), "the Form tab");
+  assert.ok(![...page.shadow().querySelectorAll("button")].some((b) => /agent/i.test(b.textContent))); // it lives on the Assistant tab
+  page.shadow().querySelectorAll('[role="tab"]')[0].click();
+  const [start] = await until(() => [...page.shadow().querySelectorAll("button")].filter((b) => b.textContent === "Fill with the agent"), "the agent button");
+  start.click();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agentStart");
+
+  page.message({ type: "agentUpdate", status: "running", log: ["Started. Watching the page…", "Clicked Next"] });
+  await until(() => page.shadow().querySelector(".alog li:last-child")?.textContent === "Clicked Next" ? [1] : null, "the step log");
+  const shadow = page.shadow();
+  assert.deepEqual([...shadow.querySelectorAll('[role="tab"]')].map((t) => [t.textContent.replace(/\d+/, "").trim(), t.getAttribute("aria-selected")]), [["Assistant", "true"], ["Form", "false"]]);
+  assert.match(shadow.querySelector(".hero strong").textContent, /Working through the form/);
+  assert.equal(shadow.querySelector(".composer"), null); // no chat while it works
+  assert.deepEqual([...shadow.querySelectorAll(".f button")].map((b) => b.textContent), ["Pause", "Stop and take over"]);
+
+  page.message({ type: "agentUpdate", status: "waiting", log: ["Clicked Next"], question: { kind: "question", text: "Notice period?" } });
+  const [answer] = await until(() => [...page.shadow().querySelectorAll(".ask button")].filter((b) => b.textContent === "Answer"), "the agent's question");
+  page.shadow().querySelector(".ask textarea").value = "30 days";
+  page.shadow().querySelector(".ask textarea").dispatchEvent(new page.win.Event("input"));
+  answer.click();
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.text === "30 days"), "the reply");
+
+  page.message({ type: "agentUpdate", status: "ready", log: ["Filled Notice period"], filled: [], unresolved: [] });
+  await until(() => page.shadow().querySelector(".composer"), "the chat after the run");
+  const done = page.shadow();
+  assert.match(done.querySelector(".msg.good").textContent, /submit it yourself/);
+  assert.equal(done.querySelector("details summary").textContent, "What the agent did");
+  assert.ok(done.querySelector(".bubble.assistant"));
+  assert.deepEqual([...done.querySelectorAll(".f button")].map((b) => b.textContent), ["Run the agent again", "Submit"]);
+});
+
+test("a 'Select' box with a plain list (no ARIA options) offers its options in the chat and takes the pick", async () => {
+  const form = `
+    <label for="name">Full name</label><input id="name" required>
+    <label for="sal">Salutation *</label><input id="sal" role="combobox" placeholder="Select" required>
+    <ul class="menu" hidden><li>Miss</li><li>Mr.</li><li>Mrs.</li><li>Ms.</li><li>Mx.</li></ul>`;
+  const page = panelPage((msg) => ({ reply: "Set.", updates: { [msg.fields.find((f) => f.kind === "dropdown").key]: "Mr." }, warnings: [], done: false, choices: [] }), { form });
+  const doc = page.win.document;
+  const input = doc.querySelector("#sal");
+  const menu = doc.querySelector(".menu");
+  input.addEventListener("click", () => { menu.hidden = false; });
+  doc.addEventListener("mousedown", (e) => { if (e.target !== input && !menu.contains(e.target)) menu.hidden = true; });
+  for (const li of menu.children) li.addEventListener("click", () => { input.value = li.textContent; menu.hidden = true; });
+  page.start();
+  await until(() => page.shadow()?.querySelectorAll(".quick button"), "quick replies");
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /Salutation \(required\)\?/);
+  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Miss", "Mr.", "Mrs.", "Ms.", "Mx."]);
+  assert.equal(menu.hidden, true, "closed again after reading");
+  assert.equal(input.value, "", "nothing chosen while reading");
+
+  [...page.shadow().querySelectorAll(".quick button")][1].click();
+  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
+  const sentField = page.sent.find((m) => m.type === "assist").fields.find((f) => f.kind === "dropdown");
+  assert.deepEqual(sentField.options, ["Miss", "Mr.", "Mrs.", "Ms.", "Mx."]);
+  await until(() => (input.value === "Mr." ? [1] : null), "the pick on the page");
+});
+
+const CHOICE_FORM = `
+  <form>
+    <label for="auth">Work authorization</label>
+    <select id="auth" required><option value="">Choose</option><option value="y">I am legally authorized</option><option value="n">I am not legally authorized</option></select>
+    <fieldset><legend>Highest degree</legend>
+      <label><input type="radio" name="deg" value="b" required> Bachelor's degree</label>
+      <label><input type="radio" name="deg" value="m"> Master's degree</label>
+    </fieldset>
+  </form>`;
+const SENTENCES = { "Work authorization": "I am not sure if I am legally authorized", "Highest degree": "Master's degree in Computing" };
+const aiContext = () => ({ profile: { full_name: "Ada Lovelace" }, app: { title: "Engineer", company_name: "Acme" }, aiDrafts: true });
+
+test("an AI draft that only contains an option's words leaves the choice to the user", async () => {
+  const page = panelPage(() => ({ reply: "", updates: {}, warnings: [], done: false, choices: [] }), {
+    form: CHOICE_FORM,
+    context: aiContext,
+    suggest: (msg) => (msg.allowGenerate ? { answer: SENTENCES[msg.question], source: "generated", needs_review: true } : { answer: null }),
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "report" && m.event.event === "filled"), "filled report");
+  assert.ok(page.sent.some((m) => m.type === "suggest" && m.allowGenerate === true), "drafts were requested");
+  const doc = page.win.document;
+  assert.equal(doc.querySelector("#auth").value, "");
+  assert.equal([...doc.querySelectorAll('input[name="deg"]')].some((r) => r.checked), false);
+  const report = page.sent.filter((m) => m.type === "report" && m.event.event === "filled").at(-1);
+  assert.deepEqual(plain(report.event.filled_fields), []);
+  assert.deepEqual(report.event.unresolved_fields.map((f) => f.label).sort(), ["Highest degree", "Work authorization"]);
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /2 questions need your answer/);
+});
+
+test("an answer-bank answer still picks the one option it contains", async () => {
+  const page = panelPage(() => ({ reply: "", updates: {}, warnings: [], done: false, choices: [] }), {
+    form: CHOICE_FORM,
+    context: aiContext,
+    suggest: (msg) => (msg.allowGenerate ? { answer: null } : { answer: SENTENCES[msg.question], source: "answer_bank", needs_review: false }),
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "report" && m.event.event === "filled"), "filled report");
+  const doc = page.win.document;
+  assert.equal(doc.querySelector("#auth").value, "y"); // non-strict containment, as before
+  assert.equal(doc.querySelector('input[value="m"]').checked, true);
+  const report = page.sent.filter((m) => m.type === "report" && m.event.event === "filled").at(-1);
+  assert.deepEqual(report.event.filled_fields.map((f) => [f.label, f.source]).sort(), [["Highest degree", "answer_bank"], ["Work authorization", "answer_bank"]]);
+});
+
+test("an optional personal fact gets no Draft button, and a typed draft request isn't drafted", async () => {
+  const form = `<label for="name">Full name</label><input id="name" required>
+    <label for="mid">Middle Name</label><input id="mid">`;
+  const page = panelPage(() => ({ reply: "What's your middle name?", updates: {}, warnings: [], done: false, choices: [] }), {
+    form,
+    suggest: (msg) => (msg.allowGenerate ? { answer: "Marie", source: "generated", needs_review: true } : { answer: null }),
+  });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /“Middle Name” is optional: tell me what to put, or leave it blank\./);
+  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Leave it blank"]);
+
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "Draft it for me";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.shadow().querySelectorAll(".bubble.user"), "user line");
+  await until(() => !page.shadow().querySelector(".thinking"), "reply");
+  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /a detail only you know/);
+  assert.equal(page.sent.some((m) => m.type === "suggest" && m.allowGenerate === true), false);
+  assert.equal(page.sent.some((m) => m.type === "assist"), false);
+  assert.equal(page.win.document.querySelector("#mid").value, "");
 });

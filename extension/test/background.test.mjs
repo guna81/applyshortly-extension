@@ -35,6 +35,15 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
     assistFill(body) { calls.push({ assist: body }); return { reply: 'ok', updates: {}, warnings: [], done: false, choices: [] }; }
     disconnect() { calls.push('revoke'); if (revoked) throw new BridgeError(401, 'Revoked'); }
   }
+  class FakeAgent {
+    constructor(opts) { Object.assign(this, opts); this.status = 'running'; this.stopped = false; this.log = []; this.last = {}; calls.push({ agent: { tabId: opts.tabId, appId: opts.appId } }); }
+    run() { calls.push('agentRun'); return Promise.resolve(); }
+    reply(text) { calls.push({ agentReply: text }); }
+    skip() { calls.push('agentSkip'); }
+    resume() { calls.push('agentResume'); }
+    pause() { calls.push('agentPause'); }
+    stop() { this.stopped = true; calls.push('agentStop'); }
+  }
   const chrome = {
     storage: { local: area(local), session: area(session) }, runtime,
     identity: {
@@ -51,10 +60,11 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
     tabs: { onRemoved: { addListener() {} }, create: async (value) => calls.push(value), sendMessage: async () => {} },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/m, 'const { BridgeError, JobHuntBridge, autofillIdFromUrl } = fixtures;');
-  vm.runInNewContext(source, { chrome, URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autofillIdFromUrl: () => null }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autofillIdFromUrl: () => null, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
+    if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
     if (url.includes('/browser/config')) {
       if (configNetworkError) throw new Error('fetch failed');
       return { ok: configStatus === 200, status: configStatus, json: async () => invalidConfig ? {} : ({ enabled: true }) };
@@ -319,4 +329,34 @@ test('a declined silent check reports sign-in required without exchanging a code
   const forged = harness({ declined: true, wrongState: true });
   delete forged.local.token;
   assert.equal((await forged.send({ type: 'browserSignIn', interactive: false })).ok, false);
+});
+
+test('the agent runs in the tab it was started from, one tab at a time, and takes the panel\'s controls', async () => {
+  const h = harness();
+  const started = await h.send({ type: 'agentStart', appId: null }, h.content);
+  assert.equal(started.ok, true);
+  assert.deepEqual(h.calls.filter((c) => c.agent || c === 'agentRun'), [{ agent: { tabId: 10, appId: null } }, 'agentRun']);
+  // A later page in the same tab shows the agent instead of autofilling over it.
+  assert.equal((await h.send({ type: 'hello', url: 'https://ats.example/step-2' }, h.content)).data.mode, 'agent');
+
+  const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
+  const second = await h.send({ type: 'agentStart', appId: null }, other);
+  assert.equal(second.ok, false);
+  assert.match(second.error, /another tab/);
+
+  assert.equal((await h.send({ type: 'agentControl', action: 'reply', text: ' 30 days ' }, h.content)).ok, true);
+  assert.equal((await h.send({ type: 'agentControl', action: 'reply', text: '  ' }, h.content)).ok, false);
+  assert.equal((await h.send({ type: 'agentControl', action: 'submit' }, h.content)).ok, false);
+  assert.equal((await h.send({ type: 'agentControl', action: 'skip' }, other)).ok, false); // not running there
+  assert.equal((await h.send({ type: 'agentStatus' }, h.content)).data.status, 'running');
+  assert.equal((await h.send({ type: 'agentControl', action: 'stop' }, h.content)).ok, true);
+  assert.deepEqual(h.calls.filter((c) => c.agentReply || c === 'agentStop'), [{ agentReply: '30 days' }, 'agentStop']);
+});
+
+test('the agent refuses an application whose last submission is unconfirmed', async () => {
+  const h = harness({ blocked: true });
+  const result = await h.send({ type: 'agentStart', tabId: 10, url: 'https://example.com/apply', appId: 7 });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 409);
+  assert.equal(h.calls.some((c) => c === 'agentRun'), false);
 });

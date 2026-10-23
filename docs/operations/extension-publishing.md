@@ -2,6 +2,10 @@
 
 Build and release from this repository. Current package version: 0.3.1.
 
+Public listing: <https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd>
+(item ID `pdeffhelbeobnpcbjdegddcfimglmedd`; v0.3.1 live since 20 October 2026). Upload new
+versions to this same item so existing installs update automatically.
+
 ```sh
 npm ci
 npm run check

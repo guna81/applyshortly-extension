@@ -16,6 +16,8 @@
   // The Assistant tab's conversation for this page; reset with `state`.
   const newChat = () => ({ lines: [], draft: "", pending: false });
   let chat = newChat();
+  // The form agent's latest update for this tab (it runs in the background; see agent/loop.js).
+  let agent = null;
 
   function send(message) {
     return new Promise((resolve, reject) => {
@@ -89,14 +91,16 @@
       // Optional and still empty: listed (and offered to the assistant) without counting as a to-do.
       return { field, status: "optional", optional: true, reason: "Optional" };
     }
+    // An AI draft only counts for a choice question when it names an option outright.
+    const strict = answer.source === "generated";
     if (field.kind === "dropdown") {
-      const picked = field.custom ? await F.pickDropdown(field, answer.value) : null;
+      const picked = field.custom ? await F.pickDropdown(field, answer.value, { strict }) : null;
       if (picked === null) {
         return { field, status: "unresolved", reason: `Pick “${answer.value}” from the list`, suggestion: answer.value };
       }
       return { field, status: "filled", value: picked, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
     }
-    const written = F.apply(field, answer.value);
+    const written = F.apply(field, answer.value, { strict });
     if (written === null) {
       return { field, status: "unresolved", reason: `None of the options match “${answer.value}”`, suggestion: answer.value };
     }
@@ -143,7 +147,21 @@
       const row = await applyAnswer(field, answerFor.get(field));
       if (row) results.push(row);
     }
-    return validate(results, fields);
+    const checked = await validate(results, fields);
+    await readChoices(checked);
+    return checked;
+  }
+
+  /**
+   * Custom dropdowns only show their options while open, so the ones still waiting on the user get
+   * them read once here: the panel offers them as choices and the assistant must pick one of them.
+   */
+  async function readChoices(results) {
+    for (const row of results) {
+      const { field } = row;
+      if (!field.custom || field.options?.length || !["unresolved", "optional"].includes(row.status)) continue;
+      field.options = await F.readDropdownOptions(field);
+    }
   }
 
   const SETTLE_MS = 300; // pages re-validate a moment after a value is written
@@ -283,7 +301,11 @@
       Object.assign(row, { status: "done", manual: true, source: "you" });
       outline();
     };
-    if (message === P.DRAFT_REPLY && row.status === "optional" && row.field.kind === "text") return assistantDraft(row);
+    if (message === P.DRAFT_REPLY && row.status === "optional") {
+      return P.draftable(row.field)
+        ? assistantDraft(row)
+        : { text: "That's a detail only you know, so I won't draft it. Tell me what to put, or leave it blank." };
+    }
     if (message === P.SKIP_REPLY && row.status === "optional") {
       row.skipped = true;
       return { text: "OK, leaving it blank.", next: true };
@@ -525,7 +547,8 @@
       minimized: false,
       confirmSubmit: false,
       countdown: null, // {left, cancel} while Submit waits to click the form's button
-      tab: null, // "assistant" | "form"; null until chosen: Assistant first when it can help
+      tab: null, // "assistant" (chat and the agent) | "form"; null until chosen: Assistant first when it can help
+      agentDraft: "",
       chatSeen: 0,
       open: { todo: true, check: true, optional: true, filled: false },
       expanded: new WeakSet(),
@@ -615,6 +638,12 @@
       button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .f { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
       .f .grow { flex: 1; }
+      .alog { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+      .alog li { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+      .alog li:last-child { color: var(--fg); }
+      details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
+      .ask { margin: 4px 0 10px; padding: 12px; border-radius: 10px; background: var(--accent-soft); }
+      .ask textarea { width: 100%; box-sizing: border-box; margin: 8px 0; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
       .msg { margin: 4px 0 8px; padding: 12px; border-radius: 10px; }
       .msg.bad { background: var(--bad-soft); }
       .msg.bad b { color: var(--bad); }
@@ -836,6 +865,79 @@
       );
     }
 
+    const AGENT_HEADLINE = {
+      starting: "Starting the agent…",
+      running: "Working through the form…",
+      waiting: "Needs you",
+      paused: "Paused",
+      ready: "Ready for your review",
+      failed: "The agent stopped",
+      stopped: "Stopped",
+    };
+
+    function agentQuestion(q) {
+      if (q.kind === "question") {
+        const input = el("textarea", { rows: "2", "aria-label": "Your answer", placeholder: "Your answer" });
+        input.value = view.agentDraft;
+        input.addEventListener("input", () => { view.agentDraft = input.value; });
+        input.addEventListener("keydown", (e) => {
+          e.stopPropagation(); // keep the job site's shortcuts out of the answer box
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void agentControl("reply", input.value); }
+        });
+        queueMicrotask(() => input.focus({ preventScroll: true }));
+        return el("div", { class: "ask", role: "alert" },
+          el("b", {}, q.text), input,
+          el("div", { class: "acts" },
+            btn("Answer", () => void agentControl("reply", input.value), "primary"),
+            btn("I'll fill it on the page", () => void agentControl("skip"), "ghost")));
+      }
+      return el("div", { class: "ask", role: "alert" },
+        el("b", {}, q.kind === "blocker" ? "Your turn on the page" : "One click from you"),
+        el("p", {}, q.text),
+        btn("Continue", () => void agentControl("resume"), "primary"));
+    }
+
+    const AGENT_LIVE = ["starting", "running", "waiting", "paused"];
+    const agentLive = () => Boolean(agent && AGENT_LIVE.includes(agent.status));
+    const AGENT_TITLE = "Works through the whole form in this tab, step by step, and asks you when it needs something. It never submits. Chrome shows a \"started debugging\" bar while it works.";
+
+    function agentHero() {
+      return el("div", { class: "hero" },
+        el("strong", {}, AGENT_HEADLINE[agent.status] ?? agent.status),
+        el("div", { class: "meta" }, agentLive() ? "The agent is filling this form. You still submit." : "Ask me below to change anything, then submit."));
+    }
+
+    /** The agent's question, result and step log; finished runs fold the log away under the chat. */
+    function agentDetails() {
+      const nodes = [];
+      if (agent.status === "waiting" && agent.question) nodes.push(agentQuestion(agent.question));
+      if (agent.status === "ready") {
+        nodes.push(el("div", { class: "msg good" }, el("b", {}, "Review the form, then submit it yourself"),
+          el("p", {}, agent.unresolved?.length ? `Still open: ${agent.unresolved.join("; ")}` : "Every question I could find has an answer. Check the ones marked for review.")));
+      }
+      if (agent.status === "failed" && agent.message) nodes.push(el("div", { class: "msg bad", role: "alert" }, el("b", {}, "Stopped"), el("p", {}, agent.message)));
+      const log = el("ul", { class: "alog", "aria-live": "polite" });
+      for (const line of (agent.log ?? []).slice(-14)) log.append(el("li", {}, line));
+      nodes.push(agentLive() ? log : el("details", {}, el("summary", {}, "What the agent did"), log));
+      const review = (agent.filled ?? []).filter((f) => f.needs_review);
+      if (review.length) {
+        nodes.push(el("div", { class: "filled" }, "Double-check:", review.map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label.length > 40 ? `${f.label.slice(0, 40)}…` : f.label))));
+      }
+      return nodes;
+    }
+
+    const agentButton = (kind = "") => btn(agent ? "Run the agent again" : "Fill with the agent", () => void startAgent(), kind, { title: AGENT_TITLE });
+
+    function agentFooter() {
+      if (!agentLive()) return el("div", { class: "f" }, el("span", { class: "grow" }), agentButton("primary"));
+      return el("div", { class: "f" },
+        agent.status === "paused"
+          ? btn("Resume", () => void agentControl("resume"), "primary")
+          : btn("Pause", () => void agentControl("pause"), ""),
+        el("span", { class: "grow" }),
+        btn("Stop and take over", () => void agentControl("stop"), "ghost"));
+    }
+
     function tabsBar(summary) {
       const tab = (id, label, badge) => el("button", {
         type: "button", role: "tab", "aria-selected": String(view.tab === id),
@@ -940,23 +1042,28 @@
         }[e.action];
         p.append(el("div", { class: "body" },
           el("div", { class: "msg bad", role: "alert" }, el("b", {}, e.title), el("p", {}, e.detail), action)));
+      } else if (agent && !state?.ctx) {
+        // Started from the popup before anything was filled: the agent's progress on its own.
+        p.append(agentHero(), el("div", { class: "body" }, ...agentDetails()), agentFooter());
       } else if (state?.ctx || submittedReported) {
+        if (!submittedReported) view.tab ??= agent || P.assistantFirst(results) ? "assistant" : "form";
+        const assistant = !submittedReported && view.tab === "assistant";
+        const withAgent = assistant && Boolean(agent);
+        const working = withAgent && agentLive();
         const full = submittedReported || summary.progress >= 1;
-        p.append(el("div", { class: "hero" },
+        if (withAgent) p.append(agentHero());
+        else p.append(el("div", { class: "hero" },
           el("strong", {}, summary.headline),
           el("div", { class: `bar ${full ? "full" : ""}`, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(summary.total), "aria-valuenow": String(summary.answered) },
             el("i", { style: `width:${full ? 100 : Math.round(summary.progress * 100)}%` })),
           el("div", { class: "meta" }, submittedReported ? "Tracked in ApplyShortly" : summary.total ? `${summary.answered} of ${summary.total} answered` : "Try again once the form has loaded"),
         ));
 
-        if (!submittedReported) {
-          view.tab ??= P.assistantFirst(results) ? "assistant" : "form";
-          p.append(tabsBar(summary));
-        }
-        const assistant = !submittedReported && view.tab === "assistant";
+        if (!submittedReported) p.append(tabsBar(summary));
         const body = el("div", { class: "body" });
         if (assistant) {
-          body.append(chatView(results));
+          if (withAgent) body.append(...agentDetails());
+          if (!working) body.append(chatView(results));
         } else if (submittedReported) {
           body.append(el("div", { class: "msg good" },
             el("b", {}, "Saved in ApplyShortly"),
@@ -978,13 +1085,13 @@
           );
         }
         p.append(body);
-        const newLines = assistant && chat.lines.length + Number(chat.pending) !== view.chatSeen;
+        const newLines = working || (assistant && chat.lines.length + Number(chat.pending) !== view.chatSeen);
         if (assistant) view.chatSeen = chat.lines.length + Number(chat.pending);
         queueMicrotask(() => { body.scrollTop = newLines ? body.scrollHeight : prevScroll; });
 
         if (view.toast) p.append(el("div", { class: "toast", role: "status" }, view.toast));
 
-        // Submit is on both tabs. It runs the guarded flow: refuses and says why unless every required
+        // Submit is on both tabs (not while the agent is working). It runs the guarded flow: refuses and says why unless every required
         // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
         const submit = () => {
           const blockers = P.autoApplyBlockers(results, state.ctx.app);
@@ -1000,10 +1107,12 @@
           el("span", { class: "grow" }, `Submitting in ${view.countdown.left}s…`),
           btn("Cancel", view.countdown.cancel, "primary"),
         );
-        if (assistant) {
+        if (working) {
+          p.append(agentFooter());
+        } else if (assistant) {
           if (view.countdown) p.append(countdown());
           p.append(composer());
-          if (!view.countdown && !submittedReported) p.append(el("div", { class: "f" }, el("span", { class: "grow" }), submit()));
+          if (!view.countdown && !submittedReported) p.append(el("div", { class: "f" }, agentButton(), el("span", { class: "grow" }), submit()));
         } else if (view.countdown) {
           p.append(countdown());
         } else if (!submittedReported) {
@@ -1038,6 +1147,12 @@
         render();
       },
       setRetry(appId) { retryAppId = appId; },
+      /** Shows the agent's latest update on the Assistant tab. */
+      agent(show) {
+        if (show) Object.assign(view, { tab: "assistant", minimized: false, busy: null, error: null });
+        render();
+      },
+      clearAgentDraft() { view.agentDraft = ""; },
       /** Shows the Form tab with a message, e.g. why Auto apply didn't submit. */
       stop(text) {
         Object.assign(view, { tab: "form", minimized: false });
@@ -1080,6 +1195,25 @@
     true,
   );
 
+  async function startAgent() {
+    try {
+      agent = await send({ type: "agentStart", appId: state?.appId ?? null }).then(() => ({ status: "starting", log: [] }));
+      panel.agent(true);
+    } catch (err) {
+      panel.fail(err);
+    }
+  }
+
+  async function agentControl(action, text) {
+    if (action === "reply" && !String(text ?? "").trim()) return;
+    try {
+      await send({ type: "agentControl", action, text });
+      if (action === "reply" || action === "skip") panel.clearAgentDraft();
+    } catch (err) {
+      panel.toast(err.message);
+    }
+  }
+
   async function start(appId, opts = {}) {
     panel.setRetry(appId);
     await panel.restore(opts);
@@ -1088,6 +1222,13 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id) return;
+    if (msg?.type === "agentUpdate") {
+      const first = !agent;
+      agent = msg;
+      panel.agent(first || msg.status === "waiting" || msg.status === "ready" || msg.status === "failed");
+      sendResponse({ ok: true });
+      return;
+    }
     if (msg?.type === "run") {
       // Same application: keep what's been filled and answered; another one starts over.
       if (state && state.appId !== (msg.appId ?? null)) { state = null; chat = newChat(); }
@@ -1104,6 +1245,12 @@
       return; // extension reloaded or not configured; stay quiet on unrelated pages
     }
     if (hello.mode === "idle") return;
+    if (hello.mode === "agent") {
+      // A new page of a form the agent is filling: show its progress, don't autofill over it.
+      agent = await send({ type: "agentStatus" }).catch(() => null);
+      if (agent) await panel.restore({ show: true }).then(() => panel.agent(true));
+      return;
+    }
     if (hello.mode === "continue") {
       if (F.looksSubmitted(document, location.href)) {
         state = { appId: hello.appId, ctx: null, results: [] };

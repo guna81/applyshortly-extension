@@ -10,9 +10,13 @@ Plain JavaScript with no compilation step. The build packages an allowlisted set
 it never reads `.env` or includes local credentials. An ApplyShortly account and compatible server
 are required, including when using a personal AI key. See `../extension-bridge/README.md` for the API.
 
-## Build and install
+## Install
 
-For Chrome Web Store releases, see the [publishing guide](../docs/operations/extension-publishing.md).
+Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd). The store package is built for
+`https://applyshortly.com`. For a self-hosted server or development, build and load it unpacked
+as below. For Chrome Web Store releases, see the [publishing guide](../docs/operations/extension-publishing.md).
+
+## Build from source
 
 From the repository root:
 
@@ -145,6 +149,24 @@ Hover over a field to see why. Errors say what to do: a rejected key offers **Op
 account without a profile yet offers **Set up profile** (the website's profile setup), and an
 unreachable platform offers **Try again**.
 
+### The form agent
+
+For forms autofill can't finish on its own (an **Apply** button that opens a pop-up, multi-page
+wizards, typeahead dropdowns, forms inside frames, single-page apps that change step without
+loading a page), choose **Fill with the agent** in the popup or on the panel's **Assistant** tab.
+
+- It works in the tab you started it in, one tab at a time, step by step: it reads the page
+  (every frame, open shadow roots, the open dialog only when one is up), asks your ApplyShortly
+  server what to do next, then clicks and types with real input events and looks again.
+- Answers your profile and answer bank cover are typed without any AI call. AI is used only to
+  find the way through the form (one apply run's credits per form, or your personal key).
+- It asks in the panel for an answer it doesn't have (**Answer**, or **I'll fill it on the page**),
+  for a CAPTCHA or sign-in (**Continue** once you've done it), and on job boards for the posting's
+  own **Apply / Easy Apply** click, because there that can apply in one click. It never solves CAPTCHAs.
+- It never submits. It stops at **Ready for your review**; you check the form and click Submit.
+- **Pause** and **Stop and take over** are always available. Chrome shows a "started debugging
+  this browser" bar while it runs (the `debugger` permission); closing the bar stops it.
+
 ## How answers are chosen
 
 For each empty field, in order:
@@ -201,6 +223,9 @@ not need additional extension resource permissions. Keep these copies in sync wh
 | `src/fill.js` | Field discovery, labels, profile answers, writing values (pure DOM, tested in jsdom) |
 | `src/content.js` | Runs the fill on the page, the review panel (closed shadow DOM), live re-check, submit detection |
 | `src/panel-model.js` | Pure helpers shared by the panel and popup: checklist and counts, friendly error messages |
+| `src/agent/loop.js` | The form agent's loop in the service worker: observe every frame, ask `/agent/step`, act, settle |
+| `src/agent/cdp.js` | Drives the tab through `chrome.debugger`: frames (cross-origin included), isolated worlds, trusted mouse and keyboard input, screenshots |
+| `src/agent/page.js` | In-frame half of the agent (needs `fill.js`): describes the page and locates elements; refuses final submits. Pure DOM, tested in jsdom. The platform's server agent uses a copy. |
 | `src/popup.*`, `src/options.*`, `src/ui.css` | Toolbar popup and settings page |
 | `test/*.test.mjs` | `node --test extension/test/*.test.mjs` (tests use the root npm dependencies) |
 
@@ -211,6 +236,8 @@ not need additional extension resource permissions. Keep these copies in sync wh
 - **Google Forms' dropdowns** ("Choose") are listed with the answer to pick, but not opened.
   Other custom dropdowns are opened and filled; one that behaves unlike the ARIA combobox pattern
   stays under **Needs you**.
-- **Forms inside iframes** (e.g. an embedded Greenhouse board on a company site) aren't filled.
-  Open the board's own URL instead.
+- **Forms inside iframes** (e.g. an embedded Greenhouse board on a company site) aren't filled by
+  autofill. The form agent fills them; or open the board's own URL.
+- **The form agent** can't see inside closed shadow roots or Google's file picker, and needs
+  Chrome 125 or later.
 - **Submits done with `fetch`** on single-page apps aren't detected; use **Mark as submitted**.

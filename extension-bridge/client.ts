@@ -76,6 +76,8 @@ export interface ExtensionEvent {
   filled_fields?: FieldReport[];
   unresolved_fields?: FieldReport[];
   note?: string | null;
+  /** With "failed": why it stopped (the platform's FailureCode, e.g. "agent_stuck"). */
+  failure_code?: string | null;
 }
 
 export interface ExtensionEventResult {
@@ -127,6 +129,81 @@ export interface AssistResponse {
   warnings: string[];
   done: boolean;
   choices: string[];
+}
+
+/** One interactive element of the page, as the form agent observed it. */
+export interface AgentElement {
+  /** The driver's handle, valid only within the observation that carried it. */
+  ref: string;
+  role: string;
+  name?: string;
+  input_type?: string | null;
+  value?: string | null;
+  checked?: boolean | null;
+  required?: boolean;
+  invalid?: boolean;
+  error?: string | null;
+  options?: string[];
+  group?: string | null;
+  disabled?: boolean;
+  in_viewport?: boolean;
+  submit_like?: boolean;
+}
+
+export interface AgentObservation {
+  url: string;
+  title?: string;
+  dialog?: string | null;
+  blockers?: ("captcha" | "login")[];
+  errors?: string[];
+  text?: string;
+  elements?: AgentElement[];
+  more_below?: boolean;
+  /** Base64 JPEG, only when the previous response asked for one. */
+  screenshot?: string | null;
+}
+
+export interface AgentActionResult {
+  index: number;
+  ok: boolean;
+  detail?: string | null;
+}
+
+export interface AgentStepRequest {
+  session_id?: string | null;
+  application_id?: number | null;
+  observation: AgentObservation;
+  results?: AgentActionResult[];
+  user_reply?: string | null;
+  skip_question?: boolean;
+  resumed?: boolean;
+  in_user_tab?: boolean;
+}
+
+/** A vetted step. There is no submit action: the user always sends the form. */
+export interface AgentAction {
+  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait";
+  ref?: string | null;
+  text?: string | null;
+  checked?: boolean | null;
+  file?: "resume" | "cover_letter" | null;
+  key?: "Enter" | "Tab" | "Escape" | "ArrowDown" | "ArrowUp" | "Space" | null;
+  direction?: "up" | "down" | null;
+  ms?: number | null;
+  label?: string;
+}
+
+export interface AgentStepResponse {
+  session_id: string;
+  status: "continue" | "ask_user" | "ready_for_review" | "failed";
+  actions: AgentAction[];
+  message: string;
+  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null } | null;
+  want_screenshot: boolean;
+  filled: { label: string; value: string; source: string; needs_review: boolean }[];
+  unresolved: string[];
+  failure_code: string | null;
+  step: number;
 }
 
 /** Fragment the platform's "Open & Autofill" button appends to the posting URL. */
@@ -221,6 +298,11 @@ export class JobHuntBridge {
 
   assistFill(body: AssistRequest): Promise<AssistResponse> {
     return this.request("/api/extension/assistant/fill", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** One round trip of the form agent: the page as observed → the next vetted actions. */
+  agentStep(body: AgentStepRequest): Promise<AgentStepResponse> {
+    return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
   }
 
   report(event: ExtensionEvent): Promise<ExtensionEventResult> {

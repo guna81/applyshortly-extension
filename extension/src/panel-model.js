@@ -189,6 +189,24 @@
   const short = (text, n = 140) => (text.length > n ? `${text.slice(0, n).trimEnd()}…` : text);
   const bare = (r) => short(questionLabel(r).replace(/[\s?:*]+$/, ""));
 
+  // Personal facts only the user knows: never offered as an AI draft.
+  const PERSONAL = /\b(?:first|middle|last|given|family|full|legal|maiden|preferred) name\b|\bsurname\b|^\s*name\b|your name|date of birth|\bdob\b|^\s*age\b|gender|pronoun|nationality|citizenship|marital|aadhaa?r|\bpan (?:number|card|no)\b|passport|\bssn\b|(?:phone|mobile|contact|id|whatsapp) (?:number|no)\b|e-?mail address|^\s*e-?mail\b|^\s*(?:phone|mobile|address|city|country|state|location|website|linkedin|github)\b|(?:current|home|postal|permanent) (?:address|location|city)|pin ?code|zip ?code|postal code|salary|\bctc\b|expected compensation|notice period|authori[sz]ed to work|right to work|work permit|(?:visa|require|need|needs) sponsorship|\bvisa\b|criminal|convicted|disabilit|veteran|ethnicity|^\s*race\b|years of experience|(?:worked|employed) (?:for|at|with) us|previously (?:worked|employed)/i;
+
+  const OPEN_ENDED = /statement|cover letter|summary|\bbio\b|motivation|about (?:you|yourself)|describe|explain|tell us|\bwhy\b|additional information|comments?\b/i;
+
+  /**
+   * Whether "Draft it for me" fits: an open-ended question (a textarea, or a question of a few
+   * words or more), not a short field or a personal fact about the user.
+   */
+  function draftable(field) {
+    if (field?.kind !== "text") return false;
+    const type = String(field.el?.type ?? "").toLowerCase();
+    if (["email", "tel", "url", "number", "date"].includes(type)) return false;
+    const label = (field.label ?? "").trim();
+    if (PERSONAL.test(label)) return false;
+    return field.el?.tagName === "TEXTAREA" || label.split(/\s+/).length >= 5 || /\?\s*\*?$/.test(label) || OPEN_ENDED.test(label);
+  }
+
   /**
    * What the chat should bring up next once the questions it can answer are done: an optional
    * question, then each step only the user can do. Null when nothing is left.
@@ -207,7 +225,9 @@
       const options = (optional.field.options ?? []).map((o) => o.text).filter(Boolean);
       return options.length
         ? { text: `Everything required is filled in. “${bare(optional)}” is optional: pick an answer, or leave it blank.`, choices: [...options.slice(0, MAX_CHOICES - 1), SKIP_REPLY] }
-        : { text: `Everything required is filled in. “${bare(optional)}” is optional, but a good answer helps. Want me to draft one, or tell me what to say?`, choices: [DRAFT_REPLY, SKIP_REPLY] };
+        : draftable(optional.field)
+          ? { text: `Everything required is filled in. “${bare(optional)}” is optional, but a good answer helps. Want me to draft one, or tell me what to say?`, choices: [DRAFT_REPLY, SKIP_REPLY] }
+          : { text: `Everything required is filled in. “${bare(optional)}” is optional: tell me what to put, or leave it blank.`, choices: [SKIP_REPLY] };
     }
     const steps = manualSteps(results);
     if (steps.length) {
@@ -241,6 +261,6 @@
 
   globalThis.JobHuntPanel = {
     summarize, autoApplyBlockers, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory, assistantFirst,
-    nextPrompt, promptTarget, openQuestions, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
+    nextPrompt, promptTarget, openQuestions, draftable, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

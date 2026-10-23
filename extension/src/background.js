@@ -1,11 +1,15 @@
 // Background service worker: owns the API key and every request to the platform.
 // Content scripts and the popup talk to it with chrome.runtime messages ({type, ...}).
 
+import { Agent } from "./agent/loop.js";
+import { TabDriver } from "./agent/cdp.js";
 import { BridgeError, JobHuntBridge, autofillIdFromUrl } from "./bridge.js";
 
 const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: false };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/fill.js", "src/panel-model.js", "src/content.js"];
+// Injected by the agent into every frame's isolated world, in this order.
+const AGENT_PAGE_SCRIPTS = ["src/fill.js", "src/agent/page.js"];
 
 const storageReady = Promise.all([
   chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
@@ -81,6 +85,9 @@ chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
 async function hello(tabId, url) {
   const origin = new URL(url).origin;
+  const agent = agents.get(tabId);
+  // The agent drives this tab from here: the page's own autofill stays out of its way.
+  if (agent && !agent.stopped && !["ready", "failed"].includes(agent.status)) return { appId: agent.appId, mode: "agent" };
   const id = autofillIdFromUrl(url);
   if (id !== null) {
     await setTab(tabId, { appId: id, origin, tracked: true });
@@ -297,6 +304,107 @@ async function openWebsite(path = "/dashboard") {
   return true;
 }
 
+// ------------------------------------------------------------------ form agent
+
+// One agent at a time: it drives a tab the user started it in, never in the background.
+const agents = new Map(); // tabId → Agent
+let agentSources = null;
+
+async function pageSources() {
+  agentSources ??= Promise.all(AGENT_PAGE_SCRIPTS.map(async (path) => (await fetch(chrome.runtime.getURL(path))).text()))
+    .then((parts) => parts.join("\n;\n"));
+  return agentSources;
+}
+
+const toBase64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+const fileStem = (name) => (name ?? "").trim().replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "");
+
+/** The files an upload action asks for, fetched once per run. */
+function agentFiles(p, app) {
+  const cache = {};
+  return async (kind) => {
+    if (kind === "cover_letter") {
+      if (!app?.cover_letter) return null;
+      const stem = fileStem(p.full_name);
+      return { name: `${stem ? `${stem}_` : ""}Cover_Letter.txt`, type: "text/plain", base64: toBase64(app.cover_letter) };
+    }
+    if (!p.resume_url) return null;
+    cache.resume ??= (await bridge()).resume(p.resume_url).then((r) => {
+      if (!r) return null;
+      const stem = fileStem(p.full_name);
+      const ext = /\.[a-z0-9]+$/i.exec(r.name)?.[0] ?? ".pdf";
+      return stem ? { ...r, name: `${stem}_Resume${ext}` } : r;
+    });
+    return cache.resume;
+  };
+}
+
+async function agentReport(appId, event, res, url) {
+  if (appId == null) return;
+  const body = { application_id: appId, event, url: url?.slice(0, 2000) || null };
+  if (event === "filled") {
+    body.filled_fields = (res.filled ?? []).map((f) => ({ label: f.label, value: f.value, source: f.source, needs_review: f.needs_review }));
+    body.unresolved_fields = (res.unresolved ?? []).map((label) => ({ label, reason: "No answer yet" }));
+  } else if (event === "failed") {
+    body.failure_code = res.failure_code ?? "unknown";
+    body.note = String(res.message ?? "").slice(0, 1000) || null;
+  }
+  await (await bridge()).report(body).catch((err) => console.warn("[JobHunt] agent report failed:", err.message));
+}
+
+/** Starts the agent in a tab: from the popup (finds the application by URL) or the page's panel. */
+async function agentStart(tabId, url, appId) {
+  const busy = [...agents.values()].find((a) => a.tabId !== tabId && !a.stopped && !["ready", "failed"].includes(a.status));
+  if (busy) throw new Error("The agent is already working in another tab. Stop it there first.");
+  agents.get(tabId)?.stop("Restarted.");
+  const b = await bridge();
+  const app = appId != null ? await b.application(appId) : await b.lookup(url);
+  const id = app?.id ?? null;
+  const p = await profile();
+  await setTab(tabId, { appId: id, origin: new URL(url).origin, tracked: id !== null });
+  const agent = new Agent({
+    tabId,
+    appId: id,
+    driver: new TabDriver(tabId, await pageSources()),
+    step: (body) => b.agentStep(body),
+    files: agentFiles(p, app),
+    notify: (message) => chrome.tabs.sendMessage(tabId, message, { frameId: 0 }).catch(() => {}),
+    report: (event, res, pageUrl) => agentReport(id, event, res, pageUrl),
+  });
+  agents.set(tabId, agent);
+  if (id !== null) await b.report({ application_id: id, event: "opened", url: url.slice(0, 2000) }).catch(() => {});
+  void agent.run();
+  return { started: true, appId: id };
+}
+
+function agentControl(tabId, action, text) {
+  const agent = agents.get(tabId);
+  if (!agent) throw new Error("The agent isn't running in this tab.");
+  if (action === "reply") {
+    if (typeof text !== "string" || !text.trim() || text.length > 4000) throw new Error("Type an answer first.");
+    agent.reply(text.trim());
+  } else if (["skip", "resume", "pause", "stop"].includes(action)) {
+    agent[action]();
+  } else {
+    throw new Error("Unknown agent action.");
+  }
+  return true;
+}
+
+function agentStatus(tabId) {
+  const agent = agents.get(tabId);
+  if (!agent) return null;
+  return { type: "agentUpdate", status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.last };
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  agents.get(tabId)?.stop("The tab was closed.");
+  agents.delete(tabId);
+});
+
+/** A content script on a web page, as opposed to an extension page (which can also be a tab). */
+const fromPage = (sender) => Boolean(sender.tab) && /^https?:/.test(sender.url ?? "");
+
 const handlers = {
   browserSignIn: async (msg) => browserSignIn(await platformOrigin(), msg.interactive !== false),
   aiSettings: async () => (await bridge()).aiSettings(),
@@ -366,6 +474,12 @@ const handlers = {
     return result;
   },
   status: (msg) => status(msg.tabId, msg.url),
+  // From the page's panel: its own tab. From the popup or options page: the tab they name.
+  agentStart: (msg, sender) => (fromPage(sender)
+    ? agentStart(sender.tab.id, sender.url, msg.appId ?? null)
+    : agentStart(msg.tabId, msg.url, msg.appId ?? null)),
+  agentControl: (msg, sender) => agentControl(fromPage(sender) ? sender.tab.id : msg.tabId, msg.action, msg.text),
+  agentStatus: (msg, sender) => agentStatus(fromPage(sender) ? sender.tab.id : msg.tabId),
   openOptions: () => chrome.runtime.openOptionsPage(),
   openProfile: () => openWebsite("/profile"),
   test: async () => {
@@ -381,7 +495,7 @@ chrome.commands?.onCommand.addListener((command, tab) => {
   start(tab.id, tab.url, true).catch((err) => console.warn("[JobHunt] shortcut failed:", err.message));
 });
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus"]);
 
 async function dispatch(msg, sender) {
   await storageReady;
@@ -391,7 +505,7 @@ async function dispatch(msg, sender) {
   const extensionPage = ["src/options.html", "src/popup.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
-    if (["context", "suggest", "assist", "report"].includes(msg.type)) {
+    if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
       const current = await getTab(sender.tab.id);
       const appId = msg.type === "report" ? msg.event?.application_id : (msg.appId ?? null);
       if (appId !== (current?.appId ?? null) || (current && current.origin !== new URL(sender.url).origin)) throw new Error("Application context changed. Start autofill again.");

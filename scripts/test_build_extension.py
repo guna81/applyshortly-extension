@@ -58,6 +58,8 @@ class BuildTest(unittest.TestCase):
                     references.extend(
                         name for script in manifest["content_scripts"] for name in script["js"]
                     )
+                    # Modules the service worker imports, and the agent's in-page script.
+                    references.extend(["src/agent/loop.js", "src/agent/cdp.js", "src/agent/page.js"])
                     for name in references:
                         self.assertIn(name, archive.namelist())
                     self.assertNotIn("config.local.json", archive.namelist())

@@ -63,6 +63,21 @@ async function start(allowUntracked, btn, autoSubmit = false) {
   window.close(); // the panel on the page takes it from here
 }
 
+/** The form agent: works through the whole form in this tab, then hands it back for review. */
+async function startAgent(btn, appId) {
+  btn.disabled = true;
+  btn.textContent = "Starting…";
+  const r = await chrome.runtime.sendMessage({ type: "agentStart", tabId: tab.id, url: tab.url, appId });
+  if (!r?.ok) {
+    const e = P.friendlyError(r?.error, r?.status);
+    show(el("div", { class: "card bad" }, el("b", {}, e.title), el("p", {}, e.detail)));
+    return;
+  }
+  window.close(); // the panel on the page shows the agent's progress
+}
+
+const AGENT_HINT = "The agent fills multi-step forms, pop-ups and dropdowns for you and asks when it needs something. It never submits: you review and click Submit.";
+
 async function status() {
   const res = await chrome.runtime.sendMessage({ type: "status", tabId: tab?.id, url: tab?.url });
   return res?.data ?? { configured: false };
@@ -127,6 +142,7 @@ async function render(s, { notFound = false } = {}) {
       s.app.status ? el("span", { class: "pill" }, s.app.status.replace(/_/g, " ")) : null,
       sent ? el("p", { class: "hint good" }, "✓ You've already applied to this job.") : null,
       sent ? null : button("⚡ Auto apply", (e) => void start(false, e.currentTarget, true), "primary block"),
+      sent ? null : button("Fill with the agent", (e) => void startAgent(e.currentTarget, s.app.id), "block"),
       fill,
       sent ? null : el("p", { class: "hint" }, AUTO_APPLY_HINT),
     ));
@@ -138,7 +154,8 @@ async function render(s, { notFound = false } = {}) {
       "To track this application, add the job in ApplyShortly first. Or just fill the form now; nothing is recorded."),
     button("⚡ Auto apply", (e) => void start(true, e.currentTarget, true), "primary block"),
     button("Fill without tracking", (e) => void start(true, e.currentTarget), "block"),
-    el("p", { class: "hint" }, AUTO_APPLY_HINT),
+    button("Fill with the agent", (e) => void startAgent(e.currentTarget, null), "block"),
+    el("p", { class: "hint" }, `${AUTO_APPLY_HINT} ${AGENT_HINT}`),
     button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/apply-queue?${new URLSearchParams({ add: "1", url: tab.url })}`), "block"),
   ));
 }

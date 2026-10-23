@@ -1,6 +1,584 @@
 {
   "components": {
     "schemas": {
+      "AgentAction": {
+        "description": "One step for the driver. Unused fields are null.",
+        "properties": {
+          "checked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "enum": [
+                  "resume",
+                  "cover_letter"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Enter",
+                  "Tab",
+                  "Escape",
+                  "ArrowDown",
+                  "ArrowUp",
+                  "Space"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "ms": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ms"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "type": {
+            "enum": [
+              "click",
+              "type",
+              "select",
+              "check",
+              "upload",
+              "press",
+              "scroll",
+              "wait"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "AgentAction",
+        "type": "object"
+      },
+      "AgentActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "index": {
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "index",
+          "ok"
+        ],
+        "title": "AgentActionResult",
+        "type": "object"
+      },
+      "AgentElement": {
+        "additionalProperties": false,
+        "description": "One interactive element. `ref` is the driver's handle for it (a CDP backend node id with\nits frame) and is only meaningful within the observation that carried it.",
+        "properties": {
+          "checked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked"
+          },
+          "disabled": {
+            "default": false,
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "in_viewport": {
+            "default": true,
+            "title": "In Viewport",
+            "type": "boolean"
+          },
+          "input_type": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Type"
+          },
+          "invalid": {
+            "default": false,
+            "title": "Invalid",
+            "type": "boolean"
+          },
+          "name": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Options",
+            "type": "array"
+          },
+          "ref": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "role": {
+            "maxLength": 20,
+            "title": "Role",
+            "type": "string"
+          },
+          "submit_like": {
+            "default": false,
+            "title": "Submit Like",
+            "type": "boolean"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "ref",
+          "role"
+        ],
+        "title": "AgentElement",
+        "type": "object"
+      },
+      "AgentFilled": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "needs_review": {
+            "default": false,
+            "title": "Needs Review",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "source"
+        ],
+        "title": "AgentFilled",
+        "type": "object"
+      },
+      "AgentObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "blockers": {
+            "items": {
+              "enum": [
+                "captcha",
+                "login"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Blockers",
+            "type": "array"
+          },
+          "dialog": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialog"
+          },
+          "elements": {
+            "items": {
+              "$ref": "#/components/schemas/AgentElement"
+            },
+            "maxItems": 400,
+            "title": "Elements",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Errors",
+            "type": "array"
+          },
+          "more_below": {
+            "default": false,
+            "title": "More Below",
+            "type": "boolean"
+          },
+          "screenshot": {
+            "anyOf": [
+              {
+                "maxLength": 4000000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screenshot"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2000,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "AgentObservation",
+        "type": "object"
+      },
+      "AgentQuestion": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "blocker",
+              "question",
+              "click"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "title": "AgentQuestion",
+        "type": "object"
+      },
+      "AgentStepRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id"
+          },
+          "in_user_tab": {
+            "default": true,
+            "title": "In User Tab",
+            "type": "boolean"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/AgentObservation"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AgentActionResult"
+            },
+            "maxItems": 50,
+            "title": "Results",
+            "type": "array"
+          },
+          "resumed": {
+            "default": false,
+            "title": "Resumed",
+            "type": "boolean"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "skip_question": {
+            "default": false,
+            "title": "Skip Question",
+            "type": "boolean"
+          },
+          "user_reply": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Reply"
+          }
+        },
+        "required": [
+          "observation"
+        ],
+        "title": "AgentStepRequest",
+        "type": "object"
+      },
+      "AgentStepResponse": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AgentAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "filled": {
+            "items": {
+              "$ref": "#/components/schemas/AgentFilled"
+            },
+            "title": "Filled",
+            "type": "array"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "continue",
+              "ask_user",
+              "ready_for_review",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step": {
+            "default": 0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved",
+            "type": "array"
+          },
+          "want_screenshot": {
+            "default": false,
+            "title": "Want Screenshot",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "status"
+        ],
+        "title": "AgentStepResponse",
+        "type": "object"
+      },
       "AnswerSuggestRequest": {
         "additionalProperties": false,
         "properties": {
@@ -443,6 +1021,19 @@
             ],
             "title": "Event",
             "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "pattern": "^[a-z_]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
           },
           "filled_fields": {
             "items": {
@@ -969,6 +1560,66 @@
           }
         },
         "summary": "Account",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/agent/step": {
+      "post": {
+        "description": "One observe \u2192 decide round trip. Known answers are typed without a model call; the model\nis asked only to navigate and for questions nothing else could answer.",
+        "operationId": "extensionAgentStep",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentStepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentStepResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Step",
         "tags": [
           "extension"
         ]

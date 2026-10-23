@@ -108,6 +108,11 @@ export class JobHuntBridge {
     return this.request("/api/extension/assistant/fill", { method: "POST", body: JSON.stringify(body) });
   }
 
+  /** One round trip of the form agent: the page as observed → the next vetted actions. */
+  agentStep(body) {
+    return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
+  }
+
   report(event) {
     return this.request("/api/extension/events", { method: "POST", body: JSON.stringify(event) });
   }

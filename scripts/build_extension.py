@@ -76,8 +76,11 @@ def build(destination, base_url=None, source=False):
     ext = ROOT / "extension"
     files = {"manifest.json": (ext / "manifest.json").read_bytes()}
     for folder, suffixes in [("src", {".js", ".html", ".css"}), ("icons", {".svg", ".png"})]:
-        for item in (ext / folder).iterdir():
-            if item.is_file() and not item.is_symlink() and item.suffix in suffixes:
+        # src/ has subfolders (src/agent/); nothing reached through a symlink is packaged.
+        for item in sorted((ext / folder).rglob("*")):
+            inside = [ext / parent for parent in item.relative_to(ext).parents if parent != Path(".")]
+            linked = any(path.is_symlink() for path in [item, *inside])
+            if item.is_file() and not linked and item.suffix in suffixes:
                 files[item.relative_to(ext).as_posix()] = item.read_bytes()
     files["platform.json"] = (json.dumps({"baseUrl": base_url}, sort_keys=True) + "\n").encode()
     manifest = json.loads(files["manifest.json"])

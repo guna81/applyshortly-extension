@@ -10,6 +10,16 @@
   // and the ARIA combobox / listbox-popup pattern. Their options only exist while open.
   const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
   const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input:not([type]), textarea';
+  const PICK_PLACEHOLDER = /^[\s-]*(select|choose|please select|pick)\b/i;
+
+  /**
+   * An <input> that is really a dropdown: a combobox that says "Select…" or can't be typed in.
+   * Other combobox inputs are typeaheads (a city search) and stay free text.
+   */
+  function selectLikeInput(el) {
+    if (!el.matches('input:is([role="combobox"], [aria-haspopup="listbox"])')) return false;
+    return el.readOnly || el.getAttribute("inputmode") === "none" || PICK_PLACEHOLDER.test(el.getAttribute("placeholder") ?? "");
+  }
 
   /** Question text without required markers and runs of whitespace. */
   function cleanLabel(text) {
@@ -122,7 +132,7 @@
     const visible = (el) => isVisible(el, checkLayout);
 
     for (const el of doc.querySelectorAll(TEXT_INPUT)) {
-      if (!visible(el) || !isEditable(el)) continue;
+      if (!visible(el) || !isEditable(el) || selectLikeInput(el)) continue;
       fields.push({ kind: "text", el, label: labelOf(el), required: isRequired(el) });
     }
     for (const el of doc.querySelectorAll("select")) {
@@ -173,7 +183,9 @@
     }
     const dropdowns = fields.filter((f) => f.kind === "dropdown").map((f) => f.el);
     for (const el of doc.querySelectorAll(CUSTOM_DROPDOWN)) {
-      if (!visible(el) || !isEditable(el) || el.matches("input, textarea, select") || el.closest("select")) continue;
+      const input = selectLikeInput(el);
+      if (!visible(el) || el.closest("select")) continue;
+      if (input ? el.disabled : !isEditable(el) || el.matches("input, textarea, select")) continue;
       if (dropdowns.some((d) => d === el || d.contains(el) || el.contains(d))) continue;
       dropdowns.push(el);
       const label = dropdownLabel(el);
@@ -221,8 +233,25 @@
   }
 
   /** What a dropdown currently shows as its answer; "" while nothing is chosen. */
+  /**
+   * What a select-like <input> holds: its value, or (react-select and similar, where the input
+   * stays empty for searching) the choice shown beside it in the same control.
+   */
+  function inputDropdownValue(el) {
+    const own = el.value?.trim();
+    if (own) return PICK_PLACEHOLDER.test(own) ? "" : own;
+    let box = el.parentElement;
+    for (let i = 0; i < 3 && box && box !== el.ownerDocument.body; i++, box = box.parentElement) {
+      if (box.querySelectorAll("input, select, textarea, label").length > 1 || box.querySelector('[role="option"], li')) break;
+      const shown = cleanLabel(box.textContent ?? "");
+      if (shown) return PICK_PLACEHOLDER.test(shown) ? "" : shown;
+    }
+    return "";
+  }
+
   function dropdownValue(field) {
     const el = field.el;
+    if (el.matches("input")) return inputDropdownValue(el);
     const selected = el.querySelector('[role="option"][aria-selected="true"]');
     if (selected) {
       const text = selected.textContent.trim();
@@ -235,16 +264,58 @@
     return !shown || same || /^(select|choose|please select|-+)$/i.test(shown) ? "" : shown;
   }
 
+  const INLINE = new Set(["B", "I", "EM", "STRONG", "SMALL", "SPAN", "SVG", "IMG", "BR"]);
+  const SHOWN_LIMIT = 4000;
+
+  /**
+   * The short pieces of text the page shows right now. Taken before a dropdown opens, so the list
+   * that appears can be found even when it has no ARIA roles (see appearedOptions).
+   */
+  function shownTexts(doc, checkLayout) {
+    const out = new Set();
+    const all = doc.body?.querySelectorAll("li, div, span, a, p, button, label, td") ?? [];
+    for (let i = 0; i < all.length && i < SHOWN_LIMIT; i++) {
+      const el = all[i];
+      if ([...el.children].some((c) => !INLINE.has(c.tagName.toUpperCase()))) continue;
+      const text = el.textContent?.trim() ?? "";
+      if (!text || text.length > 80) continue;
+      const shown = el.checkVisibility ? el.checkVisibility({ visibilityProperty: true }) && (!checkLayout || el.getClientRects().length > 0) : isVisible(el, checkLayout);
+      if (shown) out.add(el);
+    }
+    return out;
+  }
+
+  /**
+   * A custom list without ARIA roles (plain <li>s or <div>s): the texts that appeared since
+   * `before`, grouped by the element holding them as siblings. The biggest group is the list.
+   */
+  function appearedOptions(before, doc, checkLayout) {
+    const groups = new Map();
+    for (const leaf of shownTexts(doc, checkLayout)) {
+      if (before.has(leaf)) continue;
+      let item = leaf;
+      while (item.parentElement && item.parentElement !== doc.body && item.parentElement.childElementCount === 1) item = item.parentElement;
+      const holder = item.parentElement;
+      if (!holder) continue;
+      if (!groups.has(holder)) groups.set(holder, new Set());
+      groups.get(holder).add(item);
+    }
+    let best = [];
+    for (const items of groups.values()) if (items.size > best.length) best = [...items];
+    return best.length >= 2 ? best.map((o) => ({ text: optionText(o), el: o })) : [];
+  }
+
   /** Visible options of a custom dropdown that is open (Material renders them in an overlay). */
-  function openOptions(field) {
+  function openOptions(field, before = null) {
     const el = field.el;
     const doc = el.ownerDocument;
     const owned = ["aria-controls", "aria-owns"].map((a) => el.getAttribute(a)).filter(Boolean).map((id) => doc.getElementById(id)).filter(Boolean);
     const scopes = owned.length ? owned : [doc];
-    return scopes
+    const options = scopes
       .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option')])
       .filter((o) => isVisible(o, field.layout))
       .map((o) => ({ text: optionText(o), el: o }));
+    return options.length || !before ? options : appearedOptions(before, doc, field.layout);
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -254,37 +325,64 @@
     for (const type of types) el.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, view: win }));
   }
 
-  function dismiss(el) {
+  /** Closes a dropdown: Escape, and a click on the page when Escape isn't enough. */
+  function dismiss(el, stillOpen = () => false) {
     const win = el.ownerDocument.defaultView;
     for (const target of [el, el.ownerDocument.activeElement]) {
       target?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     }
+    if (stillOpen()) press(el.ownerDocument.body, ["mousedown", "mouseup", "click"]);
   }
 
   /**
    * Opens a custom dropdown, clicks the option an answer refers to and returns its text, or null
    * when it isn't there. Libraries differ on whether click or mousedown opens, so try one then the other.
    */
-  async function pickDropdown(field, answer, { polls = 6, pollMs = 50 } = {}) {
+  async function pickDropdown(field, answer, { polls = 6, pollMs = 50, strict = false } = {}) {
     const el = field.el;
+    const before = shownTexts(el.ownerDocument, field.layout);
     el.focus?.();
     let options = [];
     for (const open of [["click"], ["mousedown", "mouseup"]]) {
       press(el, open);
       for (let i = 0; i < polls && !options.length; i++) {
-        options = openOptions(field);
+        options = openOptions(field, before);
         if (!options.length) await sleep(pollMs);
       }
       if (options.length) break;
     }
-    const option = options.length ? chooseOption(options, answer) : null;
+    const option = options.length ? chooseOption(options, answer, { strict }) : null;
     if (!option) {
-      dismiss(el);
+      dismiss(el, () => openOptions(field, before).length > 0);
       return null;
     }
     press(option.el, ["mousedown", "mouseup", "click"]);
     await sleep(pollMs);
     return option.text;
+  }
+
+  /**
+   * The options of a closed custom dropdown, read by opening it briefly and closing it again without
+   * choosing anything. They only exist while it's open, so collectFields can't see them; the panel
+   * and the assistant need them to offer real choices. Returns [] when none appear (async search).
+   */
+  async function readDropdownOptions(field, { polls = 6, pollMs = 50 } = {}) {
+    const el = field.el;
+    const before = shownTexts(el.ownerDocument, field.layout);
+    let options = [];
+    for (const open of [["click"], ["mousedown", "mouseup"]]) {
+      press(el, open);
+      for (let i = 0; i < polls && !options.length; i++) {
+        options = openOptions(field, before);
+        if (!options.length) await sleep(pollMs);
+      }
+      dismiss(el, () => openOptions(field, before).length > 0);
+      if (options.length) break;
+    }
+    const seen = new Set();
+    return options
+      .map((o) => ({ text: cleanLabel(o.text) }))
+      .filter((o) => o.text && !/^(select|choose|please select|-+)$/i.test(o.text) && !seen.has(o.text) && seen.add(o.text));
   }
 
   // ---------------------------------------------------------------- what the page says is wrong
@@ -422,8 +520,12 @@
     return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   }
 
-  /** The option an answer refers to: exact, then yes/no, then containment either way. */
-  function chooseOption(options, answer) {
+  /**
+   * The option an answer refers to: exact, then yes/no, then containment either way. `strict`
+   * (AI drafts) stops before containment: a drafted sentence that merely contains an option's
+   * words must not tick it.
+   */
+  function chooseOption(options, answer, { strict = false } = {}) {
     const a = normalise(answer);
     if (!a) return null;
     const exact = options.find((o) => normalise(o.text) === a);
@@ -433,6 +535,7 @@
       const match = options.find((o) => new RegExp(`^${yesNo}\\b`).test(normalise(o.text)));
       if (match) return match;
     }
+    if (strict) return null;
     const contained = options.filter((o) => {
       const t = normalise(o.text);
       return t && (a.includes(t) || t.includes(a));
@@ -460,7 +563,7 @@
   }
 
   /** Applies an answer to a field. Returns the value actually written, or null if none fit. */
-  function apply(field, answer) {
+  function apply(field, answer, { strict = false } = {}) {
     const win = field.el.ownerDocument.defaultView;
     if (field.kind === "text") {
       let value = answer;
@@ -473,7 +576,7 @@
       return value;
     }
     if (field.kind === "select") {
-      const option = chooseOption(field.options, answer);
+      const option = chooseOption(field.options, answer, { strict });
       if (!option) return null;
       field.el.value = option.el.value;
       field.el.dispatchEvent(new win.Event("input", { bubbles: true }));
@@ -481,7 +584,7 @@
       return option.text;
     }
     if (field.kind === "radio") {
-      const option = chooseOption(field.options, answer);
+      const option = chooseOption(field.options, answer, { strict });
       if (!option) return null;
       option.el.click();
       return option.text;
@@ -556,6 +659,9 @@
     numericVariants,
     dropdownValue,
     pickDropdown,
+    readDropdownOptions,
+    shownTexts,
+    appearedOptions,
     apply,
     attachFile,
     findSubmitButton,
