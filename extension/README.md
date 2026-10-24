@@ -64,16 +64,24 @@ Manual connection remains available: create a per-user `jh_…` key in **Setting
 paste it under **Advanced: manual API-key connection** in extension settings. Old `EXTENSION_API_TOKEN`/`extension-config` instructions no longer
 apply. No shared token or credential-seeding file is distributed or loaded.
 
-### Assistant and Form tabs
+### The agent panel
 
-The floating autofill panel has two tabs. **Assistant** (opened first when a question needs you)
-asks the unanswered questions one at a time, shows the form's options as tappable replies, and
+The floating panel is one chat: the ApplyShortly agent, the same as the review chat on the
+website. There is no separate assistant, agent button or question box. It fills the form, steps
+through it when it has more than one page, drafts answers and asks you what it can't answer. It asks the unanswered questions one at a time, shows the form's options as tappable replies, and
 fills the fields as you answer; you can also ask it to change an answer ("set notice period to
-60 days"). Optional questions nothing could answer (like "Why are you a good fit?") are offered
+60 days"). An open question (like "Why are you suitable for this role?") comes with a
+**Draft it for me** button, required or not, and typing "draft it for me" does the same; personal
+facts (experience, notice period, joining date, names, numbers) are never drafted. Optional questions nothing could answer (like "Why are you a good fit?") are offered
 next: **Draft it for me** writes an AI draft from your profile and the job, **Leave it blank** skips
 it. Last, it brings up what only you can do: a consent checkbox (**I agree, tick it** ticks it only
-when you tap it, or tick it yourself) and file uploads (**Show me** highlights the field). **Form** shows the checklist and the Needs you / Double-check / Optional / Filled sections, with
-a badge counting what's left (optional questions aren't counted). Answers from chat are marked **From chat**. The conversation stays in
+when you tap it, or tick it yourself) and file uploads (**Show me** highlights the field). When the
+page needs clicking through, the chat says so and carries on by itself (see [Stepping through a
+form](#stepping-through-a-form)): no form on the page yet (it opens after an *Apply* button or in a
+pop-up), a **Next** / **Continue** button and no Submit (a multi-step form), or a large frame and
+next to no fields (an embedded form). Typing "do the rest" or "go to the next page" does the same. Answering the question the chat just asked
+(tapping an option, or typing the answer to a text question) is written straight into the form
+with no AI call and no credit; anything else goes to the assistant. Answers from chat are marked **From chat**. The conversation stays in
 the page and is gone when you leave it. Only the page's question labels, options and current
 values are sent with each message, never the rest of the page. The AI never answers checkboxes
 or uploads. Each reply costs 1 credit unless you use a personal AI key, and the
@@ -92,7 +100,8 @@ Personal keys are sent to your ApplyShortly server, stored encrypted there, and 
 the browser or employer site. Replace or delete them in extension setup or website Settings. Deleting a selected key leaves
 personal mode selected: restore the key or explicitly choose credits. Facts and lexical answer-bank
 fills remain available without an AI key. AI drafts are always marked for review; automatic drafts
-are off by default. A provider may reject an invalid key, unsupported model, quota, or schema.
+are on by default, like the website's agent (turn *Let AI answer questions it can't find* off in
+the popup or Settings). Turning it on drafts the open questions on a panel that's already open. A provider may reject an invalid key, unsupported model, quota, or schema.
 
 ### Standalone source archive
 
@@ -107,41 +116,33 @@ For an extracted source archive, run `npm ci`, `npm run check` and `npm run buil
 
 - **From the platform:** **Apply in your browser** (row menu or after a failed run) opens the posting with `#jobhunt-autofill=<id>`. The extension fills the form on its own.
 - **On any page:** click the toolbar icon. The popup shows whether the page is a job in ApplyShortly
-  (`/applications/lookup`). Use **Autofill this form**, or **Fill without tracking** for pages that
-  aren't. **Alt+Shift+F** does the same without the popup. You can change it at
+  (`/applications/lookup`) and offers two choices, each with a line saying what it does:
+  - **Fill this form**: fills what it can, then the panel asks you the rest. You check and submit.
+    On a page that isn't tracked it fills the same way, with nothing recorded.
+  - **⚡ Auto apply**: the same, then submits after a countdown (below).
+
+  **Alt+Shift+F** fills without the popup. You can change it at
   `chrome://extensions/shortcuts`.
 
 The panel at the bottom right has:
 
-- **A headline and progress bar**, e.g. *6 things left for you · 11 of 17 answered*.
-- **Next steps:**
-  1. Answer the questions it couldn't.
-  2. Attach your CV. **Download CV** is inline, for upload dialogs like Google Forms'.
-  3. Double-check flagged answers.
-  4. Click the form's own Submit. **I already submitted it** covers sites where it can't detect
-     the submit.
-- **Submit** (bottom of the panel on both the Assistant and Form tabs; disabled until every required answer is in) and **⚡ Auto apply** (the first
-  button in the popup, for tracked pages and **Fill without tracking** pages alike; it fills the
-  form straight away first): click the
+- **A headline and progress bar**, e.g. *6 things left for you · 11 of 17 answered* (the agent's
+  status instead while it runs).
+- **The assistant chat** (see above), or the agent's progress, questions and step log.
+- **Submit for me** (panel footer; disabled until every required answer is in) and **⚡ Auto apply**
+  (in the popup, for tracked and untracked pages alike; it fills the form straight away first): click the
   form's own Submit button after a 3-second countdown with **Cancel**. It refuses, and
   says why, when a required field (including a consent checkbox or an upload) still needs you,
   when it can't find exactly one Submit button (multi-step forms stop at **Next**), when that
   button is still disabled, when the browser or the site reports an invalid field, or when the
-  application is already sent or waiting for verification. Minimising or closing the panel cancels the countdown. AI drafts you haven't
+  application is already sent or waiting for verification. A hidden field the site's uploader fills
+  (like `resume.fileName`) gets up to 5 seconds to finish uploading; if the site still hasn't
+  registered the file, the upload goes back on your list with "attach it again". Minimising or closing the panel cancels the countdown. AI drafts you haven't
   checked are submitted as filled, so use it when you trust your answer bank. The attempt is
   reported as *submission attempted* until a confirmation is detected or you mark it.
-  Steps tick off as you go.
-- **Needs you:** each row has **Go to field →** (scrolls to it and highlights it) and **✨ Draft
-  with AI** for text questions. Dropdown rows have **Copy answer**. Rows the extension can't check
-  (consent boxes, Google uploads) have **✓ Done**.
-- **Double-check:** AI drafts, and a "current company" taken from a job not marked current. Click
-  **✓ Looks good** to clear one.
-- **Filled:** each value and where it came from (*From profile*, *From answer bank*, *AI draft*,
-  *Your answer*). Click a row to jump to the field, or click a value to expand it.
+- **I already submitted it** (footer, tracked pages) covers sites where it can't detect the submit.
 
-When you type an answer on the page, the panel notices and ticks it off. You don't need to click
-**↻ Fill again**, which only fills fields that are still empty. **✨ Draft N with AI** drafts every
-remaining text question (uses your selected AI payment mode). **–** or Esc shrinks the panel to a pill showing what's
+When you type an answer on the page, the panel notices and moves on to the next question. **–** or Esc shrinks the panel to a pill showing what's
 left. It stays minimised on later pages until you open it again.
 
 On the page, green fields are filled, amber means check it, and dashed red means it's your turn.
@@ -149,21 +150,25 @@ Hover over a field to see why. Errors say what to do: a rejected key offers **Op
 account without a profile yet offers **Set up profile** (the website's profile setup), and an
 unreachable platform offers **Try again**.
 
-### The form agent
+### Stepping through a form
 
-For forms autofill can't finish on its own (an **Apply** button that opens a pop-up, multi-page
-wizards, typeahead dropdowns, forms inside frames, single-page apps that change step without
-loading a page), choose **Fill with the agent** in the popup or on the panel's **Assistant** tab.
+For forms it can't finish in place (an **Apply** button that opens a pop-up, multi-page wizards,
+typeahead dropdowns, forms inside frames, single-page apps that change step without loading a
+page), the chat carries on by driving the tab itself after **Fill this form**, and says so first.
+Inside, this is the form agent (`src/agent/`); to you it is the same chat.
 
 - It works in the tab you started it in, one tab at a time, step by step: it reads the page
   (every frame, open shadow roots, the open dialog only when one is up), asks your ApplyShortly
   server what to do next, then clicks and types with real input events and looks again.
 - Answers your profile and answer bank cover are typed without any AI call. AI is used only to
   find the way through the form (one apply run's credits per form, or your personal key).
-- It asks in the panel for an answer it doesn't have (**Answer**, or **I'll fill it on the page**),
-  for a CAPTCHA or sign-in (**Continue** once you've done it), and on job boards for the posting's
-  own **Apply / Easy Apply** click, because there that can apply in one click. It never solves CAPTCHAs.
-- It never submits. It stops at **Ready for your review**; you check the form and click Submit.
+- It asks in the chat for an answer it doesn't have (type it, tap an option, **Draft it for me** on
+  open questions, or **I'll fill it on the page**), for a CAPTCHA or sign-in (**Continue** once
+  you've done it), and on job boards for the posting's own **Apply / Easy Apply** click, because
+  there that can apply in one click. It never solves CAPTCHAs.
+- It never submits. When it has been through the form, the chat picks up anything still open, and
+  you check the form and submit (yourself or with **Submit for me**). Auto apply doesn't submit a
+  form it had to step through.
 - **Pause** and **Stop and take over** are always available. Chrome shows a "started debugging
   this browser" bar while it runs (the `debugger` permission); closing the bar stops it.
 
@@ -178,8 +183,12 @@ For each empty field, in order:
    period, CTC, relocation, work authorisation, sponsorship) and the answer bank. If the full
    question doesn't match, it retries with the first sentence. *"Current CTC? Mention fixed and
    variable components separately."* is matched as *"Current CTC?"*.
-3. **AI draft** using your selected payment mode, only if you click **✨ Draft with AI** or turn on *Draft missing answers with AI
-   automatically* (in the popup or Settings).
+3. **AI draft** using your selected payment mode, automatically unless *Let AI answer questions it can't find* is off (in the popup or
+   Settings), and whenever you tap **Draft it for me**. On a page that isn't tracked in
+   ApplyShortly, the draft request also carries the page's title and up to 6,000 characters of
+   its visible text, so the AI knows the job ("What interests you about Outmarket?"). Profile and
+   answer-bank lookups never send page text. If a draft fails, the chat says why (for example,
+   no credits left).
 
 Selects and radio groups (native and Google Forms' ARIA ones) are set when an answer matches one
 option exactly, by yes/no, or by unambiguous containment. Otherwise they're left for you.
@@ -221,13 +230,29 @@ not need additional extension resource permissions. Keep these copies in sync wh
 | `src/background.js` | Service worker. Holds the API key and makes every platform request, so job sites never see the key or hit CORS. Tracks which application each tab is filling. |
 | `src/bridge.js` | JS port of `extension-bridge/client.ts`. Keep the two in sync. |
 | `src/fill.js` | Field discovery, labels, profile answers, writing values (pure DOM, tested in jsdom) |
-| `src/content.js` | Runs the fill on the page, the review panel (closed shadow DOM), live re-check, submit detection |
+| `src/content.js` | Runs the fill on the page, the Assistant tab's logic, live re-check, Auto apply, submit detection |
+| `src/panel-view.js` | The review panel (closed shadow DOM): draws `content.js`'s state and calls back for actions |
 | `src/panel-model.js` | Pure helpers shared by the panel and popup: checklist and counts, friendly error messages |
 | `src/agent/loop.js` | The form agent's loop in the service worker: observe every frame, ask `/agent/step`, act, settle |
 | `src/agent/cdp.js` | Drives the tab through `chrome.debugger`: frames (cross-origin included), isolated worlds, trusted mouse and keyboard input, screenshots |
 | `src/agent/page.js` | In-frame half of the agent (needs `fill.js`): describes the page and locates elements; refuses final submits. Pure DOM, tested in jsdom. The platform's server agent uses a copy. |
 | `src/popup.*`, `src/options.*`, `src/ui.css` | Toolbar popup and settings page |
 | `test/*.test.mjs` | `node --test extension/test/*.test.mjs` (tests use the root npm dependencies) |
+
+`npm run typecheck` also type-checks `src/` from JSDoc (`tsconfig.extension.json`, `@types/chrome`).
+
+## Why it asks for these permissions
+
+- **Content scripts on every site.** A tab the website opens with `#jobhunt-autofill=<id>`, the
+  later pages of a multi-page form, and the confirmation page after a submit must all run the
+  scripts without a click on the extension: that is how filling starts by itself and how a
+  submission is confirmed. Chrome injects on demand only into tabs the extension has site access
+  to or was clicked in, so on-demand injection would break these flows. On other pages the
+  scripts stay idle: one `hello` message to the service worker, and a watch on the `<html>`
+  attribute the ApplyShortly website uses for its signed-in mark.
+- **`debugger`.** The form agent's trusted input and cross-origin frames
+  (`src/agent/cdp.js`). It attaches only to the tab the agent was started in, and Chrome shows its
+  debugging bar meanwhile.
 
 ## Limits
 

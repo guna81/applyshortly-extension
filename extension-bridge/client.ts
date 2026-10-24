@@ -30,7 +30,7 @@ export interface ExtensionPreferences {
   currency: string | null;
   available_from: string | null; // YYYY-MM-DD
   willing_to_relocate: boolean;
-  requires_sponsorship: boolean;
+  requires_sponsorship: boolean | null; // null: not answered yet
   work_authorization: Record<string, string>;
 }
 
@@ -90,6 +90,15 @@ export interface AnswerSuggestRequest {
   application_id?: number | null;
   /** false = profile facts and answer bank only (no LLM cost). */
   allow_generate?: boolean;
+  /** The job as the page shows it; used for drafts only when there is no application_id. */
+  page?: PageJob | null;
+}
+
+export interface PageJob {
+  title?: string;
+  company?: string;
+  /** Visible page text, at most 6000 characters. */
+  description?: string;
 }
 
 export interface AnswerSuggestion {

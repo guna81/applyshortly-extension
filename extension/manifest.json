@@ -11,7 +11,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/fill.js", "src/panel-model.js", "src/content.js"],
+      "js": ["src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],

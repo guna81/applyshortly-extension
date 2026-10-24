@@ -25,7 +25,9 @@
   const BUTTONS = 'button, input[type=submit], input[type=button], [role="button"], [role="tab"], [role="link"]';
   // Links worth showing: the rest of a careers site's navigation is noise for the planner.
   const ACTION_LINK = /apply|next|continue|review|upload|attach|add |add$|accept|agree|close|dismiss|got it|start|resume|\bcv\b|cookie|skip/i;
-  const FINAL = /\b(submit|send)\b|\bsend (my )?application\b|\bfinish\b|\bcomplete (my )?application\b/i;
+  // English, then French, Spanish/Portuguese, German, Italian and Dutch words that only send a
+  // form. "Apply" words (postuler, bewerben) stay out: on a job page they open the form.
+  const FINAL = /\b(submit|send)\b|\bsend (my )?application\b|\bfinish\b|\bcomplete (my )?application\b|\b(envoyer|soumettre|valider|enviar|submeter|absenden|abschicken|einreichen|invia|inviare|verzenden|versturen|indienen)\b/i;
   const EXTRA_TEXT = 'input[type=date], input[type=month], input[type=time], input[type=datetime-local], input[type=week], [contenteditable="true"], [contenteditable=""]';
   const MAX_ELEMENTS = 300;
   const MAX_TEXT = 1500;
@@ -127,7 +129,7 @@
     if (field.kind === "select") {
       const chosen = el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
       const value = F.isEmpty(field) ? "" : clean(chosen?.text);
-      return [base(el, { role: "select", name: label, value, required, options: field.options.slice(0, 100).map((o) => clip(o.text, 500)), ...invalidInfo(field) })];
+      return [base(el, { role: "select", name: label, value, required, options: field.options.filter((o) => !F.isPlaceholderOption(o.text)).slice(0, 100).map((o) => clip(o.text, 500)), ...invalidInfo(field) })];
     }
     if (field.kind === "radio") {
       return field.options.map((o) => base(o.el, {
@@ -150,9 +152,35 @@
       return [base(el, { role: "file", name: label, value: el.files?.[0]?.name ?? "", required, in_viewport: true })];
     }
     if (field.kind === "dropdown") {
-      return [base(el, { role: "combobox", name: label, value: clip(F.dropdownValue(field), 2000), required, ...invalidInfo(field) })];
+      const options = listedOptions(el).slice(0, 100).map((t) => clip(t, 500));
+      return [base(el, { role: "combobox", name: label, value: clip(F.dropdownValue(field), 2000), required, options, ...invalidInfo(field) })];
     }
     return [];
+  }
+
+  /** The listbox(es) a dropdown names in aria-controls / aria-owns. */
+  function ownedLists(el) {
+    const doc = el.ownerDocument;
+    return ["aria-controls", "aria-owns"]
+      .map((a) => el.getAttribute(a))
+      .filter(Boolean)
+      .flatMap((ids) => ids.split(/\s+/))
+      .map((id) => doc.getElementById(id))
+      .filter(Boolean);
+  }
+
+  /** Answers without "-None-"/"Select…" entries or repeats. */
+  function answerTexts(texts) {
+    return [...new Set(texts.map(clean))].filter((t) => !F.isPlaceholderOption(t));
+  }
+
+  /**
+   * A closed dropdown's options when the page keeps them in its listbox (Zoho Recruit's month and
+   * year lists, or any list after its first opening). Empty when they only exist while open.
+   */
+  function listedOptions(el) {
+    const options = ownedLists(el).flatMap((list) => [...list.querySelectorAll('[role="option"]')]);
+    return answerTexts(options.filter((o) => o.getAttribute("aria-disabled") !== "true").map((o) => o.getAttribute("aria-label") || o.textContent));
   }
 
   /** Date/time inputs and rich-text editors, which fill.js leaves to the user. */
@@ -329,7 +357,7 @@
     const el = find(ref);
     if (!el) return { ok: false, detail: "That field is gone from the page." };
     if (el.tagName !== "SELECT") return { ok: false, native: false };
-    const options = [...el.options].filter((o) => o.value !== "").map((o) => ({ text: clean(o.text), el: o }));
+    const options = [...el.options].filter((o) => o.value !== "" && !F.isPlaceholderOption(o.text)).map((o) => ({ text: clean(o.text), el: o }));
     const option = F.chooseOption(options, answer);
     if (!option) return { ok: false, native: true, detail: `No option matches "${answer}". Options: ${options.slice(0, 15).map((o) => o.text).join(", ")}` };
     const win = el.ownerDocument.defaultView;
@@ -351,12 +379,7 @@
     const el = find(ref);
     if (!el) return [];
     const doc = el.ownerDocument;
-    const owned = ["aria-controls", "aria-owns"]
-      .map((a) => el.getAttribute(a))
-      .filter(Boolean)
-      .flatMap((ids) => ids.split(/\s+/))
-      .map((id) => doc.getElementById(id))
-      .filter(Boolean);
+    const owned = ownedLists(el);
     const scopes = owned.length ? owned : roots(doc);
     let found = scopes
       .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item')])
@@ -365,6 +388,11 @@
     return found
       .slice(0, 100)
       .map((o) => ({ ref: refOf(o), text: clip(clean(o.getAttribute("aria-label") || o.textContent), 200) }));
+  }
+
+  /** The answers an open dropdown offers, for the panel to show as choices. */
+  function shownChoices(ref, checkLayout = true) {
+    return answerTexts(visibleOptions(ref, checkLayout).map((o) => o.text)).slice(0, 30);
   }
 
   /** The option to click for an answer among the showing ones; partial matches allowed. */
@@ -443,6 +471,7 @@
     blur,
     selectNative,
     visibleOptions,
+    shownChoices,
     noteShown,
     matchOption,
     attach,

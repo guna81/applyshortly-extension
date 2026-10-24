@@ -1,3 +1,4 @@
+/** The page's own elements, mostly form controls. @type {(id: string) => any} */
 const $ = (id) => document.getElementById(id);
 const P = globalThis.JobHuntPanel;
 let pollTimer;
@@ -209,7 +210,7 @@ $("reveal").addEventListener("click", () => {
   $("reveal").setAttribute("aria-label", $("reveal").title);
 });
 $("aiDrafts").addEventListener("change", async (event) => {
-  await chrome.storage.local.set({ aiDrafts: event.target.checked });
+  await chrome.storage.local.set({ aiDrafts: /** @type {HTMLInputElement} */ (event.target).checked });
   $("prefMsg").textContent = "Saved";
   setTimeout(() => ($("prefMsg").textContent = ""), 1500);
 });

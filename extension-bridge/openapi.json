@@ -579,38 +579,6 @@
         "title": "AgentStepResponse",
         "type": "object"
       },
-      "AnswerSuggestRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "allow_generate": {
-            "default": true,
-            "title": "Allow Generate",
-            "type": "boolean"
-          },
-          "application_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Application Id"
-          },
-          "question": {
-            "maxLength": 1000,
-            "minLength": 3,
-            "title": "Question",
-            "type": "string"
-          }
-        },
-        "required": [
-          "question"
-        ],
-        "title": "AnswerSuggestRequest",
-        "type": "object"
-      },
       "AnswerSuggestionOut": {
         "properties": {
           "answer": {
@@ -890,6 +858,48 @@
         "title": "ExtensionAnswer",
         "type": "object"
       },
+      "ExtensionAnswerSuggestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_generate": {
+            "default": true,
+            "title": "Allow Generate",
+            "type": "boolean"
+          },
+          "application_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtensionPageJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "question": {
+            "maxLength": 1000,
+            "minLength": 3,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "ExtensionAnswerSuggestRequest",
+        "type": "object"
+      },
       "ExtensionApplication": {
         "properties": {
           "apply_url": {
@@ -1145,6 +1155,32 @@
         "title": "ExtensionFormField",
         "type": "object"
       },
+      "ExtensionPageJob": {
+        "additionalProperties": false,
+        "description": "The job as the page shows it, for drafting on a page that isn't a tracked application.",
+        "properties": {
+          "company": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Company",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 6000,
+            "title": "Description",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "title": "ExtensionPageJob",
+        "type": "object"
+      },
       "ExtensionPreferences": {
         "properties": {
           "available_from": {
@@ -1204,8 +1240,15 @@
             "title": "Notice Period Days"
           },
           "requires_sponsorship": {
-            "title": "Requires Sponsorship",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Sponsorship"
           },
           "willing_to_relocate": {
             "title": "Willing To Relocate",
@@ -1890,7 +1933,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AnswerSuggestRequest"
+                "$ref": "#/components/schemas/ExtensionAnswerSuggestRequest"
               }
             }
           },

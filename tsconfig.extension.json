@@ -1,0 +1,16 @@
+{
+  // Type-checks the extension's plain JavaScript (no build step): JSDoc supplies the types.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["chrome"]
+  },
+  "include": ["extension/src/**/*.js"]
+}

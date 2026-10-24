@@ -60,6 +60,9 @@ context.
    - profile facts first
    - then the answer bank
    - then, only with `allow_generate: true`, a grounded LLM draft marked `needs_review`
+   - on a page with no `application_id`, send `page` (`title`, `company`, up to 6000
+     characters of page text as `description`) so drafts know the job; a tracked
+     application's job always wins
 6. `POST /events` reports the lifecycle:
 
    | event | Effect |

@@ -78,6 +78,7 @@ export class TabDriver {
     this.onDetached?.(reason);
   }
 
+  /** @returns {Promise<any>} the command's result; CDP results aren't typed here */
   send(method, params = {}, sessionId = undefined) {
     const target = sessionId ? { tabId: this.tabId, sessionId } : { tabId: this.tabId };
     return this.api.debugger.sendCommand(target, method, params);

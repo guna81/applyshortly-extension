@@ -20,7 +20,7 @@ const unsupported = (error) => error?.status === 404 && error.message === "Not F
 /** Platform errors in words the panel can show. */
 export function explain(error) {
   if (unsupported(error)) {
-    return "Your ApplyShortly server doesn't have the form agent yet. Use the Form tab for now; the agent works once the platform is updated.";
+    return "Your ApplyShortly server doesn't have the form agent yet. Use the assistant chat for now; the agent works once the platform is updated.";
   }
   if (error?.status === 410) return "This agent session ended. Run the agent again.";
   if (error?.status === 401 || error?.status === 403) return "ApplyShortly didn't accept the API key. Sign in again from settings.";
@@ -118,6 +118,34 @@ async function choose(driver, target, frames, answer) {
   return match.text;
 }
 
+/**
+ * The answers a question about a choice offers, so the panel can show them as buttons: a radio
+ * group's options, a dropdown's listed options, or (a list that loads when opened) what shows
+ * after opening it for a moment. [] for free-text questions or when nothing could be read.
+ * The platform names the field by its ref; radio groups as "g<n>:<ref of one option>".
+ */
+export async function questionChoices(driver, refs, frames, observation, question) {
+  const ref = String(question?.ref ?? "").replace(/^g\d+:/, "");
+  const el = ref && observation.elements.find((e) => e.ref === ref);
+  if (!el) return [];
+  if (el.role === "radio" || (el.role === "checkbox" && el.group)) {
+    return observation.elements.filter((e) => e.role === el.role && e.group === el.group).map((e) => e.name).filter(Boolean);
+  }
+  if (el.options?.length) return el.options;
+  const target = refs.get(ref);
+  if (el.role !== "combobox" || !target) return [];
+  try {
+    await driver.call(target.frame, "noteShown");
+    await clickRef(driver, target, frames);
+    await sleep(DROPDOWN_WAIT_MS);
+    return (await driver.call(target.frame, "shownChoices", target.local)) ?? [];
+  } catch {
+    return [];
+  } finally {
+    await driver.press("Escape").catch(() => {});
+  }
+}
+
 /** Carries out one vetted action; returns the result the platform sees next step. */
 export async function execute(driver, refs, frames, action, files) {
   const target = action.ref ? refs.get(action.ref) : null;
@@ -178,7 +206,13 @@ export async function settle(driver) {
  */
 export class Agent {
   constructor({ tabId, appId, driver, step, files, notify, report }) {
-    Object.assign(this, { tabId, appId, driver, step, files, notify, report });
+    this.tabId = tabId;
+    this.appId = appId;
+    this.driver = driver;
+    this.step = step;
+    this.files = files;
+    this.notify = notify;
+    this.report = report;
     this.status = "starting";
     this.stopped = false;
     this.paused = false;
@@ -189,7 +223,7 @@ export class Agent {
   }
 
   emit(extra = {}) {
-    const message = { type: "agentUpdate", status: this.status, log: this.log.slice(-40), ...this.last, ...extra };
+    const message = { type: "agentUpdate", status: this.status, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
     void this.notify(message);
   }
 
@@ -280,6 +314,10 @@ export class Agent {
           break;
         }
         if (res.status === "ask_user") {
+          if (res.question?.kind === "question") {
+            const choices = await questionChoices(this.driver, refs, frames, observation, res.question);
+            this.last.question = { ...res.question, choices };
+          }
           this.status = "waiting";
           this.emit();
           const input = await this.waitForUser();

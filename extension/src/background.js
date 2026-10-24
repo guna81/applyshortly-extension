@@ -5,9 +5,11 @@ import { Agent } from "./agent/loop.js";
 import { TabDriver } from "./agent/cdp.js";
 import { BridgeError, JobHuntBridge, autofillIdFromUrl } from "./bridge.js";
 
-const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: false };
+/** @type {{baseUrl: string, token: string, aiDrafts: boolean, connectionType?: string}} */
+// AI drafts are on unless the user turns them off: the website's agent drafts what it can't answer too.
+const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true };
 const PROFILE_TTL_MS = 60_000;
-const CONTENT_SCRIPTS = ["src/fill.js", "src/panel-model.js", "src/content.js"];
+const CONTENT_SCRIPTS = ["src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
 const AGENT_PAGE_SCRIPTS = ["src/fill.js", "src/agent/page.js"];
 
@@ -455,6 +457,7 @@ const handlers = {
       question: msg.question,
       application_id: msg.appId ?? null,
       allow_generate: Boolean(msg.allowGenerate),
+      page: msg.appId == null && msg.allowGenerate ? pageJob(msg.page) : null,
     }),
   // The panel's Assistant tab: fields and values come from the page, nothing is stored.
   assist: async (msg) =>
@@ -494,6 +497,15 @@ chrome.commands?.onCommand.addListener((command, tab) => {
   if (command !== "autofill" || !tab?.id || !/^https?:/.test(tab.url ?? "")) return;
   start(tab.id, tab.url, true).catch((err) => console.warn("[JobHunt] shortcut failed:", err.message));
 });
+
+const clip = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
+
+/** The page's job for drafting on an untracked page, trimmed to the API's limits; none without a title. */
+function pageJob(page) {
+  if (!page || typeof page !== "object") return null;
+  const job = { title: clip(page.title, 300), company: clip(page.company, 200), description: clip(page.description, 6000) };
+  return job.title ? job : null;
+}
 
 const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus"]);
 

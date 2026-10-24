@@ -245,6 +245,65 @@ test("an unlinked label next to the field beats a sample-value placeholder", () 
   assert.deepEqual(plain(labels), ["First Name", "Email"]);
 });
 
+test("Zoho Recruit: row labels, the * marker, side controls, -None- and the CAPTCHA box", () => {
+  const row = (id, label, mandatory, field) => `
+    <div class="crc-form-row crc-rec-form_${id}">
+      <label id="crc-label-rec-form_${id}" class="crm-from-label"><span class="crc-label-text"><span>${label}</span>${mandatory ? '<span class="crc-form-mandatory">*</span>' : ""}</span></label>
+      <div class="crc-form-field">${field}</div>
+    </div>`;
+  const text = (id) => `<crux-text-component id="rec-form_${id}"><div class="cxElementValue"><lyte-input id="rec-form_${id}_input"><div><input type="text" name="rec-form_${id}"></div></lyte-input></div></crux-text-component>`;
+  const pick = (id, controls) => `<crux-picklist-component id="rec-form_${id}"><div class="cxElementValue"><lyte-dropdown><div class="lyteDummyEventContainer" role="combobox" aria-haspopup="listbox" aria-controls="${controls}"><lyte-drop-button><span>-None-</span></lyte-drop-button></div></lyte-dropdown></div></crux-picklist-component>`;
+  const { doc, F } = page(`<div class="wbf-doublewrapper">
+    ${row("1", "First Name", true, pick("9", "Salutation") + text("1"))}
+    ${row("2", "Mobile", true, `<crux-phone-component id="rec-form_2"><div><lyte-dropdown><div role="combobox" aria-haspopup="listbox" aria-controls="Lyte_Drop_Body_0"><lyte-drop-button>(+91)</lyte-drop-button></div></lyte-dropdown><lyte-input id="rec-form_2_input"><div><input type="text" name="rec-form_2"></div></lyte-input></div></crux-phone-component>`)}
+    ${row("3", "Gender", true, pick("3", "Gender1"))}
+    ${row("4", "Notice Period ( in days )", true, text("4"))}
+    ${row("5", "Alternate Number", false, text("5"))}
+    <div class="crc-form-row"><label class="crm-from-label">CAPTCHA <span class="crc-form-mandatory">*</span></label><div><input type="text" placeholder="Type below image text"><img alt="CAPTCHA"></div></div>
+  </div>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => [f.label, f.required])), [
+    ["First Name (salutation)", false],
+    ["First Name", true],
+    ["Mobile (country code)", false],
+    ["Mobile", true],
+    ["Gender", true],
+    ["Notice Period ( in days )", true],
+    ["Alternate Number", false],
+  ]);
+  assert.equal(F.isEmpty(fields.find((f) => f.label === "Gender")), true);
+});
+
+test("Zoho Recruit tabular sections: entry, column and From/To month/year parts in the label", () => {
+  const dropdown = (id) => `<rec-dropdown id="${id}"><lyte-dropdown id="cxd-${id}"><div role="combobox" aria-haspopup="listbox" aria-controls="cxdby-${id}"><span>-None-</span></div></lyte-dropdown></rec-dropdown>`;
+  const { doc, F } = page(`
+    <div class="crc-form-row Experience_Details"><h2>Experience Details</h2>
+      <div role="region" aria-label="Experience Details : Entry 1 of 10">
+        <div class="crc-form-tabularrow"><label id="crc-form-tabular-label-7">Company</label>
+          <crux-text-component id="7_1"><div><input type="text" name="7_1"></div></crux-text-component></div>
+        <div class="crc-form-tabularrow"><label id="crc-form-tabular-label-8">Work Duration</label>
+          <rec-month-range-component id="8_1"><div class="crc-form-durationfield"><label class="cxLabel">Month</label>${dropdown("8_1_from_month")}<label class="cxLabel">Year</label>${dropdown("8_1_from_year")}</div>
+          <div class="crc-form-durationfield"><label class="cxLabel">Month</label>${dropdown("8_1_to_month")}</div></rec-month-range-component></div>
+        <div class="crc-form-tabularrow"><label>I currently work here</label><input type="checkbox" name="9_1" aria-labelledby="lyte-checkbox-label-0"><label id="lyte-checkbox-label-0"></label></div>
+      </div>
+    </div>`);
+  assert.deepEqual(plain(F.collectFields(doc, { checkLayout: false }).map((f) => f.label)), [
+    "Experience Details 1: Company",
+    "Experience Details 1: Work Duration from (month)",
+    "Experience Details 1: Work Duration from (year)",
+    "Experience Details 1: Work Duration to (month)",
+    "Experience Details 1: I currently work here",
+  ]);
+});
+
+test("isPlaceholderOption: -None- and Select… are not answers; None alone is", () => {
+  const { doc, F } = page(`<select><option value="-None-">-None-</option><option>Mr.</option></select>`);
+  assert.equal(F.isPlaceholderOption("-None-"), true);
+  assert.equal(F.isPlaceholderOption("--Select--"), true);
+  assert.equal(F.isPlaceholderOption("None"), false);
+  assert.equal(F.isEmpty(F.collectFields(doc, { checkLayout: false })[0]), true);
+});
+
 test("findSubmitButton: the one submit button of the form being filled", () => {
   const { doc, F } = page(`
     <button type="button">Apply with LinkedIn</button>
@@ -509,4 +568,16 @@ test("strict pickDropdown leaves a custom dropdown alone on a contained match", 
   openOnClick(loose.win, loose.doc.querySelector("#gender"), ["Engineering", "Design"]);
   const other = loose.F.collectFields(loose.doc, { checkLayout: false }).find((f) => f.kind === "dropdown");
   assert.equal(await loose.F.pickDropdown(other, "Software engineering", { pollMs: 1 }), "Engineering");
+});
+
+test("field names read as words, and a country-code question gets the profile phone's code", () => {
+  const { doc, F } = page(`<select name="mobilePhone.countryCode"><option>+93</option><option>+91</option></select>
+    <input name="first_name"><input name="email"><input placeholder="e.g. 5 years">`);
+  assert.deepEqual([...F.collectFields(doc, { checkLayout: false }).map((f) => f.label)], ["Mobile phone country code", "First name", "email", "e.g. 5 years"]);
+  const code = (phone) => F.profileAnswer("Mobile phone country code", { phone }, null)?.value ?? null;
+  assert.equal(code("+91 98765 43210"), "+91");
+  assert.equal(code("+919876543210"), "+91");
+  assert.equal(code("+1 (415) 555-0100"), "+1");
+  assert.equal(code("9876543210"), null);
+  assert.equal(F.profileAnswer("Mobile phone number", { phone: "+91 98765 43210" }, null).value, "+91 98765 43210");
 });

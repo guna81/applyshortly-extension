@@ -13,7 +13,7 @@
   let submittedReported = false;
   let autoSubmitting = false; // Auto apply clicked Submit; its own report covers the submit event
   const AUTO_APPLY_DELAY_S = 3;
-  // The Assistant tab's conversation for this page; reset with `state`.
+  // The assistant's conversation for this page; reset with `state`.
   const newChat = () => ({ lines: [], draft: "", pending: false });
   let chat = newChat();
   // The form agent's latest update for this tab (it runs in the background; see agent/loop.js).
@@ -24,6 +24,7 @@
       chrome.runtime.sendMessage(message, (res) => {
         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
         if (!res?.ok) {
+          /** @type {Error & {status?: number, code?: string}} */
           const err = new Error(res?.error ?? "No response from the extension");
           err.status = res?.status;
           err.code = res?.code;
@@ -34,9 +35,11 @@
     });
   }
 
+  /** @param {string} event @param {{note?: string, [key: string]: unknown}} [extra] */
   function report(event, extra = {}) {
     if (state?.appId == null) return Promise.resolve(null);
     // The API caps url at 2000 and note at 1000 characters.
+    /** @type {Record<string, unknown>} */
     const payload = { application_id: state.appId, event, url: location.href.slice(0, 2000), ...extra };
     if (payload.note) payload.note = String(payload.note).slice(0, 1000);
     return send({ type: "report", event: payload }).catch(
@@ -58,6 +61,24 @@
     });
   }
 
+  /** The job as this page shows it, so an AI draft on an untracked page knows what it answers for. */
+  function pageJob() {
+    const meta = (name) => document.querySelector(`meta[property="${name}"], meta[name="${name}"]`)?.getAttribute("content")?.trim() ?? "";
+    const text = document.body?.innerText ?? document.body?.textContent ?? "";
+    return {
+      title: (document.title.trim() || meta("og:title") || F.cleanLabel(document.querySelector("h1")?.textContent ?? "")).slice(0, 300),
+      company: meta("og:site_name").slice(0, 200),
+      description: text.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, 6000),
+    };
+  }
+
+  /** Asks the server for an answer; an AI draft for an untracked page carries the page's job. */
+  const suggest = (question, appId, allowGenerate) =>
+    send({ type: "suggest", question, appId, allowGenerate, page: allowGenerate && appId == null ? pageJob() : undefined });
+
+  /** Why the last AI draft failed (no credits, a rejected key, …), for the chat to say. @type {string | null} */
+  let draftError = null;
+
   async function resolveAnswer(field, allowGenerate) {
     const local = F.profileAnswer(field.label, state.ctx.profile, state.ctx.app);
     if (local) return { value: local.value, source: "profile", needsReview: local.needsReview };
@@ -69,10 +90,11 @@
     if (allowGenerate) attempts.push([field.label, true]);
     for (const [question, generate] of attempts) {
       try {
-        const s = await send({ type: "suggest", question, appId: state.appId, allowGenerate: generate });
+        const s = await suggest(question, state.appId, generate);
         if (s.answer) return { value: s.answer, source: s.source, needsReview: s.needs_review };
       } catch (err) {
         console.warn("[JobHunt] suggest failed:", err.message);
+        if (generate) draftError = err.message;
         return null;
       }
     }
@@ -223,20 +245,42 @@
     return [...byEl.values()].sort((a, b) => (a.field.el.compareDocumentPosition(b.field.el) & 4 ? -1 : 1));
   }
 
-  async function run(appId, { allowGenerate } = {}) {
+  const NEXT_TEXT = /^(next|continue|save (and|&) continue|proceed)\b/i;
+
+  /** What the page looks like after filling: whether it needs clicking through (see navigationNeeded). */
+  function pageShape() {
+    const fields = F.collectFields(document);
+    const label = (b) => F.cleanLabel(b.getAttribute("aria-label") || (b.tagName === "INPUT" ? b.value : b.textContent));
+    const hasNext = [...document.querySelectorAll('button, input[type=submit], [role="button"]')]
+      .some((b) => b.getClientRects().length > 0 && !b.matches(":disabled") && NEXT_TEXT.test(label(b)));
+    const bigFrame = [...document.querySelectorAll("iframe")].some((f) => {
+      const r = f.getBoundingClientRect();
+      return r.width >= 300 && r.height >= 300;
+    });
+    return { total: fields.length, hasSubmit: Boolean(F.findSubmitButton(document, fields)), hasNext, bigFrame };
+  }
+
+  const greeting = () => P.assistantGreeting(state.results);
+
+  /**
+   * Fills the page from the profile and answer bank. `quiet` re-reads a page the agent already
+   * filled, without reporting it again (the agent reported its own fill).
+   * @param {number | null} appId @param {{allowGenerate?: boolean, quiet?: boolean}} [opts]
+   */
+  async function run(appId, { allowGenerate, quiet = false } = {}) {
     try {
       if (!state || state.appId !== appId) {
         panel.busy("Loading your profile…");
         const [ctx, resume] = await Promise.all([send({ type: "context", appId }), loadResume()]);
+        if (state) chat = newChat(); // another application; a fresh page keeps what the agent said
         state = { appId, ctx, resume, results: [] };
-        chat = newChat();
-        await report("opened");
+        if (!quiet) await report("opened");
       }
       const generate = allowGenerate ?? state.ctx.aiDrafts;
       panel.busy(generate ? "Drafting answers with AI… this can take a few seconds" : "Matching your answers to the form…");
       state.results = merge(state.results, await fillAll({ allowGenerate: generate }));
       outline();
-      await reportFilled();
+      if (!quiet) await reportFilled();
       panel.idle();
       return true;
     } catch (err) {
@@ -246,25 +290,7 @@
     }
   }
 
-  /** Per-row "Draft with AI": one field only. */
-  async function draftOne(row) {
-    row.drafting = true;
-    panel.idle();
-    const answer = await resolveAnswer(row.field, true);
-    row.drafting = false;
-    const next = answer ? await applyAnswer(row.field, answer) : null;
-    if (next?.status === "filled") {
-      state.results = merge(state.results, [next]);
-      outline();
-      panel.toast("Drafted. Read it over before you submit.");
-      await reportFilled();
-    } else {
-      panel.toast(next?.suggestion ? next.reason : "AI couldn't draft this one. Please answer it yourself.");
-    }
-    panel.idle();
-  }
-
-  // ------------------------------------------------------------------ assistant tab
+  // ------------------------------------------------------------------ assistant
 
   /** Writes the assistant's validated values into the page; returns the labels it filled. */
   async function applyAssistantUpdates(updates, rows) {
@@ -286,9 +312,13 @@
 
   /** "Draft it for me": the per-field AI draft (profile + job), started from the chat. */
   async function assistantDraft(row) {
+    draftError = null;
     const answer = await resolveAnswer(row.field, true);
     const next = answer ? await applyAnswer(row.field, answer) : null;
-    if (next?.status !== "filled") return { text: "I couldn't draft this one. Tell me what you'd like to say and I'll put it in." };
+    if (next?.status !== "filled") {
+      const why = draftError ? ` (${draftError.replace(/\.$/, "")})` : "";
+      return { text: `I couldn't draft this one${why}. Tell me what you'd like to say and I'll put it in.`, target: row };
+    }
     state.results = merge(state.results, [next]);
     outline();
     void reportFilled();
@@ -301,10 +331,10 @@
       Object.assign(row, { status: "done", manual: true, source: "you" });
       outline();
     };
-    if (message === P.DRAFT_REPLY && row.status === "optional") {
-      return P.draftable(row.field)
-        ? assistantDraft(row)
-        : { text: "That's a detail only you know, so I won't draft it. Tell me what to put, or leave it blank." };
+    if (P.isDraftRequest(message) && ["optional", "unresolved"].includes(row.status)) {
+      if (P.draftable(row.field)) return assistantDraft(row);
+      if (row.field.options?.length) return { text: "Pick one of the options, or tell me which one fits.", choices: row.field.options.map((o) => o.text).filter(Boolean).slice(0, 8), target: row };
+      return { text: `That's a detail only you know, so I won't draft it. Tell me what to put${row.status === "optional" ? ", or leave it blank" : ""}.`, target: row };
     }
     if (message === P.SKIP_REPLY && row.status === "optional") {
       row.skipped = true;
@@ -331,26 +361,116 @@
     return null;
   }
 
+  /** A plain answer to the question the chat just asked: written into the form, no AI call. */
+  async function directReply(row, value) {
+    const filled = await applyAssistantUpdates({ answer: value }, { answer: row });
+    return filled.length ? { text: "Got it.", filled, next: true } : { text: `The form didn't take “${value}”. Please set it on the page.` };
+  }
+
   /** The reply line, followed by whatever the chat should bring up next. */
+  /** A lead line followed by the next thing to ask (its question card and quick replies). */
+  const followedBy = (lead, next) =>
+    ({ text: `${lead} ${next ? next.text : DONE_TEXT}`, question: next?.question, choices: next?.choices ?? [], target: next?.target });
+
   function withNext(reply) {
     if (!reply.next) return reply;
-    const next = P.nextPrompt(state.results);
-    return { ...reply, text: `${reply.text} ${next ? next.text : DONE_TEXT}`, choices: next?.choices ?? [] };
+    return { ...reply, ...followedBy(reply.text, P.nextPrompt(state.results)) };
+  }
+
+  // ------------------------------------------------------------------ driving the tab
+
+  const AGENT_LIVE = ["starting", "running", "waiting", "paused"];
+  const agentLive = () => Boolean(agent && AGENT_LIVE.includes(agent.status));
+  let handedOff = false; // the chat started driving this page once; it doesn't restart on its own
+
+  /** The chat carries on by clicking through the form (the form agent, in this tab). */
+  async function handOff(reason, { autoSubmit = false } = {}) {
+    handedOff = true;
+    chat.lines.push({ role: "assistant", local: true, text: P.handoffText(reason, { autoSubmit }) });
+    panel.idle();
+    await startAgent();
+  }
+
+  /** The user's reply while the agent waits: an answer, a draft request, or "done on the page". */
+  async function replyToAgent(message) {
+    const q = agent.question;
+    chat.lines.push({ role: "user", text: message });
+    chat.draft = "";
+    if (q?.kind !== "question") {
+      await agentControl("resume");
+      return panel.idle();
+    }
+    if (message === P.ON_PAGE_REPLY) {
+      chat.lines.push({ role: "assistant", local: true, text: "OK, fill it on the page. I'll carry on." });
+      await agentControl("skip");
+      return panel.idle();
+    }
+    if (!P.isDraftRequest(message)) {
+      await agentControl("reply", message);
+      return panel.idle();
+    }
+    // "Draft it for me": draft from the profile and the job, then give the agent the draft.
+    chat.pending = true;
+    panel.idle();
+    try {
+      const s = P.draftable({ kind: "text", label: q.text })
+        ? await suggest(q.text, state?.appId ?? agent.appId ?? null, true).catch(() => null)
+        : null;
+      if (s?.answer) {
+        chat.lines.push({ role: "assistant", local: true, text: `Here's a draft, going into the form now: “${s.answer}” Tell me if you want it changed.` });
+        await agentControl("reply", s.answer);
+      } else {
+        chat.lines.push({ role: "assistant", local: true, text: q.choices?.length ? "Pick one of the options, or tell me which one fits." : "That's one only you can answer. Tell me what to put.", choices: P.agentAsk(q)?.choices.filter((c) => c !== P.DRAFT_REPLY) });
+      }
+    } finally {
+      chat.pending = false;
+      panel.idle();
+    }
+  }
+
+  /** Brings the agent's progress into the chat: its questions, and what happened when it stopped. */
+  async function agentChanged(previous, next) {
+    const key = (a) => (a?.status === "waiting" ? `waiting:${a.question?.kind}:${a.question?.text}` : a?.status);
+    if (key(previous) === key(next)) return panel.agent(false);
+    if (next.status === "waiting") {
+      const ask = P.agentAsk(next.question);
+      if (ask) chat.lines.push({ role: "assistant", local: true, ...ask });
+      return panel.agent(true);
+    }
+    if (!["ready", "failed", "stopped"].includes(next.status)) return panel.agent(previous == null);
+    // Done driving: read the page as it is now, so the chat can follow up and Submit knows the state.
+    const lead = next.status === "ready" ? "I've been through the form." : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
+    await run(state?.appId ?? next.appId ?? null, { quiet: true });
+    const follow = next.status === "ready" && state ? P.nextPrompt(state.results) : null;
+    chat.lines.push({ role: "assistant", local: true, ...(next.status === "ready" ? followedBy(lead, follow) : { text: lead, choices: [] }) });
+    panel.agent(true);
   }
 
   /** One chat turn. Like the web app's review assistant: it fills fields, the user submits. */
   async function askAssistant(text) {
     const message = text.trim();
-    if (!message || chat.pending || !state?.ctx) return;
-    const target = P.LOCAL_REPLIES.includes(message) ? P.promptTarget(state.results) : null;
-    if (target) {
+    if (!message || chat.pending) return;
+    if (agent?.status === "waiting") return replyToAgent(message);
+    if (agentLive() || !state?.ctx) return; // it's clicking through the form; the box is off meanwhile
+    if (P.isNavigateRequest(message)) {
+      chat.lines.push({ role: "user", text: message });
+      chat.draft = "";
+      return handOff("asked");
+    }
+    // The question the chat asked last; a plain answer to it is filled here, for free.
+    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant") ?? greeting()).target;
+    // A draft request drafts the question just asked, required or optional.
+    const target = P.isDraftRequest(message) ? asked ?? P.promptTarget(state.results) : P.LOCAL_REPLIES.includes(message) ? P.promptTarget(state.results) : null;
+    const answer = target ? null : P.directAnswer(asked, message);
+    if (target || answer != null) {
       const turn = chat;
-      if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...P.assistantGreeting(state.results) });
+      if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...greeting() });
       turn.lines.push({ role: "user", text: message });
+      turn.draft = "";
       turn.pending = true;
       panel.idle();
       try {
-        const reply = await localReply(message, target);
+        const reply = target ? await localReply(message, target) : await directReply(asked, answer);
         if (turn !== chat) return;
         turn.lines.push({ role: "assistant", local: true, ...withNext(reply ?? { text: "Tell me what you'd like to do." }) });
       } finally {
@@ -365,7 +485,7 @@
       return;
     }
     const turn = chat;
-    if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...P.assistantGreeting(state.results) });
+    if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...greeting() });
     turn.lines.push({ role: "user", text: message });
     turn.draft = "";
     turn.pending = true;
@@ -449,7 +569,7 @@
     document.addEventListener(
       type,
       (e) => {
-        if (e.target?.tagName === "JOBHUNT-AUTOFILL-PANEL") return;
+        if (e.target instanceof Element && e.target.tagName === "JOBHUNT-AUTOFILL-PANEL") return;
         clearTimeout(recheckTimer);
         recheckTimer = setTimeout(recheck, 350);
       },
@@ -495,6 +615,40 @@
     panel.idle();
   }
 
+  const UPLOAD_WAIT_MS = 5000; // a file uploader fills its hidden field once the upload is done
+  const isHidden = (el) => el.getClientRects().length === 0;
+  const invalidControls = (form) => [...form.querySelectorAll("input:invalid, select:invalid, textarea:invalid")];
+
+  /**
+   * Whether the browser accepts the form; otherwise says which field and why, in words. Fields the
+   * user can't see (an uploader's "resume.fileName") are named rather than pointed at: the browser
+   * can't focus them, and a file upload the site never registered goes back on the user's list.
+   */
+  async function formAccepted(form) {
+    for (let waited = 0; !form.checkValidity() && waited < UPLOAD_WAIT_MS && invalidControls(form).every(isHidden); waited += 500) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (form.checkValidity()) return true;
+    const bad = invalidControls(form);
+    const shown = bad.find((el) => !isHidden(el));
+    if (shown) {
+      shown.reportValidity(); // a field the user can see: the browser points at it
+      const why = shown.validationMessage ? `: ${shown.validationMessage}` : "";
+      panel.stop(`Not submitted: the form doesn't accept “${F.labelOf(shown) || "a field"}” yet${why}.`);
+      return false;
+    }
+    const upload = state.results.find((r) => r.field.kind === "file" && r.status === "filled");
+    if (upload && bad.some((el) => /resume|cv|file|upload|attach|document/i.test(`${el.name} ${el.id}`))) {
+      Object.assign(upload, { status: "unresolved", reason: "The site didn't take the file. Attach it again on the page and wait for the upload to finish" });
+      outline();
+      panel.stop(`Not submitted: the site hasn't registered your file for “${upload.field.label}”. Attach it again on the page, wait for it to finish uploading, then try again.`);
+      return false;
+    }
+    const names = bad.map((el) => F.labelOf(el) || el.name).filter(Boolean);
+    panel.stop(`Not submitted: the site still rejects a field you can't see${names.length ? ` (${names.join(", ")})` : ""}. Check the form on the page, then try again.`);
+    return false;
+  }
+
   /**
    * "Auto apply": clicks the form's own Submit button, but only when every required field is
    * answered, there is exactly one submit button, and the user doesn't cancel the countdown.
@@ -510,10 +664,7 @@
       return panel.stop("Not submitted: the form's Submit button is still disabled, so something on the form isn't complete yet.");
     }
     const form = button.form ?? button.closest("form");
-    if (form && !form.checkValidity()) {
-      form.reportValidity();
-      return panel.stop("Not submitted: the form says a field isn't valid yet.");
-    }
+    if (form && !(await formAccepted(form))) return;
     if (!(await panel.countdown(AUTO_APPLY_DELAY_S))) return panel.toast("Submit cancelled. Nothing was submitted.");
     // The user may have edited the form during the countdown.
     recheck();
@@ -534,654 +685,19 @@
     // Keep this page locked after an attempt; another click must not submit it twice.
   }
 
-  // ------------------------------------------------------------------ panel (shadow DOM)
+  // ------------------------------------------------------------------ panel (panel-view.js)
 
-  const panel = (() => {
-    let host = null;
-    let root = null;
-    // What the panel shows besides the results: one of busy / error, plus UI state.
-    const view = {
-      busy: null,
-      error: null,
-      toast: null,
-      minimized: false,
-      confirmSubmit: false,
-      countdown: null, // {left, cancel} while Submit waits to click the form's button
-      tab: null, // "assistant" (chat and the agent) | "form"; null until chosen: Assistant first when it can help
-      agentDraft: "",
-      chatSeen: 0,
-      open: { todo: true, check: true, optional: true, filled: false },
-      expanded: new WeakSet(),
-    };
-    let toastTimer = 0;
-
-    const css = `
-      :host { all: initial; }
-      .wrap {
-        --bg: #ffffff; --fg: #18181b; --muted: #6b7280; --line: #e5e7eb; --soft: #f4f4f6; --hover: #ececf1;
-        --accent: #078651; --accent-soft: #ecfdf5; --accent-fg: #ffffff; --good: #15803d; --good-soft: #dcfce7;
-        --warn: #b45309; --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2;
-        font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg);
-      }
-      @media (prefers-color-scheme: dark) {
-        .wrap {
-          --bg: #17181e; --fg: #ececf1; --muted: #9ca3af; --line: #2c2d36; --soft: #20212a; --hover: #2a2b35;
-          --accent: #34d399; --accent-soft: #064e3b88; --accent-fg: #052e1f; --good: #86efac; --good-soft: #14532d55;
-          --warn: #fcd34d; --warn-soft: #78350f66; --bad: #fca5a5; --bad-soft: #7f1d1d55;
-        }
-      }
-      .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 440px;
-        max-width: calc(100vw - 32px); min-height: min(560px, calc(100vh - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
-        background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
-        box-shadow: 0 18px 48px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.08); overflow: hidden;
-        }
-      .p.enter { animation: in .18s ease-out; }
-      @keyframes in { from { opacity: 0; transform: translateY(8px); } }
-      .h { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 14px; }
-      .mark { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-        /* Embedded from frontend/public/favicon.svg so the panel needs no exposed extension resources. */
-        background: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%0A%20%20%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%23059669%22%2F%3E%0A%20%20%3Cg%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%223.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%0A%20%20%20%20%3Cpath%20d%3D%22M8%2024%2015%208h2l4%209%22%2F%3E%0A%20%20%20%20%3Cpath%20d%3D%22M12%2019h13m-4-4%204%204-4%204%22%2F%3E%0A%20%20%3C%2Fg%3E%0A%3C%2Fsvg%3E%0A") center / contain no-repeat; }
-      .t { flex: 1; min-width: 0; }
-      .t b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .t small { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .icon { border: 0; background: transparent; color: var(--muted); width: 28px; height: 28px; border-radius: 8px;
-        font-size: 18px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
-      .icon:hover { background: var(--soft); color: var(--fg); }
-      .hero { padding: 0 14px 12px; }
-      .hero strong { display: block; font-size: 15px; }
-      .bar { height: 6px; border-radius: 99px; background: var(--soft); margin: 8px 0 4px; overflow: hidden; }
-      .bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .3s; }
-      .bar.full i { background: var(--good); }
-      .meta { color: var(--muted); font-size: 12px; }
-      .body { flex: 1 1 auto; overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
-      .steps { list-style: none; margin: 2px 0 6px; padding: 0; }
-      .steps li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 4px; }
-      .dot { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line);
-        display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--muted); margin-top: 1px; }
-      .steps li.done .dot { border-color: var(--good); background: var(--good); color: var(--bg); }
-      .steps li.done .lbl { color: var(--muted); text-decoration: line-through; }
-      .steps li.now .dot { border-color: var(--accent); color: var(--accent); }
-      .steps li.now .lbl { font-weight: 600; }
-      .lbl { flex: 1; }
-      .steps .extra { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
-      .sec { display: flex; align-items: center; gap: 6px; width: 100%; margin: 12px 0 6px; padding: 4px; border: 0;
-        background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600;
-        text-transform: uppercase; letter-spacing: .05em; cursor: pointer; border-radius: 6px; }
-      .sec:hover { color: var(--fg); }
-      .sec .n { background: var(--soft); color: var(--fg); border-radius: 99px; padding: 0 7px; font-size: 11px; }
-      .sec .chev { margin-left: auto; transition: transform .15s; }
-      .sec.closed .chev { transform: rotate(-90deg); }
-      .row { padding: 9px 10px; border-radius: 10px; background: var(--soft); margin-bottom: 6px;
-        border-left: 3px solid transparent; }
-      .row.todo { border-left-color: var(--bad); }
-      .row.check { border-left-color: var(--warn); }
-      .row.ok { border-left-color: var(--good); }
-      .q { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: baseline; }
-      .q span:first-child { flex: 1; }
-      .v { margin-top: 2px; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-        overflow: hidden; cursor: pointer; }
-      .v.open { display: block; }
-      .why { margin-top: 2px; color: var(--bad); font-size: 13px; }
-      .chip { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 99px; background: var(--bg);
-        color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
-      .chip.check { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
-      .chip.ai { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
-      .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-      button.b { font: inherit; font-size: 12.5px; border-radius: 8px; padding: 5px 10px; border: 1px solid var(--line);
-        background: var(--bg); color: var(--fg); cursor: pointer; white-space: nowrap; }
-      button.b:hover:not(:disabled) { background: var(--hover); }
-      button.b:disabled { opacity: .6; cursor: default; }
-      button.b.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-      button.b.primary:hover { filter: brightness(1.08); background: var(--accent); }
-      button.b:disabled { opacity: .45; cursor: not-allowed; filter: none; }
-      button.b.ghost { border-color: transparent; background: transparent; color: var(--accent); padding: 5px 6px; }
-      button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-      .f { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
-      .f .grow { flex: 1; }
-      .alog { list-style: none; margin: 0; padding: 0; font-size: 13px; }
-      .alog li { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
-      .alog li:last-child { color: var(--fg); }
-      details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
-      .ask { margin: 4px 0 10px; padding: 12px; border-radius: 10px; background: var(--accent-soft); }
-      .ask textarea { width: 100%; box-sizing: border-box; margin: 8px 0; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
-      .msg { margin: 4px 0 8px; padding: 12px; border-radius: 10px; }
-      .msg.bad { background: var(--bad-soft); }
-      .msg.bad b { color: var(--bad); }
-      .msg.good { background: var(--good-soft); }
-      .msg.good b { color: var(--good); }
-      .msg p { margin: 4px 0 10px; }
-      .busy { display: flex; gap: 10px; align-items: center; padding: 18px 14px; border-top: 1px solid var(--line); color: var(--muted); }
-      .spin { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line);
-        border-top-color: var(--accent); animation: spin .8s linear infinite; }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      .toast { margin: 0 12px 10px; padding: 8px 10px; border-radius: 8px; background: var(--fg); color: var(--bg);
-        font-size: 13px; animation: in .15s ease-out; }
-      .empty { color: var(--muted); padding: 6px 4px; }
-      .tabs { display: flex; gap: 4px; margin: 0 12px 10px; padding: 3px; border-radius: 10px; background: var(--soft); }
-      .tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0;
-        border-radius: 8px; padding: 6px 8px; background: transparent; color: var(--muted); font: inherit;
-        font-size: 13px; font-weight: 600; cursor: pointer; }
-      .tabs button[aria-selected="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
-      .tabs .n { background: var(--bad-soft); color: var(--bad); border-radius: 99px; padding: 0 7px; font-size: 11px; }
-      .chat { display: flex; flex-direction: column; gap: 8px; min-height: 140px; }
-      .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
-      .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
-      .bubble.assistant { align-self: flex-start; background: var(--soft); border-bottom-left-radius: 4px; }
-      .bubble .filled { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; color: var(--muted); font-size: 12px; }
-      .bubble .filled .chip { background: var(--good-soft); color: var(--good); border-color: transparent; }
-      .bubble .warn { margin-top: 4px; color: var(--bad); font-size: 12px; }
-      .quick { display: flex; flex-wrap: wrap; gap: 6px; }
-      .quick button { font: inherit; font-size: 12.5px; border-radius: 99px; padding: 4px 11px; cursor: pointer;
-        border: 1px solid var(--accent); color: var(--accent); background: var(--bg); }
-      .quick button:hover:not(:disabled) { background: var(--accent-soft); }
-      .quick button:disabled { opacity: .6; cursor: default; }
-      .thinking { align-self: flex-start; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
-      .thinking .spin { width: 14px; height: 14px; }
-      .composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--line); }
-      .composer textarea { flex: 1; min-height: 38px; max-height: 120px; resize: none; font: inherit; font-size: 13.5px;
-        padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
-      .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-      .composer .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
-      .pill { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; display: flex; align-items: center; gap: 8px;
-        padding: 6px 14px 6px 6px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-        box-shadow: 0 8px 24px rgba(0,0,0,.18); cursor: pointer; font: inherit; font-weight: 600; }
-      .pill.enter { animation: in .15s ease-out; }
-      .pill .mark { width: 26px; height: 26px; }
-      .pill .badge { background: #dc2626; color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
-      .pill .badge.ok { background: #16a34a; }
-    `;
-
-    function el(tag, attrs = {}, ...children) {
-      const node = document.createElement(tag);
-      for (const [k, v] of Object.entries(attrs)) {
-        if (v == null || v === false) continue;
-        if (k === "onclick") node.addEventListener("click", (e) => { e.stopPropagation(); v(e); });
-        else if (k === "class") node.className = v;
-        else if (k === "style") node.style.cssText = v;
-        else node.setAttribute(k, v === true ? "" : v);
-      }
-      for (const c of children.flat(Infinity)) if (c != null && c !== false) node.append(c);
-      return node;
-    }
-
-    const btn = (label, onclick, cls = "", attrs = {}) => el("button", { class: `b ${cls}`, type: "button", onclick, ...attrs }, label);
-
-    function ensure() {
-      if (host?.isConnected) return;
-      host = document.createElement("jobhunt-autofill-panel");
-      root = host.attachShadow({ mode: "closed" });
-      document.documentElement.append(host);
-    }
-
-    function focusField(field) {
-      const target = outlineTarget(field);
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
-      if (field.kind === "text" || field.kind === "select") field.el.focus({ preventScroll: true });
-      target.animate?.(
-        [{ boxShadow: "0 0 0 0 rgba(79,70,229,.6)" }, { boxShadow: "0 0 0 14px rgba(79,70,229,0)" }],
-        { duration: 900, iterations: 2, delay: 250 },
-      );
-    }
-
-    function downloadResume() {
-      if (!state?.resume) return;
-      const url = URL.createObjectURL(state.resume);
-      const a = el("a", { href: url, download: state.resume.name });
-      document.body.append(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      toast(`Saved ${state.resume.name}. Now click "Add file" on the form and pick it.`);
-    }
-
-    function toast(text) {
-      view.toast = text;
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { view.toast = null; render(); }, 5000);
-      render();
-    }
-
-    function setMinimized(value) {
-      if (value) view.countdown?.cancel(); // never submit from a panel the user can't see
-      view.minimized = value;
-      chrome.runtime.sendMessage({ type: "panelPreference", minimized: value }).catch(() => {});
-      render();
-    }
-
-    function header(title, subtitle) {
-      return el("div", { class: "h" },
-        el("div", { class: "mark", "aria-hidden": "true" }),
-        el("div", { class: "t" }, el("b", { title }, title), subtitle ? el("small", { title: subtitle }, subtitle) : null),
-        el("button", { class: "icon", type: "button", title: "Minimise (Esc)", "aria-label": "Minimise", onclick: () => setMinimized(true) }, "–"),
-        el("button", { class: "icon", type: "button", title: "Close", "aria-label": "Close", onclick: () => { view.countdown?.cancel(); host.remove(); } }, "×"),
-      );
-    }
-
-    function chips(r) {
-      const source = P.sourceLabel(r.source);
-      return [
-        source ? el("span", { class: `chip ${r.source === "generated" ? "ai" : ""}` }, source) : null,
-        r.needsReview && !r.reviewed ? el("span", { class: "chip check" }, "Check") : null,
-      ];
-    }
-
-    function valueLine(r) {
-      if (!r.value) return null;
-      const node = el("div", { class: `v ${view.expanded.has(r) ? "open" : ""}`, title: "Click to expand" }, r.value);
-      node.addEventListener("click", () => {
-        view.expanded.has(r) ? view.expanded.delete(r) : view.expanded.add(r);
-        render();
-      });
-      return node;
-    }
-
-    function todoRow(r) {
-      const k = r.field.kind;
-      return el("div", { class: "row todo" },
-        el("div", { class: "q" }, el("span", {}, r.field.label || "(question without a label)")),
-        el("div", { class: "why" }, r.reason),
-        el("div", { class: "acts" },
-          btn("Go to field →", () => focusField(r.field), "primary"),
-          k === "text" ? btn(r.drafting ? "Drafting…" : "✨ Draft with AI", () => draftOne(r), "", { disabled: r.drafting, title: "Uses AI credits" }) : null,
-          r.suggestion ? btn("Copy answer", () => {
-            navigator.clipboard.writeText(r.suggestion).then(() => toast("Answer copied"), () => toast(r.suggestion));
-          }) : null,
-          k === "picker" && state.resume ? btn("⬇ Download CV", downloadResume) : null,
-          ["checkbox", "picker", "dropdown", "file"].includes(k)
-            ? btn("✓ Done", () => { Object.assign(r, { status: "done", manual: true }); outline(); render(); }, "ghost")
-            : null,
-        ),
-      );
-    }
-
-    function checkRow(r) {
-      return el("div", { class: "row check" },
-        el("div", { class: "q" }, el("span", {}, r.field.label), ...chips(r)),
-        valueLine(r),
-        el("div", { class: "acts" },
-          btn("Go to field →", () => focusField(r.field)),
-          btn("✓ Looks good", () => { r.reviewed = true; outline(); render(); }, "ghost"),
-        ),
-      );
-    }
-
-    function optionalRow(r) {
-      return el("div", { class: "row" },
-        el("div", { class: "q" }, el("span", {}, r.field.label || "(question without a label)"), el("span", { class: "chip" }, "Optional")),
-        el("div", { class: "acts" },
-          btn("Go to field →", () => focusField(r.field)),
-          r.field.kind === "text" ? btn(r.drafting ? "Drafting…" : "✨ Draft with AI", () => draftOne(r), "", { disabled: r.drafting, title: "Uses AI credits" }) : null,
-        ),
-      );
-    }
-
-    function okRow(r) {
-      const node = el("div", { class: "row ok", style: "cursor:pointer", title: "Show on the page" },
-        el("div", { class: "q" }, el("span", {}, r.field.label || "(question without a label)"), ...chips(r)),
-        valueLine(r),
-      );
-      node.addEventListener("click", () => focusField(r.field));
-      return node;
-    }
-
-    function section(key, label, rows, make) {
-      if (!rows.length) return null;
-      const open = view.open[key];
-      return [
-        el("button", {
-          class: `sec ${open ? "" : "closed"}`, type: "button", "aria-expanded": String(open),
-          onclick: () => { view.open[key] = !open; render(); },
-        }, label, el("span", { class: "n" }, String(rows.length)), el("span", { class: "chev" }, "▾")),
-        open ? rows.map(make) : null,
-      ];
-    }
-
-    function stepsList(summary, results) {
-      const firstOpen = summary.steps.find((s) => s.remaining > 0)?.id;
-      const hasUploadTodo = results.some((r) => r.status === "unresolved" && (r.field.kind === "picker" || r.field.kind === "file"));
-      return el("ol", { class: "steps", "aria-label": "Next steps" },
-        summary.steps.map((s, i) => {
-          const done = s.remaining === 0;
-          let extra = null;
-          if (s.id === "upload" && hasUploadTodo && state.resume) {
-            extra = el("div", { class: "extra" }, btn("⬇ Download CV", downloadResume), el("span", { class: "meta" }, "then Add file on the form"));
-          }
-          if (s.id === "submit" && !done && state.appId != null) {
-            extra = el("div", { class: "extra" },
-              view.confirmSubmit
-                ? [
-                    el("span", { class: "meta" }, "Did you submit it?"),
-                    btn("Yes, I submitted it", () => { view.confirmSubmit = false; void markSubmitted("marked from the extension panel"); }, "primary"),
-                    btn("Not yet", () => { view.confirmSubmit = false; render(); }, "ghost"),
-                  ]
-                : btn("I already submitted it", () => { view.confirmSubmit = true; render(); }, "ghost"),
-            );
-          }
-          return el("li", { class: done ? "done" : s.id === firstOpen ? "now" : "" },
-            el("span", { class: "dot", "aria-hidden": "true" }, done ? "✓" : String(i + 1)),
-            el("div", { class: "lbl" }, s.label, extra),
-          );
-        }),
-      );
-    }
-
-    const AGENT_HEADLINE = {
-      starting: "Starting the agent…",
-      running: "Working through the form…",
-      waiting: "Needs you",
-      paused: "Paused",
-      ready: "Ready for your review",
-      failed: "The agent stopped",
-      stopped: "Stopped",
-    };
-
-    function agentQuestion(q) {
-      if (q.kind === "question") {
-        const input = el("textarea", { rows: "2", "aria-label": "Your answer", placeholder: "Your answer" });
-        input.value = view.agentDraft;
-        input.addEventListener("input", () => { view.agentDraft = input.value; });
-        input.addEventListener("keydown", (e) => {
-          e.stopPropagation(); // keep the job site's shortcuts out of the answer box
-          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void agentControl("reply", input.value); }
-        });
-        queueMicrotask(() => input.focus({ preventScroll: true }));
-        return el("div", { class: "ask", role: "alert" },
-          el("b", {}, q.text), input,
-          el("div", { class: "acts" },
-            btn("Answer", () => void agentControl("reply", input.value), "primary"),
-            btn("I'll fill it on the page", () => void agentControl("skip"), "ghost")));
-      }
-      return el("div", { class: "ask", role: "alert" },
-        el("b", {}, q.kind === "blocker" ? "Your turn on the page" : "One click from you"),
-        el("p", {}, q.text),
-        btn("Continue", () => void agentControl("resume"), "primary"));
-    }
-
-    const AGENT_LIVE = ["starting", "running", "waiting", "paused"];
-    const agentLive = () => Boolean(agent && AGENT_LIVE.includes(agent.status));
-    const AGENT_TITLE = "Works through the whole form in this tab, step by step, and asks you when it needs something. It never submits. Chrome shows a \"started debugging\" bar while it works.";
-
-    function agentHero() {
-      return el("div", { class: "hero" },
-        el("strong", {}, AGENT_HEADLINE[agent.status] ?? agent.status),
-        el("div", { class: "meta" }, agentLive() ? "The agent is filling this form. You still submit." : "Ask me below to change anything, then submit."));
-    }
-
-    /** The agent's question, result and step log; finished runs fold the log away under the chat. */
-    function agentDetails() {
-      const nodes = [];
-      if (agent.status === "waiting" && agent.question) nodes.push(agentQuestion(agent.question));
-      if (agent.status === "ready") {
-        nodes.push(el("div", { class: "msg good" }, el("b", {}, "Review the form, then submit it yourself"),
-          el("p", {}, agent.unresolved?.length ? `Still open: ${agent.unresolved.join("; ")}` : "Every question I could find has an answer. Check the ones marked for review.")));
-      }
-      if (agent.status === "failed" && agent.message) nodes.push(el("div", { class: "msg bad", role: "alert" }, el("b", {}, "Stopped"), el("p", {}, agent.message)));
-      const log = el("ul", { class: "alog", "aria-live": "polite" });
-      for (const line of (agent.log ?? []).slice(-14)) log.append(el("li", {}, line));
-      nodes.push(agentLive() ? log : el("details", {}, el("summary", {}, "What the agent did"), log));
-      const review = (agent.filled ?? []).filter((f) => f.needs_review);
-      if (review.length) {
-        nodes.push(el("div", { class: "filled" }, "Double-check:", review.map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label.length > 40 ? `${f.label.slice(0, 40)}…` : f.label))));
-      }
-      return nodes;
-    }
-
-    const agentButton = (kind = "") => btn(agent ? "Run the agent again" : "Fill with the agent", () => void startAgent(), kind, { title: AGENT_TITLE });
-
-    function agentFooter() {
-      if (!agentLive()) return el("div", { class: "f" }, el("span", { class: "grow" }), agentButton("primary"));
-      return el("div", { class: "f" },
-        agent.status === "paused"
-          ? btn("Resume", () => void agentControl("resume"), "primary")
-          : btn("Pause", () => void agentControl("pause"), ""),
-        el("span", { class: "grow" }),
-        btn("Stop and take over", () => void agentControl("stop"), "ghost"));
-    }
-
-    function tabsBar(summary) {
-      const tab = (id, label, badge) => el("button", {
-        type: "button", role: "tab", "aria-selected": String(view.tab === id),
-        onclick: () => { view.tab = id; render(); },
-      }, label, badge ? el("span", { class: "n", "aria-label": `${badge} to do` }, String(badge)) : null);
-      return el("div", { class: "tabs", role: "tablist", "aria-label": "ApplyShortly panel" },
-        tab("assistant", "Assistant"),
-        tab("form", "Form", summary.todo),
-      );
-    }
-
-    function chatView(results) {
-      const lines = chat.lines.length ? chat.lines : [{ role: "assistant", greeting: true, ...P.assistantGreeting(results) }];
-      const log = el("div", { class: "chat", "aria-live": "polite" });
-      lines.forEach((line, i) => {
-        log.append(el("div", { class: `bubble ${line.role}` },
-          line.text,
-          line.filled?.length ? el("div", { class: "filled" }, "Filled:", line.filled.map((f) => el("span", { class: "chip", title: f }, f.length > 40 ? `${f.slice(0, 40)}…` : f))) : null,
-          line.warnings?.map((w) => el("div", { class: "warn" }, w)),
-        ));
-        if (i === lines.length - 1 && line.role === "assistant" && line.choices?.length) {
-          log.append(el("div", { class: "quick", role: "group", "aria-label": "Quick replies" },
-            line.choices.map((c) => el("button", { type: "button", disabled: chat.pending, onclick: () => void askAssistant(c) }, c))));
-        }
-      });
-      if (chat.pending) log.append(el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), "Thinking…"));
-      return log;
-    }
-
-    function composer() {
-      const input = el("textarea", {
-        class: "composer-input", rows: "1", "aria-label": "Message the assistant",
-        placeholder: "Type your answer, or ask to change one…",
-      });
-      input.value = chat.draft;
-      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
-      input.addEventListener("input", () => { chat.draft = input.value; grow(); });
-      input.addEventListener("keydown", (e) => {
-        e.stopPropagation(); // keep the job site's own shortcuts out of the chat box
-        if (e.key === "Escape") setMinimized(true);
-        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void askAssistant(input.value); }
-      });
-      queueMicrotask(grow);
-      return el("div", { class: "composer" },
-        el("div", { style: "flex:1;display:flex;flex-direction:column" }, input,
-          el("small", { class: "hint" }, "Fills the form for you to review. Uses AI credits.")),
-        btn("Send", () => void askAssistant(input.value), "primary", { disabled: chat.pending, "aria-label": "Send" }),
-      );
-    }
-
-    // The stylesheet stays in place between renders; only the content is swapped, so nothing
-    // restyles or flashes when the user changes tabs.
-    const styleEl = el("style", {}, css);
-    function mount(wrap) {
-      if (!root.contains(styleEl)) root.replaceChildren(styleEl);
-      const old = root.querySelector(".wrap");
-      if (old) old.replaceWith(wrap);
-      else root.append(wrap);
-    }
-
-    function render() {
-      ensure();
-      // Re-rendering replaces the panel; keep the chat box focused while the user is typing.
-      const typing = root.activeElement?.classList?.contains("composer-input") ? root.activeElement.selectionStart : null;
-      const prevScroll = root.querySelector(".body")?.scrollTop ?? 0;
-      const app = state?.ctx?.app;
-      const results = state?.results ?? [];
-      const summary = P.summarize(results, { submitted: submittedReported });
-      const title = app?.title || document.title || "ApplyShortly autofill";
-      const subtitle = [app?.company_name, state && state.appId == null ? "Not tracked in ApplyShortly" : null]
-        .filter(Boolean).join(" · ");
-
-      const wrap = el("div", { class: "wrap" });
-
-      if (view.minimized) {
-        const badge = submittedReported ? "Submitted ✓" : summary.todo ? `${summary.todo} to do` : "All set";
-        wrap.append(el("button", {
-          class: root.querySelector(".pill") ? "pill" : "pill enter", type: "button", title: "Open ApplyShortly autofill",
-          onclick: () => setMinimized(false),
-        }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
-          view.busy ? el("span", { class: "spin" }) : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
-        mount(wrap);
-        return;
-      }
-
-      // Slide in only when the panel appears, not on every re-render (tab switches, typing).
-      const entering = !root.querySelector(".p");
-      const p = el("div", { class: entering ? "p enter" : "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
-      p.addEventListener("keydown", (e) => { if (e.key === "Escape") setMinimized(true); });
-      p.append(header(title, subtitle));
-
-      if (view.busy) {
-        p.append(el("div", { class: "busy", role: "status" }, el("span", { class: "spin" }), view.busy));
-      } else if (view.error) {
-        const e = view.error;
-        const retry = (kind) => btn("Try again", () => { view.error = null; void run(state?.appId ?? retryAppId); }, kind);
-        const action = {
-          settings: btn("Open settings", () => void send({ type: "openOptions" }), "primary"),
-          reload: btn("Reload page", () => location.reload(), "primary"),
-          retry: retry("primary"),
-          profile: el("div", { class: "acts" }, btn("Set up profile", () => void send({ type: "openProfile" }).catch(() => {}), "primary"), retry("")),
-        }[e.action];
-        p.append(el("div", { class: "body" },
-          el("div", { class: "msg bad", role: "alert" }, el("b", {}, e.title), el("p", {}, e.detail), action)));
-      } else if (agent && !state?.ctx) {
-        // Started from the popup before anything was filled: the agent's progress on its own.
-        p.append(agentHero(), el("div", { class: "body" }, ...agentDetails()), agentFooter());
-      } else if (state?.ctx || submittedReported) {
-        if (!submittedReported) view.tab ??= agent || P.assistantFirst(results) ? "assistant" : "form";
-        const assistant = !submittedReported && view.tab === "assistant";
-        const withAgent = assistant && Boolean(agent);
-        const working = withAgent && agentLive();
-        const full = submittedReported || summary.progress >= 1;
-        if (withAgent) p.append(agentHero());
-        else p.append(el("div", { class: "hero" },
-          el("strong", {}, summary.headline),
-          el("div", { class: `bar ${full ? "full" : ""}`, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(summary.total), "aria-valuenow": String(summary.answered) },
-            el("i", { style: `width:${full ? 100 : Math.round(summary.progress * 100)}%` })),
-          el("div", { class: "meta" }, submittedReported ? "Tracked in ApplyShortly" : summary.total ? `${summary.answered} of ${summary.total} answered` : "Try again once the form has loaded"),
-        ));
-
-        if (!submittedReported) p.append(tabsBar(summary));
-        const body = el("div", { class: "body" });
-        if (assistant) {
-          if (withAgent) body.append(...agentDetails());
-          if (!working) body.append(chatView(results));
-        } else if (submittedReported) {
-          body.append(el("div", { class: "msg good" },
-            el("b", {}, "Saved in ApplyShortly"),
-            el("p", {}, state.appId != null ? "This application is now marked Submitted. Good luck!" : "Done."),
-            state.ctx?.baseUrl ? btn("Open ApplyShortly", () => window.open(`${state.ctx.baseUrl}/apply-queue`, "_blank"), "primary") : null,
-          ));
-        } else {
-          body.append(stepsList(summary, results));
-          const todo = results.filter((r) => r.status === "unresolved");
-          const check = results.filter((r) => r.status === "filled" && r.needsReview && !r.reviewed);
-          const optional = results.filter((r) => r.status === "optional");
-          const ok = results.filter((r) => !todo.includes(r) && !check.includes(r) && !optional.includes(r));
-          if (!results.length) body.append(el("div", { class: "empty" }, "No form fields found yet. If the form is still loading, click Fill again."));
-          body.append(
-            el("div", {}, section("todo", "Needs you", todo, todoRow)),
-            el("div", {}, section("check", "Double-check", check, checkRow)),
-            el("div", {}, section("optional", "Optional", optional, optionalRow)),
-            el("div", {}, section("filled", "Filled", ok, okRow)),
-          );
-        }
-        p.append(body);
-        const newLines = working || (assistant && chat.lines.length + Number(chat.pending) !== view.chatSeen);
-        if (assistant) view.chatSeen = chat.lines.length + Number(chat.pending);
-        queueMicrotask(() => { body.scrollTop = newLines ? body.scrollHeight : prevScroll; });
-
-        if (view.toast) p.append(el("div", { class: "toast", role: "status" }, view.toast));
-
-        // Submit is on both tabs (not while the agent is working). It runs the guarded flow: refuses and says why unless every required
-        // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
-        const submit = () => {
-          const blockers = P.autoApplyBlockers(results, state.ctx.app);
-          // Enabled only when every required answer is in; the tooltip says what's missing.
-          return btn("Submit", () => void autoApply(), "primary", {
-            disabled: blockers.length > 0,
-            title: blockers.length
-              ? `Not ready: ${blockers.join(". ")}.`
-              : `Clicks the form's Submit button for you after a ${AUTO_APPLY_DELAY_S}-second countdown.`,
-          });
-        };
-        const countdown = () => el("div", { class: "f", role: "alert" },
-          el("span", { class: "grow" }, `Submitting in ${view.countdown.left}s…`),
-          btn("Cancel", view.countdown.cancel, "primary"),
-        );
-        if (working) {
-          p.append(agentFooter());
-        } else if (assistant) {
-          if (view.countdown) p.append(countdown());
-          p.append(composer());
-          if (!view.countdown && !submittedReported) p.append(el("div", { class: "f" }, agentButton(), el("span", { class: "grow" }), submit()));
-        } else if (view.countdown) {
-          p.append(countdown());
-        } else if (!submittedReported) {
-          const draftable = results.filter((r) => r.status === "unresolved" && r.field.kind === "text").length;
-          p.append(el("div", { class: "f" },
-            btn("↻ Fill again", () => run(state.appId, { allowGenerate: false }), "", { title: "Fill fields that are still empty. Your edits are kept." }),
-            el("span", { class: "grow" }),
-            draftable ? btn(`✨ Draft ${draftable} with AI`, () => run(state.appId, { allowGenerate: true }), "primary", { title: "Uses AI credits. Drafts are marked Check." }) : null,
-            submit(),
-          ));
-        }
-      }
-
-      wrap.append(p);
-      mount(wrap);
-      if (typing !== null) {
-        const input = root.querySelector(".composer-input");
-        input?.focus({ preventScroll: true });
-        input?.setSelectionRange(typing, typing);
-      }
-    }
-
-    let retryAppId = null;
-    return {
-      render,
-      toast,
-      busy(text) { Object.assign(view, { busy: text, error: null }); render(); },
-      idle() { view.busy = null; render(); },
-      fail(err) {
-        view.busy = null;
-        view.error = P.friendlyError(err.message, err.status, state?.ctx?.baseUrl, err.code);
-        render();
-      },
-      setRetry(appId) { retryAppId = appId; },
-      /** Shows the agent's latest update on the Assistant tab. */
-      agent(show) {
-        if (show) Object.assign(view, { tab: "assistant", minimized: false, busy: null, error: null });
-        render();
-      },
-      clearAgentDraft() { view.agentDraft = ""; },
-      /** Shows the Form tab with a message, e.g. why Auto apply didn't submit. */
-      stop(text) {
-        Object.assign(view, { tab: "form", minimized: false });
-        toast(text);
-      },
-      /** Counts down before Auto apply submits; resolves false if the user cancels. */
-      countdown(seconds) {
-        return new Promise((resolve) => {
-          const c = { left: seconds };
-          const finish = (go) => {
-            if (view.countdown !== c) return;
-            clearInterval(c.timer);
-            view.countdown = null;
-            render();
-            resolve(go);
-          };
-          c.cancel = () => finish(false);
-          c.timer = setInterval(() => (--c.left <= 0 ? finish(true) : render()), 1000);
-          Object.assign(view, { countdown: c, tab: "form", minimized: false });
-          render();
-        });
-      },
-      focus: focusField,
-      async restore({ show = false } = {}) {
-        if (show) view.minimized = false;
-        else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);
-      },
-    };
-  })();
+  // What the panel (panel-view.js) reads and calls. It reads state through these getters and
+  // changes it only through the actions.
+  const ctl = {
+    get state() { return state; },
+    get agent() { return agent; },
+    get chat() { return chat; },
+    get submittedReported() { return submittedReported; },
+    AUTO_APPLY_DELAY_S,
+    agentControl, askAssistant, autoApply, markSubmitted, outlineTarget, run, send,
+  };
+  const panel = globalThis.JobHuntPanelView.create(ctl);
 
   // ------------------------------------------------------------------ lifecycle
 
@@ -1196,11 +712,15 @@
   );
 
   async function startAgent() {
+    agent = { status: "starting", log: [], appId: state?.appId ?? null };
+    panel.agent(true);
     try {
-      agent = await send({ type: "agentStart", appId: state?.appId ?? null }).then(() => ({ status: "starting", log: [] }));
-      panel.agent(true);
+      await send({ type: "agentStart", appId: state?.appId ?? null });
     } catch (err) {
-      panel.fail(err);
+      agent = null;
+      const e = P.friendlyError(err.message, err.status, state?.ctx?.baseUrl, err.code);
+      chat.lines.push({ role: "assistant", local: true, error: true, text: `I couldn't click through this form: ${e.detail || e.title} You can finish it on the page; I'll keep helping here.` });
+      panel.agent(true);
     }
   }
 
@@ -1208,24 +728,47 @@
     if (action === "reply" && !String(text ?? "").trim()) return;
     try {
       await send({ type: "agentControl", action, text });
-      if (action === "reply" || action === "skip") panel.clearAgentDraft();
     } catch (err) {
       panel.toast(err.message);
     }
   }
 
+  /** Drafts every open question with AI (the switch was just turned on), then says what it did. */
+  async function draftOpen() {
+    const before = new Set(state.results.filter((r) => r.status === "filled").map((r) => r.field.el));
+    if (!(await run(state.appId, { allowGenerate: true }))) return;
+    const drafted = state.results.filter((r) => r.status === "filled" && !before.has(r.field.el)).map((r) => r.field.label || "answer");
+    const next = P.nextPrompt(state.results);
+    const lead = drafted.length
+      ? `I drafted ${drafted.length === 1 ? "an answer" : `${drafted.length} answers`} with AI. Read ${drafted.length === 1 ? "it" : "them"} over in the form.`
+      : "I couldn't draft any of the open questions.";
+    chat.lines.push({ role: "assistant", local: true, filled: drafted, ...followedBy(lead, next) });
+    panel.idle();
+  }
+
+  // The popup's "Let AI answer questions it can't find" takes effect at once, also on an open panel.
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !("aiDrafts" in changes) || !state?.ctx) return;
+    state.ctx.aiDrafts = changes.aiDrafts.newValue !== false;
+    if (state.ctx.aiDrafts && !agentLive() && !chat.pending && P.openQuestions(state.results).length) void draftOpen();
+  });
+
   async function start(appId, opts = {}) {
     panel.setRetry(appId);
     await panel.restore(opts);
-    if ((await run(appId)) && opts.autoSubmit) await autoApply();
+    if (!(await run(appId)) || agentLive()) return;
+    // A page that needs clicking through (an Apply pop-up, Next steps, a form in a frame): carry on.
+    const reason = handedOff ? null : P.navigationNeeded(pageShape());
+    if (reason) return handOff(reason, opts);
+    if (opts.autoSubmit) await autoApply();
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id) return;
     if (msg?.type === "agentUpdate") {
-      const first = !agent;
+      const previous = agent;
       agent = msg;
-      panel.agent(first || msg.status === "waiting" || msg.status === "ready" || msg.status === "failed");
+      void agentChanged(previous, msg);
       sendResponse({ ok: true });
       return;
     }
@@ -1247,8 +790,12 @@
     if (hello.mode === "idle") return;
     if (hello.mode === "agent") {
       // A new page of a form the agent is filling: show its progress, don't autofill over it.
+      handedOff = true;
       agent = await send({ type: "agentStatus" }).catch(() => null);
-      if (agent) await panel.restore({ show: true }).then(() => panel.agent(true));
+      if (!agent) return;
+      await panel.restore({ show: true });
+      chat.lines.push({ role: "assistant", local: true, text: "On to the next page of the form." });
+      await agentChanged(null, agent);
       return;
     }
     if (hello.mode === "continue") {

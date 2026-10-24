@@ -148,6 +148,61 @@
   const SHOW_REPLY = "Show me";
   const DONE_REPLY = "I've done it";
   const LOCAL_REPLIES = [DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY];
+  const DRAFT_ASK = /^(?:(?:please|can you|could you|pls)\s+)?(?:draft|write)(?:\s+(?:it|one|this|that|something|an? answer|the answer|an? draft))?(?:\s+for me)?(?:\s+please)?[\s.!?]*$/i;
+  /** "Draft it for me", tapped or typed in the user's own words ("draft one", "write it for me"). */
+  const isDraftRequest = (message) => DRAFT_ASK.test(String(message ?? "").trim());
+
+  // The chat is the one agent: it fills what the profile covers, and when the page needs clicking
+  // through (an Apply pop-up, Next steps, a form in a frame) it carries on driving the tab itself.
+  const ON_PAGE_REPLY = "I'll fill it on the page";
+  const CONTINUE_REPLY = "Continue";
+  // "do the rest", "go to the next page", "continue the form": the user asks it to carry on.
+  const NAVIGATE_ASK = /^(?:please\s+)?(?:(?:go|move|click)(?:\s+on)?(?:\s+to)?\s+(?:the\s+)?next(?:\s+(?:page|step))?|next(?:\s+(?:page|step))|(?:do|fill|finish|complete)\s+the\s+rest(?:\s+of\s+(?:it|the form))?|continue(?:\s+(?:the|this)\s+form|\s+to\s+the\s+next\s+(?:page|step)))[\s.!]*$/i;
+  const isNavigateRequest = (message) => NAVIGATE_ASK.test(String(message ?? "").trim());
+
+  /**
+   * Why this page needs stepping through rather than filling in place, or null. `total` counts the
+   * fields found, `hasSubmit` whether the form's one Submit button is on screen, `hasNext` a visible
+   * Next/Continue button, `bigFrame` a large embedded frame (the form may be inside it).
+   */
+  function navigationNeeded({ total = 0, hasSubmit = false, hasNext = false, bigFrame = false } = {}) {
+    if (!total && !bigFrame) return "none";
+    if (bigFrame && total < 3) return "frame";
+    if (!hasSubmit && hasNext) return "steps";
+    return null;
+  }
+
+  const HANDOFF = {
+    none: "I can't see a form on this page yet, so I'll open it (it may sit behind an Apply button or in a pop-up) and fill it.",
+    frame: "The form is inside a frame, so I'll fill it from there.",
+    steps: "This form has more than one step. I'll go through them and fill each one.",
+    asked: "OK, I'll carry on through the form.",
+  };
+
+  /** What the chat says as it starts driving the tab. */
+  function handoffText(reason, { autoSubmit = false } = {}) {
+    return [
+      HANDOFF[reason] ?? HANDOFF.asked,
+      "I'll ask here when I need you. Chrome shows a “started debugging” bar while I click through, and it uses one apply run of credits.",
+      autoSubmit ? "Auto apply can't submit a form with several steps, so I'll stop before the end for you to check and submit." : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  /** The chat line for the agent waiting on the user: its question, or what to do on the page. */
+  function agentAsk(question) {
+    if (!question) return null;
+    if (question.kind === "question") {
+      const choices = (question.choices ?? []).slice(0, MAX_CHOICES);
+      const draft = !choices.length && draftable({ kind: "text", label: question.text });
+      return {
+        text: "",
+        question: { label: question.text, note: draft ? "Type your answer, or I can draft one." : undefined },
+        choices: [...choices, ...(draft ? [DRAFT_REPLY] : []), ON_PAGE_REPLY],
+        draftable: draft,
+      };
+    }
+    return { text: `${question.text} Tap Continue when it's done.`, choices: [CONTINUE_REPLY] };
+  }
 
   /** The optional question the assistant offers to help with, until it is answered or skipped. */
   const optionalTarget = (results) => results.find((r) => r.status === "optional" && canAssist(r) && !r.skipped) ?? null;
@@ -161,6 +216,18 @@
     return optionalTarget(results) ?? manualSteps(results)[0] ?? null;
   }
   const questionLabel = (r) => r.field.label || "Untitled question";
+
+  /**
+   * The value a chat reply gives the question the chat just asked (`row`), or null when it isn't a
+   * plain answer to it: one of its options, or any text for a free-text question. The panel writes
+   * it into the form itself, with no assistant call and no AI credit.
+   */
+  function directAnswer(row, message) {
+    if (!row || !["unresolved", "optional"].includes(row.status) || !canAssist(row) || LOCAL_REPLIES.includes(message) || isDraftRequest(message)) return null;
+    const options = (row.field.options ?? []).map((o) => String(o.text ?? "").trim()).filter(Boolean);
+    if (options.length) return options.find((o) => o.toLowerCase() === message.toLowerCase()) ?? null;
+    return row.field.kind === "text" ? message : null;
+  }
 
   /**
    * The fields sent to the assistant, keyed `f<index>` for this turn only, with what is on the
@@ -190,7 +257,7 @@
   const bare = (r) => short(questionLabel(r).replace(/[\s?:*]+$/, ""));
 
   // Personal facts only the user knows: never offered as an AI draft.
-  const PERSONAL = /\b(?:first|middle|last|given|family|full|legal|maiden|preferred) name\b|\bsurname\b|^\s*name\b|your name|date of birth|\bdob\b|^\s*age\b|gender|pronoun|nationality|citizenship|marital|aadhaa?r|\bpan (?:number|card|no)\b|passport|\bssn\b|(?:phone|mobile|contact|id|whatsapp) (?:number|no)\b|e-?mail address|^\s*e-?mail\b|^\s*(?:phone|mobile|address|city|country|state|location|website|linkedin|github)\b|(?:current|home|postal|permanent) (?:address|location|city)|pin ?code|zip ?code|postal code|salary|\bctc\b|expected compensation|notice period|authori[sz]ed to work|right to work|work permit|(?:visa|require|need|needs) sponsorship|\bvisa\b|criminal|convicted|disabilit|veteran|ethnicity|^\s*race\b|years of experience|(?:worked|employed) (?:for|at|with) us|previously (?:worked|employed)/i;
+  const PERSONAL = /\b(?:first|middle|last|given|family|full|legal|maiden|preferred) name\b|\bsurname\b|^\s*name\b|your name|date of birth|\bdob\b|^\s*age\b|gender|pronoun|nationality|citizenship|marital|aadhaa?r|\bpan (?:number|card|no)\b|passport|\bssn\b|(?:phone|mobile|contact|id|whatsapp) (?:number|no)\b|e-?mail address|^\s*e-?mail\b|^\s*(?:phone|mobile|address|city|country|state|location|website|linkedin|github)\b|(?:current|home|postal|permanent) (?:address|location|city)|pin ?code|zip ?code|postal code|salary|\bctc\b|expected compensation|notice period|authori[sz]ed to work|right to work|work permit|(?:visa|require|need|needs) sponsorship|\bvisa\b|criminal|convicted|disabilit|veteran|ethnicity|^\s*race\b|years of (?:\w+ )?experience|experience \(?in years|how many years|(?:how soon|when) can you (?:join|start)|joining date|start date|(?:worked|employed) (?:for|at|with) us|previously (?:worked|employed)/i;
 
   const OPEN_ENDED = /statement|cover letter|summary|\bbio\b|motivation|about (?:you|yourself)|describe|explain|tell us|\bwhy\b|additional information|comments?\b/i;
 
@@ -211,23 +278,46 @@
    * What the chat should bring up next once the questions it can answer are done: an optional
    * question, then each step only the user can do. Null when nothing is left.
    */
+  /** Long option lists (country codes, countries) show the ones matching the suggestion first. */
+  function likelyFirst(options, suggestion) {
+    const hint = String(suggestion ?? "").toLowerCase().trim();
+    if (!hint || options.length <= MAX_CHOICES) return options;
+    const hit = (o) => {
+      const t = o.toLowerCase();
+      return t === hint || hint.startsWith(t) || t.includes(hint);
+    };
+    return [...options.filter(hit), ...options.filter((o) => !hit(o))];
+  }
+
   function nextPrompt(results) {
     const open = openQuestions(results);
     if (open.length) {
       const first = open[0];
+      const all = likelyFirst((first.field.options ?? []).map((o) => o.text).filter(Boolean), first.suggestion);
+      const options = all.slice(0, MAX_CHOICES);
+      const draft = !options.length && draftable(first.field);
+      const required = open.some((r) => r.field.required);
+      // Worded like the web app's review chat: a short line, then the question as a card.
       return {
-        text: `${plural(open.length, "question")} ${open.length === 1 ? "needs" : "need"} your answer. Let's go one at a time. ${bare(first)}${first.field.required ? " (required)" : ""}?`,
-        choices: (first.field.options ?? []).map((o) => o.text).filter(Boolean).slice(0, MAX_CHOICES),
+        text: `${open.length === 1 ? "One question needs" : `${open.length} questions need`} your answer${required ? " before you can submit" : ""}.`,
+        question: {
+          label: `${bare(first)}?`,
+          step: first.field.required ? "Required" : undefined,
+          note: draft ? "Type your answer, or I can draft one." : all.length > MAX_CHOICES ? "Pick one, or type yours." : undefined,
+        },
+        choices: draft ? [DRAFT_REPLY] : options,
+        target: first,
       };
     }
     const optional = optionalTarget(results);
     if (optional) {
       const options = (optional.field.options ?? []).map((o) => o.text).filter(Boolean);
-      return options.length
+      const prompt = options.length
         ? { text: `Everything required is filled in. “${bare(optional)}” is optional: pick an answer, or leave it blank.`, choices: [...options.slice(0, MAX_CHOICES - 1), SKIP_REPLY] }
         : draftable(optional.field)
           ? { text: `Everything required is filled in. “${bare(optional)}” is optional, but a good answer helps. Want me to draft one, or tell me what to say?`, choices: [DRAFT_REPLY, SKIP_REPLY] }
           : { text: `Everything required is filled in. “${bare(optional)}” is optional: tell me what to put, or leave it blank.`, choices: [SKIP_REPLY] };
+      return { ...prompt, target: optional };
     }
     const steps = manualSteps(results);
     if (steps.length) {
@@ -243,24 +333,24 @@
   /** Opening message and quick replies, like the web app's review assistant. */
   function assistantGreeting(results) {
     return nextPrompt(results) ?? {
-      text: 'Want to change anything? Tell me, e.g. "set notice period to 60 days", and I\'ll update the form. Review it before you submit.',
+      text: 'Want to change anything? Tell me, e.g. "set notice period to 60 days", and I\'ll update the fields.',
       choices: [],
     };
   }
 
+  /** A line as the AI reads it: its text, then the question card it asks, if any. */
+  const lineText = (l) => [l.text, l.question?.label].filter((t) => t?.trim()).join(" ").trim();
+
   /** The conversation as the API takes it: no greeting or error lines, capped. */
   function chatHistory(lines) {
     return lines
-      .filter((l) => !l.greeting && !l.error && (l.role === "user" || l.role === "assistant") && l.text?.trim())
-      .map((l) => ({ role: l.role, text: l.text.trim().slice(0, MAX_TEXT) }))
+      .filter((l) => !l.greeting && !l.error && (l.role === "user" || l.role === "assistant") && lineText(l))
+      .map((l) => ({ role: l.role, text: lineText(l).slice(0, MAX_TEXT) }))
       .slice(-MAX_TURNS);
   }
 
-  /** Whether the Assistant tab should open first: there is a question it can help with. */
-  const assistantFirst = (results) => Boolean(nextPrompt(results));
-
   globalThis.JobHuntPanel = {
-    summarize, autoApplyBlockers, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory, assistantFirst,
-    nextPrompt, promptTarget, openQuestions, draftable, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
+    summarize, autoApplyBlockers, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
+    nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

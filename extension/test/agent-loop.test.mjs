@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
-import { Agent, execute, explain, observeTab } from "../src/agent/loop.js";
+import { Agent, execute, explain, observeTab, questionChoices } from "../src/agent/loop.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
 const FRAME = { frameId: "child", isTop: false, parentId: "top", sessionId: "oopif" };
@@ -39,6 +39,7 @@ class FakeDriver {
       case "matchOption": return { ok: true, ref: "opt", text: "Bengaluru, India" };
       case "attach": this.calls.push(["attach-file", args[0], args[2]]); return { ok: true, value: args[2] };
       case "state": return { checked: false };
+      case "shownChoices": return this.shown ?? [];
       default: throw new Error(`unexpected ${name}`);
     }
   }
@@ -165,4 +166,24 @@ test("Agent: a platform without the agent says so and records no failure", async
   // A real 404 from the handler keeps its own words.
   assert.equal(explain(new BridgeError(404, "Application not found")), "Application not found");
   assert.match(explain(new BridgeError(410, "gone")), /Run the agent again/);
+});
+
+test("questionChoices: radio groups, listed options, and a dropdown opened once to read its list", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([
+    { ref: "1", role: "radio", name: "Yes", group: "Relocate?" },
+    { ref: "2", role: "radio", name: "No", group: "Relocate?" },
+    { ref: "3", role: "combobox", name: "Gender", options: ["Male", "Female"] },
+    { ref: "4", role: "combobox", name: "First Name (salutation)", options: [] },
+    { ref: "5", role: "textbox", name: "Why us?" },
+  ]) });
+  driver.shown = ["Mr.", "Mrs.", "Ms."];
+  const { observation, refs, frames } = await observeTab(driver);
+  const ask = (ref) => questionChoices(driver, refs, frames, observation, { kind: "question", text: "?", ref });
+  assert.deepEqual(await ask("g0:0.1"), ["Yes", "No"]);
+  assert.deepEqual(await ask("0.3"), ["Male", "Female"]);
+  assert.deepEqual(driver.calls.filter((c) => c[0] === "click"), []);
+  assert.deepEqual(await ask("0.4"), ["Mr.", "Mrs.", "Ms."]);
+  assert.deepEqual(driver.calls.map((c) => c[0]), ["click", "press"]);
+  assert.deepEqual(await ask("0.5"), []);
+  assert.deepEqual(await ask(null), []);
 });

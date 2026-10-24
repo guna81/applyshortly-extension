@@ -43,7 +43,7 @@ const profile={full_name:'Alex Morgan',email:'alex.morgan@example.com',phone:'+1
 const handlers={hello:()=>({mode:'idle'}),context:()=>({profile,app:{title:'Software Engineer',company_name:'Northstar Labs'},aiDrafts:false}),resume:()=>null,report:()=>null,panelPreference:()=>false,suggest:()=>({answer:null,source:'none'}),assist:(msg)=>({reply:'Thanks, I set relocation to Yes.',updates:{[msg.fields.find(f=>f.kind==='radio').key]:'Yes'},warnings:[],done:false,choices:[]})};
 window.chrome={runtime:{id:'store-fixture',sendMessage:(msg,cb)=>{const response=Promise.resolve().then(()=>({ok:true,data:handlers[msg.type]?.(msg)}));return cb?void response.then(cb):response},onMessage:{addListener:fn=>{runPanel=fn}}}};
 </script>
-<script src="/fill.js"></script><script src="/panel-model.js"></script><script src="/content.js"></script>
+<script src="/fill.js"></script><script src="/panel-model.js"></script><script src="/panel-view.js"></script><script src="/content.js"></script>
 <script>runPanel({type:'run',appId:7},{id:'store-fixture'},()=>{});</script></html>
 """
 
@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             body, mime = PAGE.encode(), "text/html; charset=utf-8"
-        elif self.path in ("/fill.js", "/panel-model.js", "/content.js"):
+        elif self.path in ("/fill.js", "/panel-model.js", "/panel-view.js", "/content.js"):
             body = (ROOT / "extension/src" / self.path[1:]).read_bytes()
             mime = "text/javascript; charset=utf-8"
         else:

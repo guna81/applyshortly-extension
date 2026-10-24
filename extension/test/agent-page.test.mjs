@@ -126,11 +126,20 @@ test("actions: clickable refuses the final submit; native selects, dates and upl
     <label for="f">Resume</label><input id="f" type="file">
     <div id="drop" aria-label="Drop your CV here"></div>
     <button type="submit">Submit application</button>
-    <button type="button">Next</button>`);
+    <button type="button">Envoyer ma candidature</button>
+    <button type="button">Bewerbung absenden</button>
+    <button type="button">Next</button>
+    <button type="button">Weiter</button>`);
   const obs = observe();
   const ref = (name) => byName(obs, name).ref;
   assert.equal(A.clickable(ref("Submit application"), false), "Submitting is left to you.");
+  // Localized submit buttons are refused and reported as submit-like for the server's policy.
+  for (const name of ["Envoyer ma candidature", "Bewerbung absenden"]) {
+    assert.equal(A.clickable(ref(name), false), "Submitting is left to you.");
+    assert.equal(byName(obs, name).submit_like, true);
+  }
   assert.equal(A.clickable(ref("Next"), false), null);
+  assert.equal(A.clickable(ref("Weiter"), false), null);
   assert.equal(A.clickable("999"), "That element is gone from the page.");
 
   assert.deepEqual(plain(A.selectNative(ref("Country"), "japan")), { ok: true, native: true, value: "Japan" });
@@ -193,4 +202,18 @@ test("matchOption finds a plain list that appeared after noteShown, when nothing
   assert.equal(match.ok, true);
   assert.equal(match.text, "Mr.");
   assert.equal(doc.querySelector(`[data-applyshortly-ref="${match.ref}"]`).textContent, "Mr.");
+});
+
+test("observe: a closed combobox lists the options its listbox already holds, without -None-", () => {
+  const { observe, A } = page(`
+    <label id="g">Gender</label>
+    <div role="combobox" aria-labelledby="g" aria-haspopup="listbox" aria-controls="gender-list">-None-</div>
+    <div id="gender-list" role="listbox">
+      <div role="option">-None-</div><div role="option">Male</div><div role="option">Female</div>
+    </div>
+    <label id="t">Title</label><div role="combobox" aria-labelledby="t" aria-haspopup="listbox" aria-controls="later"></div>`);
+  const obs = observe();
+  assert.deepEqual(byName(obs, "Gender").options, ["Male", "Female"]);
+  assert.deepEqual(byName(obs, "Title").options, []);
+  assert.deepEqual(plain(A.shownChoices(byName(obs, "Gender").ref, false)), ["Male", "Female"]);
 });

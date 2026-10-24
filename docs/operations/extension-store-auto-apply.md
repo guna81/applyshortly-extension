@@ -21,7 +21,7 @@ Features
 - See fields that are filled, need input or need review.
 - Request optional AI drafts and use the on-page assistant.
 - Track supported applications in your ApplyShortly account.
-- Choose Auto apply (Submit in the panel) to click the employer website’s Submit button after a three-second countdown with Cancel. Closing or minimising the panel cancels it.
+- Choose Auto apply (Submit for me in the panel) to click the employer website’s Submit button after a three-second countdown with Cancel. Closing or minimising the panel cancels it.
 
 Auto apply checks detected required fields, browser-reported invalid fields, a single identifiable Submit button and tracked application status. It refuses when a tracked application was already sent or needs verification. Form support varies by website; custom controls, uploads, consent steps and embedded forms can need manual input. Checks do not guarantee correct answers or employer acceptance. Review AI drafts first: Auto apply can submit them as filled without separate approval of each draft. An attempted submission is not confirmed success.
 
@@ -66,7 +66,7 @@ Review against the actual v0.4.0 package before submitting.
 - **Summary (manifest description):** Fills job application forms from your ApplyShortly profile
   and answer bank, including multi-step forms with its agent. It submits only when you choose Auto
   apply.
-- **New permission, debugger:** Used only after the user chooses "Fill with the agent", on the tab
+- **New permission, debugger:** Used only after the user starts filling a form ("Fill this form", Auto apply or the shortcut) and the page needs stepping through (a pop-up, several steps or an embedded form), or the user asks the panel to "do the rest", on the tab
   they started it in, until it finishes or they stop it. It reads the application form in every
   frame of that tab (including employer forms embedded from another domain) and types and clicks
   with real input events so modern form frameworks accept the answers. It never submits the

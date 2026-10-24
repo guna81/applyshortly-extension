@@ -1,4 +1,4 @@
-// The autofill panel's Assistant tab, end to end in jsdom: fill.js + panel-model.js + content.js
+// The autofill panel's assistant, end to end in jsdom: fill.js + panel-model.js + panel-view.js + content.js
 // with a fake chrome runtime standing in for the background worker.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -47,7 +47,9 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
     sent.push(plain(msg));
     try { return { ok: true, data: await handlers[msg.type](msg) }; } catch (err) { return { ok: false, error: err.message, status: err.status, code: err.code }; }
   };
+  let onStorage;
   win.chrome = {
+    storage: { onChanged: { addListener: (fn) => { onStorage = fn; } } },
     runtime: {
       id: "fixture",
       lastError: undefined,
@@ -55,11 +57,11 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
       onMessage: { addListener: (fn) => { onMessage = fn; } },
     },
   };
-  for (const name of ["fill.js", "panel-model.js", "content.js"]) win.eval(src(name));
+  for (const name of ["fill.js", "panel-model.js", "panel-view.js", "content.js"]) win.eval(src(name));
   const shadow = () => win.document.querySelector("jobhunt-autofill-panel")?.shadowRoot;
   const start = (extra = {}) => onMessage({ type: "run", appId: 5, ...extra }, { id: "fixture" }, () => {});
   const message = (msg) => onMessage(msg, { id: "fixture" }, () => {});
-  return { win, sent, start, shadow, message };
+  return { win, sent, start, shadow, message, handlers, storage: (changes) => onStorage?.(changes, "local") };
 }
 
 async function until(check, label) {
@@ -71,33 +73,54 @@ async function until(check, label) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-test("the Assistant tab asks the open question, offers its options, and fills the answer", async () => {
-  const page = panelPage((msg) => ({ reply: "Thanks, I set relocation to Yes.", updates: { [msg.fields.find((f) => f.kind === "radio").key]: "Yes" }, warnings: [], done: false, choices: [] }));
+test("the assistant asks the open question, offers its options, and fills the answer without AI", async () => {
+  const page = panelPage(() => ({ reply: "Updated your name.", updates: {}, warnings: [], done: true, choices: [] }));
   page.start();
-  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
-  assert.deepEqual([...tabs].map((t) => t.textContent.replace(/\d+/, "").trim()), ["Assistant", "Form"]);
-  assert.equal(tabs[0].getAttribute("aria-selected"), "true"); // something needs the user
-
-  const greeting = page.shadow().querySelector(".bubble.assistant").textContent;
-  assert.match(greeting, /1 question needs your answer.*Willing to relocate \(required\)\?/);
+  const greeting = (await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting")).textContent;
+  assert.equal(page.shadow().querySelector('[role="tab"]'), null); // the panel has no tabs, only the assistant
+  assert.equal(greeting, "One question needs your answer before you can submit.");
+  // Like the website's chat: a bot avatar, and the question as a card with its options.
+  assert.ok(page.shadow().querySelector(".turn .avatar svg"));
+  const card = page.shadow().querySelector(".question");
+  assert.equal(card.querySelector(".step").textContent, "Required");
+  assert.equal(card.querySelector(".label").textContent, "Willing to relocate?");
   const quick = [...page.shadow().querySelectorAll(".quick button")];
   assert.deepEqual(quick.map((b) => b.textContent), ["Yes", "No"]);
 
   quick[0].click();
-  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
-  const call = page.sent.find((m) => m.type === "assist");
-  assert.equal(call.appId, 5);
-  assert.deepEqual(call.messages, [{ role: "user", text: "Yes" }]); // greeting is UI copy, not sent
-  assert.ok(call.fields.every((f) => ["text", "select", "radio", "dropdown"].includes(f.kind)));
-
-  assert.equal(page.win.document.querySelector('input[value="yes"]').checked, true);
+  await until(() => page.win.document.querySelector('input[value="yes"]').checked && !page.shadow().querySelector(".thinking"), "the answer on the page");
+  assert.equal(page.sent.some((m) => m.type === "assist"), false); // a plain answer costs no AI credit
   const bubbles = [...page.shadow().querySelectorAll(".bubble")].map((b) => b.textContent);
-  assert.match(bubbles.at(-1), /^Thanks, I set relocation to Yes\. That's everything\..*Filled:Willing to relocate\?$/);
+  assert.match(bubbles.at(-1), /^Got it\. That's everything\./);
+  assert.deepEqual([...page.shadow().querySelectorAll('.turn:last-child [aria-label="Filled"] li')].map((li) => li.textContent), ["Willing to relocate?"]);
   const filled = page.sent.filter((m) => m.type === "report" && m.event.event === "filled").at(-1);
   assert.ok(filled.event.filled_fields.some((f) => f.label === "Willing to relocate?" && f.source === "assistant"));
 
-  page.shadow().querySelectorAll('[role="tab"]')[1].click();
-  assert.ok(page.shadow().querySelector(".steps"), "Form tab shows the checklist");
+  // Anything that isn't an answer to the question goes to the assistant.
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "Use my middle name too";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
+  const call = page.sent.find((m) => m.type === "assist");
+  assert.equal(call.appId, 5);
+  assert.equal(call.messages.at(-1).text, "Use my middle name too");
+  assert.ok(call.fields.every((f) => ["text", "select", "radio", "dropdown"].includes(f.kind)));
+});
+
+test("a typed answer to a free-text question is written in without AI", async () => {
+  const form = `<label for="city">Current city</label><input id="city" required>`;
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, { form });
+  page.start();
+  const input = await until(() => page.shadow()?.querySelector(".composer-input"), "composer");
+  assert.equal(page.shadow().querySelector(".question .label").textContent, "Current city?");
+  input.value = "Pune";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.win.document.querySelector("#city").value === "Pune" || null, "the answer on the page");
+  await until(() => !page.shadow().querySelector(".thinking"), "reply");
+  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /^Got it\. That's everything/);
+  assert.equal(page.sent.some((m) => m.type === "assist"), false);
 });
 
 test("a failed turn keeps the typed message and says why", async () => {
@@ -121,9 +144,8 @@ test("an optional question nobody could answer is offered for drafting, not coun
     suggest: (msg) => (msg.allowGenerate ? { answer: "I build ML systems end to end.", source: "generated", needs_review: true } : { answer: null }),
   });
   page.start();
-  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
-  assert.equal(tabs[0].getAttribute("aria-selected"), "true");
-  assert.equal(tabs[1].querySelector(".n"), null); // optional is not a to-do
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
+  assert.match(page.shadow().querySelector(".hero strong").textContent, /^All set/); // optional is not a to-do
   assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /“Why are you a good fit” is optional/);
 
   const draft = [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "Draft it for me");
@@ -136,15 +158,61 @@ test("an optional question nobody could answer is offered for drafting, not coun
   assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /Here's a draft/);
 });
 
-test("the Form tab lists optional questions in their own section", async () => {
-  const form = `<label for="fit">Cover note</label><textarea id="fit"></textarea>`;
-  const page = panelPage(() => ({}), { form });
+test("on an untracked page, Draft it for me sends the page's job, and a failed draft says why", async () => {
+  const form = `<title>Software Engineer @ Outmarket AI</title><h1>Software Engineer</h1>
+    <p>Outmarket builds AI agents for B2B marketing teams.</p>
+    <label for="why">What interests you about Outmarket?</label><textarea id="why" required></textarea>`;
+  let fail = true;
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
+    form,
+    app: null,
+    suggest: (msg) => {
+      if (!msg.allowGenerate) return { answer: null };
+      if (fail) throw new Error("Not enough AI credits.");
+      return { answer: "Your agents for marketing teams match my work.", source: "generated", needs_review: true };
+    },
+  });
+  page.start({ appId: null });
+  await until(() => page.shadow()?.querySelector(".quick button"), "the question");
+  const draft = () => [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "Draft it for me");
+  draft().click();
+  await until(() => !page.shadow().querySelector(".thinking") && /couldn't draft/.test([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent), "failure");
+  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /I couldn't draft this one \(Not enough AI credits\)\./);
+
+  fail = false;
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "draft it for me";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.win.document.querySelector("#why").value, "draft written");
+  const call = page.sent.filter((m) => m.type === "suggest" && m.allowGenerate).at(-1);
+  assert.equal(call.page.title, "Software Engineer @ Outmarket AI");
+  assert.match(call.page.description, /AI agents for B2B marketing teams/);
+  // Free lookups (profile, answer bank) never send the page text.
+  assert.equal(page.sent.some((m) => m.type === "suggest" && !m.allowGenerate && m.page), false);
+});
+
+test("a required open question shows Draft it for me, and a typed draft request drafts it", async () => {
+  const form = `<label for="name">Full name</label><input id="name" required>
+    <label for="fit">Why do you think you are suitable for this position? Brief in less than 100 words</label><textarea id="fit" required></textarea>`;
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
+    form,
+    suggest: (msg) => (msg.allowGenerate ? { answer: "I build ML systems end to end.", source: "generated", needs_review: true } : { answer: null }),
+  });
   page.start();
-  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
-  tabs[1].click();
-  const sections = [...page.shadow().querySelectorAll(".sec")].map((b) => b.textContent);
-  assert.ok(sections.some((t) => t.startsWith("Optional1")), sections.join("|"));
-  assert.ok([...page.shadow().querySelectorAll(".row button")].some((b) => /Draft with AI/.test(b.textContent)));
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
+  assert.equal(page.shadow().querySelector(".question .note").textContent, "Type your answer, or I can draft one.");
+  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Draft it for me"]);
+
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "draft it for me";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.win.document.querySelector("#fit").value, "draft written");
+  assert.equal(page.win.document.querySelector("#fit").value, "I build ML systems end to end.");
+  assert.equal(page.sent.some((m) => m.type === "assist"), false);
+  await until(() => !page.shadow().querySelector(".thinking"), "reply");
+  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /Here's a draft/);
 });
 
 test("a consent checkbox is brought up in the chat and ticked only on the user's tap", async () => {
@@ -163,7 +231,6 @@ test("a consent checkbox is brought up in the chat and ticked only on the user's
   await until(() => consent.checked && !page.shadow().querySelector(".thinking"), "ticked");
   assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /^Ticked\. That's everything\./);
   assert.equal(page.sent.some((m) => m.type === "assist"), false);
-  assert.equal(page.shadow().querySelectorAll('[role="tab"]')[1].querySelector(".n"), null);
 });
 
 test("Contact Form 7 required skills block submission until an option is selected", async () => {
@@ -175,8 +242,7 @@ test("Contact Form 7 required skills block submission until an option is selecte
   const page = panelPage(() => { throw new Error("assistant API not expected"); }, { form });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
-  await until(() => page.shadow()?.querySelector('[role="tab"]'), "tabs after blocked auto apply");
-  page.shadow().querySelector('[role="tab"]').click();
+  await until(() => page.shadow()?.querySelector(".toast"), "blocked auto apply");
   await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
   assert.match(page.shadow().textContent, /Select the options that apply/);
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
@@ -185,7 +251,7 @@ test("Contact Form 7 required skills block submission until an option is selecte
   quick().find((b) => b.textContent === "I've done it").click();
   await until(() => /Select at least one option/.test(page.shadow().textContent), "missing selection message");
   assert.ok([...page.win.document.querySelectorAll('input[type="checkbox"]')].every((el) => !el.checked));
-  const submit = () => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === "Submit");
+  const submit = () => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === "Submit for me");
   assert.equal(submit().disabled, true);
   const sql = page.win.document.querySelector('input[value="SQL"]');
   sql.click();
@@ -249,9 +315,7 @@ test("Auto apply can be cancelled, and never submits with a required field empty
 test("the Submit button is enabled only when it would submit, and says why not", async () => {
   const submitButton = async (page) => {
     page.start();
-    await until(() => page.shadow()?.querySelector('[role="tab"]'), "panel");
-    [...page.shadow().querySelectorAll('[role="tab"]')].find((t) => t.textContent.startsWith("Form")).click();
-    return [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit");
+    return until(() => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Submit for me"), "Submit");
   };
   const ready = await submitButton(panelPage(() => ({}), { form: AUTO_FORM, app: { title: "Engineer", status: "ready_for_review" } }));
   assert.equal(ready.disabled, false);
@@ -266,14 +330,13 @@ test("the Submit button is enabled only when it would submit, and says why not",
   assert.equal(incomplete.title, "Not ready: 1 required field still needs you.");
 });
 
-test("Submit sits at the bottom of the Assistant tab too, disabled until every answer is in", async () => {
+test("Submit sits at the bottom of the panel, disabled until every answer is in", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM.replace('<label for="name">Full name</label>', '<label for="name">Favourite colour</label>') });
   page.start();
-  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
-  assert.equal(tabs[0].getAttribute("aria-selected"), "true"); // Assistant
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
   const buttons = () => [...page.shadow().querySelectorAll("button")];
   assert.ok(!buttons().some((b) => /Auto apply/.test(b.textContent)));
-  const submit = buttons().find((b) => b.textContent === "Submit");
+  const submit = buttons().find((b) => b.textContent === "Submit for me");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /1 required field still needs you/);
   // The last thing in the panel, below the message box.
@@ -283,7 +346,7 @@ test("Submit sits at the bottom of the Assistant tab too, disabled until every a
   // Answering the last question enables it.
   page.win.document.getElementById("name").value = "blue";
   page.win.document.getElementById("name").dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  await until(() => !buttons().find((b) => b.textContent === "Submit").disabled, "Submit enabled");
+  await until(() => !buttons().find((b) => b.textContent === "Submit for me").disabled, "Submit enabled");
 });
 
 test("the website's sign-in mark is relayed once per change, and other pages send nothing", async () => {
@@ -316,7 +379,7 @@ test("a missing profile offers the website's profile setup, then tries again", a
   await until(() => page.sent.some((m) => m.type === "openProfile"), "profile page");
   ready = true;
   retry.click();
-  await until(() => page.shadow().querySelector('[role="tab"]'), "filled panel");
+  await until(() => page.shadow().querySelector(".composer"), "filled panel");
 });
 
 test("dropdowns are filled, values the site rejects are retried or flagged, and nothing pretends to be done", async () => {
@@ -352,8 +415,7 @@ test("dropdowns are filled, values the site rejects are retried or flagged, and 
     });
   }
   page.start();
-  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
-  tabs[1].click();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
 
   assert.equal(doc.querySelector("#exp").value, "5.6");
   assert.equal(doc.querySelector("#notice").textContent, "30 days");
@@ -362,7 +424,7 @@ test("dropdowns are filled, values the site rejects are retried or flagged, and 
   assert.match(text, /1 thing left for you/);
   assert.doesNotMatch(text, /All set/);
 
-  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit");
+  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /1 required field still needs you/);
 });
@@ -392,12 +454,15 @@ test("an unanswered custom dropdown's options are read once, offered as quick re
   });
   doc.addEventListener("keydown", (e) => { if (e.key === "Escape") doc.querySelectorAll('[role="listbox"]').forEach((l) => l.remove()); });
   page.start();
-  await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
   assert.equal(doc.querySelector('[role="listbox"]'), null, "closed again after reading");
   assert.equal(select.textContent, "Gender*", "nothing chosen while reading");
   assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Male", "Female"]);
 
-  [...page.shadow().querySelectorAll(".quick button")][1].click();
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "I'm a woman";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
   await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
   const call = page.sent.find((m) => m.type === "assist");
   assert.deepEqual(call.fields.find((f) => f.kind === "dropdown").options, ["Male", "Female"]);
@@ -426,40 +491,17 @@ test("Auto apply rechecks newly required fields and changed submit buttons after
   }));
 });
 
-test("the agent runs inside the Assistant tab: progress while it works, then the chat again", async () => {
-  const page = panelPage(() => ({ reply: "", updates: {}, warnings: [], done: true, choices: [] }));
+test("'I already submitted it' asks once more, then reports the submission", async () => {
+  const page = panelPage(() => ({}));
   page.start();
-  const tabs = await until(() => page.shadow()?.querySelectorAll('[role="tab"]'), "tabs");
-  tabs[1].click();
-  await until(() => [...page.shadow().querySelectorAll("button")].filter((b) => b.textContent.includes("Fill again")), "the Form tab");
-  assert.ok(![...page.shadow().querySelectorAll("button")].some((b) => /agent/i.test(b.textContent))); // it lives on the Assistant tab
-  page.shadow().querySelectorAll('[role="tab"]')[0].click();
-  const [start] = await until(() => [...page.shadow().querySelectorAll("button")].filter((b) => b.textContent === "Fill with the agent"), "the agent button");
-  start.click();
-  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agentStart");
-
-  page.message({ type: "agentUpdate", status: "running", log: ["Started. Watching the page…", "Clicked Next"] });
-  await until(() => page.shadow().querySelector(".alog li:last-child")?.textContent === "Clicked Next" ? [1] : null, "the step log");
-  const shadow = page.shadow();
-  assert.deepEqual([...shadow.querySelectorAll('[role="tab"]')].map((t) => [t.textContent.replace(/\d+/, "").trim(), t.getAttribute("aria-selected")]), [["Assistant", "true"], ["Form", "false"]]);
-  assert.match(shadow.querySelector(".hero strong").textContent, /Working through the form/);
-  assert.equal(shadow.querySelector(".composer"), null); // no chat while it works
-  assert.deepEqual([...shadow.querySelectorAll(".f button")].map((b) => b.textContent), ["Pause", "Stop and take over"]);
-
-  page.message({ type: "agentUpdate", status: "waiting", log: ["Clicked Next"], question: { kind: "question", text: "Notice period?" } });
-  const [answer] = await until(() => [...page.shadow().querySelectorAll(".ask button")].filter((b) => b.textContent === "Answer"), "the agent's question");
-  page.shadow().querySelector(".ask textarea").value = "30 days";
-  page.shadow().querySelector(".ask textarea").dispatchEvent(new page.win.Event("input"));
-  answer.click();
-  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.text === "30 days"), "the reply");
-
-  page.message({ type: "agentUpdate", status: "ready", log: ["Filled Notice period"], filled: [], unresolved: [] });
-  await until(() => page.shadow().querySelector(".composer"), "the chat after the run");
-  const done = page.shadow();
-  assert.match(done.querySelector(".msg.good").textContent, /submit it yourself/);
-  assert.equal(done.querySelector("details summary").textContent, "What the agent did");
-  assert.ok(done.querySelector(".bubble.assistant"));
-  assert.deepEqual([...done.querySelectorAll(".f button")].map((b) => b.textContent), ["Run the agent again", "Submit"]);
+  const button = (label) => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === label);
+  (await until(() => button("I already submitted it"), "the button")).click();
+  button("Not yet").click();
+  button("I already submitted it").click();
+  button("Yes, I submitted it").click();
+  await until(() => page.sent.filter((m) => m.type === "report" && m.event.event === "submitted"), "submitted report");
+  await until(() => page.shadow().querySelector(".msg.good"), "saved message");
+  assert.match(page.shadow().querySelector(".msg.good").textContent, /marked Submitted/);
 });
 
 test("a 'Select' box with a plain list (no ARIA options) offers its options in the chat and takes the pick", async () => {
@@ -476,16 +518,14 @@ test("a 'Select' box with a plain list (no ARIA options) offers its options in t
   for (const li of menu.children) li.addEventListener("click", () => { input.value = li.textContent; menu.hidden = true; });
   page.start();
   await until(() => page.shadow()?.querySelectorAll(".quick button"), "quick replies");
-  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /Salutation \(required\)\?/);
+  assert.equal(page.shadow().querySelector(".question .label").textContent, "Salutation?");
   assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Miss", "Mr.", "Mrs.", "Ms.", "Mx."]);
   assert.equal(menu.hidden, true, "closed again after reading");
   assert.equal(input.value, "", "nothing chosen while reading");
 
   [...page.shadow().querySelectorAll(".quick button")][1].click();
-  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
-  const sentField = page.sent.find((m) => m.type === "assist").fields.find((f) => f.kind === "dropdown");
-  assert.deepEqual(sentField.options, ["Miss", "Mr.", "Mrs.", "Ms.", "Mx."]);
   await until(() => (input.value === "Mr." ? [1] : null), "the pick on the page");
+  assert.equal(page.sent.some((m) => m.type === "assist"), false); // tapping an option costs no AI credit
 });
 
 const CHOICE_FORM = `
@@ -555,4 +595,149 @@ test("an optional personal fact gets no Draft button, and a typed draft request 
   assert.equal(page.sent.some((m) => m.type === "suggest" && m.allowGenerate === true), false);
   assert.equal(page.sent.some((m) => m.type === "assist"), false);
   assert.equal(page.win.document.querySelector("#mid").value, "");
+});
+
+const STEP_FORM = `<form>
+  <label for="name">Full name</label><input id="name" required>
+  <button type="button">Next</button>
+</form>`;
+
+test("the chat is the agent: it clicks through a multi-step form itself and asks in the chat", async () => {
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
+    form: STEP_FORM,
+    suggest: (msg) => (msg.allowGenerate ? { answer: "I build LLM systems.", source: "generated", needs_review: true } : { answer: null }),
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agentStart without a button");
+  const shadow = () => page.shadow();
+  const bubbles = () => [...shadow().querySelectorAll(".bubble")].map((b) => b.textContent);
+  const buttons = () => [...shadow().querySelectorAll("button")].map((b) => b.textContent);
+  await until(() => bubbles().filter((t) => /more than one step/.test(t)), "the handoff line");
+  assert.ok(!buttons().includes("Fill with the agent"));
+
+  page.message({ type: "agentUpdate", status: "running", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
+  await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
+  assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
+  assert.equal(shadow().querySelector(".composer-input").disabled, true);
+  assert.deepEqual([...shadow().querySelectorAll(".f button")].map((b) => b.textContent), ["Pause", "Stop and take over"]);
+
+  page.message({ type: "agentUpdate", status: "waiting", appId: 5, log: ["Clicked Next"], question: { kind: "question", text: "Notice period?", choices: ["30 days", "60 days"] } });
+  await until(() => [...shadow().querySelectorAll(".question .label")].filter((q) => q.textContent === "Notice period?"), "the question as a chat card");
+  assert.equal(shadow().querySelector(".ask"), null); // no separate question box
+  assert.deepEqual([...shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["30 days", "60 days", "I'll fill it on the page"]);
+  [...shadow().querySelectorAll(".quick button")][0].click();
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply" && m.text === "30 days"), "the reply");
+
+  page.message({ type: "agentUpdate", status: "running", appId: 5, log: ["Filled Notice period"] });
+  page.message({ type: "agentUpdate", status: "waiting", appId: 5, log: [], question: { kind: "question", text: "Why do you want to work at Actowiz?" } });
+  await until(() => [...shadow().querySelectorAll(".question .label")].filter((q) => /Why do you want to work at Actowiz/.test(q.textContent)), "the open question");
+  const input = shadow().querySelector(".composer-input");
+  assert.equal(input.disabled, false);
+  input.value = "draft it for me";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.text === "I build LLM systems."), "the draft goes to the agent");
+  assert.ok(!page.sent.some((m) => m.type === "agentControl" && /draft it/i.test(m.text ?? "")));
+  assert.ok(bubbles().some((t) => /Here's a draft/.test(t)));
+
+  page.message({ type: "agentUpdate", status: "ready", appId: 5, log: ["Filled Why"], filled: [{ label: "Why", value: "I build LLM systems.", needs_review: true }], unresolved: [] });
+  await until(() => bubbles().filter((t) => /I've been through the form/.test(t)), "the wrap-up line");
+  assert.equal(shadow().querySelector("details summary").textContent, "What I did on the page");
+  assert.ok(buttons().includes("Submit for me"));
+  assert.ok(!buttons().includes("Fill with the agent"));
+  assert.equal(page.sent.filter((m) => m.type === "agentStart").length, 1);
+});
+
+test("a page with no form yet: the chat opens it itself", async () => {
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, { form: "<p>LLM Engineer</p><button>Apply</button>" });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agentStart");
+  await until(() => [...(page.shadow()?.querySelectorAll(".bubble") ?? [])].filter((b) => /can't see a form on this page yet/.test(b.textContent)), "the handoff line");
+});
+
+test("a one-page form is filled in place, and typing 'do the rest' carries on through the form", async () => {
+  const page = panelPage(() => { throw new Error("assistant API not expected"); });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
+  await tick(50);
+  assert.equal(page.sent.some((m) => m.type === "agentStart"), false);
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "do the rest";
+  input.dispatchEvent(new page.win.Event("input"));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agentStart on request");
+  assert.equal(page.win.document.querySelector("#name").value, "Ada Lovelace"); // not typed into the form
+});
+
+test("if the agent can't start, the chat says so and keeps helping", async () => {
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, { form: STEP_FORM });
+  page.handlers.agentStart = () => { throw new Error("Not enough credits"); };
+  page.start();
+  await until(() => [...(page.shadow()?.querySelectorAll(".bubble") ?? [])].filter((b) => /couldn't click through this form/.test(b.textContent)), "the failure line");
+  assert.equal(page.shadow().querySelector(".composer-input").disabled, false);
+});
+
+test("turning on AI answers in the popup drafts the open questions on a panel that's already open", async () => {
+  const form = `<form><label for="name">Full name</label><input id="name" required>
+    <label for="why">What interests you about Outmarket?</label><textarea id="why" required></textarea></form>`;
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
+    form,
+    suggest: (msg) => (msg.allowGenerate ? { answer: "Your agent tooling.", source: "generated", needs_review: true } : { answer: null }),
+  });
+  page.start();
+  const greeting = await until(() => page.shadow()?.querySelector(".question .label"), "greeting");
+  assert.match(greeting.textContent, /What interests you about Outmarket/);
+  assert.equal(page.sent.some((m) => m.type === "suggest" && m.allowGenerate), false); // switched off when the page was filled
+
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /I drafted an answer with AI/.test(b.textContent)), "the drafted line");
+  assert.equal(page.win.document.querySelector("#why").value, "Your agent tooling.");
+  assert.equal(page.sent.some((m) => m.type === "assist"), false);
+});
+
+test("a hidden field the uploader fills is waited for, then named in words instead of making the browser point at it", async () => {
+  const form = `<form>
+    <label for="name">Full name</label><input id="name" required>
+    <label for="cv">Resume</label><input id="cv" type="file">
+    <input id="fileName" name="resume.fileName" required>
+    <button type="submit">Submit application</button>
+  </form>`;
+  const resume = () => ({ name: "resume.pdf", type: "application/pdf", base64: "JVBERi0=" });
+  const withUploads = (page) => {
+    // jsdom has no DataTransfer, and only takes a real FileList for input.files.
+    page.win.DataTransfer = class { constructor() { this.list = []; this.items = { add: (f) => this.list.push(f) }; } get files() { return this.list; } };
+    Object.defineProperty(page.win.HTMLInputElement.prototype, "files", { configurable: true, get() { return this.chosen ?? []; }, set(v) { this.chosen = v; } });
+    page.handlers.resume = resume;
+    return page;
+  };
+  const longer = async (check, label) => {
+    for (let i = 0; i < 80; i++) { if (check()) return check(); await tick(100); }
+    throw new Error(`Timed out waiting for ${label}`);
+  };
+
+  // The upload finishes a moment later: Auto apply waits for it and submits.
+  const slow = withUploads(panelPage(() => ({}), { form }));
+  slow.win.document.getElementById("fileName").getClientRects = () => [];
+  const sent = watchSubmits(slow);
+  slow.start({ autoSubmit: true });
+  setTimeout(() => { slow.win.document.getElementById("fileName").value = "resume.pdf"; }, 1200);
+  await longer(() => /Submitting in 3s/.test(slow.shadow()?.textContent ?? ""), "countdown after the upload");
+  await tick(3100);
+  await until(() => sent.length, "submit");
+
+  // It never does: nothing is sent, the browser isn't asked to focus the hidden field, and the
+  // résumé goes back on the list.
+  const stuck = withUploads(panelPage(() => ({}), { form }));
+  const hidden = stuck.win.document.getElementById("fileName");
+  hidden.getClientRects = () => [];
+  let pointed = 0;
+  hidden.reportValidity = () => { pointed++; return false; };
+  stuck.win.HTMLFormElement.prototype.reportValidity = () => { pointed++; return false; };
+  const none = watchSubmits(stuck);
+  stuck.start({ autoSubmit: true });
+  const toast = await longer(() => stuck.shadow()?.querySelector(".toast"), "the blocked message");
+  assert.match(toast.textContent, /hasn't registered your file for “Resume”.*Attach it again/);
+  assert.equal(pointed, 0);
+  assert.equal(none.length, 0);
+  assert.match(stuck.shadow().querySelector(".hero strong").textContent, /1 thing left for you/);
 });

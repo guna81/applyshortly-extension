@@ -27,7 +27,7 @@ Coordinate backend/API changes and refresh the platform's integration lock after
 Run `python3 scripts/extension_store_fixture.py` and open
 `http://127.0.0.1:8766`. The fixture renders the source panel code with fictional applicant and
 company data and fake messages. It does not connect accounts or call an AI provider.
-Capture Assistant and Form tabs at 1280×800 as RGB PNG or JPEG; keep the demonstration label.
+Capture the assistant panel (chat, and the agent at work) at 1280×800 as RGB PNG or JPEG; keep the demonstration label.
 Never capture real profiles or application answers.
 
 ## Release review

@@ -11,6 +11,14 @@
   const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
   const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input:not([type]), textarea';
   const PICK_PLACEHOLDER = /^[\s-]*(select|choose|please select|pick)\b/i;
+  // The "nothing chosen" entry of a list: "Select…", "--", Zoho's "-None-".
+  const EMPTY_OPTION = /^(select|choose|please select|-+|-+\s*none\s*-+)$/i;
+
+  /** Whether an option is the list's "nothing chosen" entry, not an answer. */
+  function isPlaceholderOption(text) {
+    const t = cleanLabel(text);
+    return !t || EMPTY_OPTION.test(t) || PICK_PLACEHOLDER.test(t);
+  }
 
   /**
    * An <input> that is really a dropdown: a combobox that says "Select…" or can't be typed in.
@@ -37,8 +45,23 @@
       .join(" ");
   }
 
+  // "mobilePhone.countryCode", "first_name", "candidate-email": a field name, not a question.
+  const IDENTIFIER = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*|[._-][A-Za-z0-9]+)+(?:\[\d*\])?$/;
+
+  /** A field name spelled as words ("mobilePhone.countryCode" → "Mobile phone country code"). */
+  function readable(label) {
+    if (!IDENTIFIER.test(label)) return label;
+    const words = label.replace(/\[\d*\]$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[._\-\s]+/).filter(Boolean).map((w) => w.toLowerCase());
+    const text = words.join(" ");
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
   /** The human-readable question for a field, trying the usual ways forms attach one. */
   function labelOf(el) {
+    return readable(rawLabel(el));
+  }
+
+  function rawLabel(el) {
     const doc = el.ownerDocument;
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
@@ -74,6 +97,8 @@
    * Placeholders are sample values on many forms ("Arjun"), so this must win over them.
    */
   function nearbyLabel(el) {
+    const zoho = zohoTabular(el) ?? zohoRow(el);
+    if (zoho) return zoho.label;
     const cf7 = el.closest('.wpcf7-form-control-wrap');
     if (cf7) {
       const label = cf7.parentElement?.querySelector('label');
@@ -95,8 +120,45 @@
     return "";
   }
 
+  /**
+   * Zoho Recruit career sites: a row's <label id="crc-label-rec-form_N"> sits several wrappers
+   * above its field and its "*" span is the only required marker. A row can also hold a control
+   * the label isn't about (salutation before First Name, country code before Mobile).
+   */
+  function zohoRow(el) {
+    const label = el.closest(".crc-form-row")?.querySelector(":scope > label.crm-from-label");
+    const text = cleanLabel(label?.textContent);
+    if (!text) return null;
+    const component = el.closest(`[id="${CSS.escape(label.id.replace(/^crc-label-/, ""))}"]`);
+    const typed = component && [...component.querySelectorAll("input")].some((i) => !i.closest("lyte-drop-box"));
+    const main = component && !(el.matches('[role="combobox"]') && typed);
+    if (main) return { label: text, required: Boolean(label.querySelector(".crc-form-mandatory")) };
+    const controls = (el.getAttribute("aria-controls") ?? "").replace(/[\d_]+/g, " ").trim();
+    const part = /phone/i.test(component?.tagName ?? "") ? "country code" : /^[a-z ]+$/i.test(controls) && !/^lyte/i.test(controls) ? controls.toLowerCase() : "prefix";
+    return { label: `${text} (${part})`, required: false };
+  }
+
+  /**
+   * Zoho Recruit's tabular sections (Experience Details, Educational Details): each entry is a
+   * region "Experience Details : Entry 1 of 10" whose rows label their own fields. A Duration row
+   * holds four dropdowns told apart only by their ids (…_from_month, …_to_year), so those parts go
+   * into the label: "Experience Details 1: Duration from (month)".
+   */
+  function zohoTabular(el) {
+    const row = el.closest(".crc-form-tabularrow");
+    const label = row?.querySelector(":scope > label");
+    const text = cleanLabel(label?.textContent);
+    if (!text) return null;
+    const entry = /^(.*?)\s*:\s*entry\s+(\d+)/i.exec(row.closest('[role="region"]')?.getAttribute("aria-label") ?? "");
+    const prefix = entry ? `${cleanLabel(entry[1])} ${entry[2]}: ` : "";
+    const part = /_(from|to)_(month|year)$/i.exec(el.closest("rec-dropdown, lyte-dropdown")?.id ?? "");
+    const suffix = part ? ` ${part[1].toLowerCase()} (${part[2].toLowerCase()})` : "";
+    return { label: `${prefix}${text}${suffix}`, required: Boolean(label.querySelector(".crc-form-mandatory")) };
+  }
+
   function isRequired(el) {
     if (el.required || el.getAttribute("aria-required") === "true") return true;
+    if ((zohoTabular(el) ?? zohoRow(el))?.required) return true;
     if (el.closest('.wpcf7-validates-as-required')) return true;
     const cf7 = el.closest('.wpcf7-form-control-wrap');
     const cf7Label = cf7?.closest('label') || cf7?.parentElement?.querySelector('label');
@@ -133,7 +195,10 @@
 
     for (const el of doc.querySelectorAll(TEXT_INPUT)) {
       if (!visible(el) || !isEditable(el) || selectLikeInput(el)) continue;
-      fields.push({ kind: "text", el, label: labelOf(el), required: isRequired(el) });
+      const label = labelOf(el);
+      // Typing a CAPTCHA answer is always left to the user.
+      if (/captcha/i.test(`${label} ${el.name} ${el.id}`)) continue;
+      fields.push({ kind: "text", el, label, required: isRequired(el) });
     }
     for (const el of doc.querySelectorAll("select")) {
       if (!visible(el) || !isEditable(el)) continue;
@@ -223,6 +288,8 @@
     const id = el.getAttribute("id");
     const forLabel = id && doc.querySelector(`label[for="${CSS.escape(id)}"]`);
     if (forLabel && cleanLabel(forLabel.textContent)) return cleanLabel(forLabel.textContent);
+    const tabular = zohoTabular(el);
+    if (tabular) return tabular.label;
     const box = el.closest("mat-form-field, .form-group, [class*=form-field i]");
     const inBox = box && [...box.querySelectorAll("mat-label, label")].find((n) => !el.contains(n));
     if (inBox && cleanLabel(inBox.textContent)) return cleanLabel(inBox.textContent);
@@ -261,7 +328,7 @@
     if (el.matches(".mat-mdc-select-empty, .mat-select-empty") || el.querySelector(".mat-mdc-select-placeholder, .mat-select-placeholder")) return "";
     const shown = cleanLabel(el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text")?.textContent ?? el.textContent ?? "");
     const same = normalise(shown) === normalise(field.label ?? "");
-    return !shown || same || /^(select|choose|please select|-+)$/i.test(shown) ? "" : shown;
+    return !shown || same || EMPTY_OPTION.test(shown) ? "" : shown;
   }
 
   const INLINE = new Set(["B", "I", "EM", "STRONG", "SMALL", "SPAN", "SVG", "IMG", "BR"]);
@@ -382,7 +449,7 @@
     const seen = new Set();
     return options
       .map((o) => ({ text: cleanLabel(o.text) }))
-      .filter((o) => o.text && !/^(select|choose|please select|-+)$/i.test(o.text) && !seen.has(o.text) && seen.add(o.text));
+      .filter((o) => !isPlaceholderOption(o.text) && !seen.has(o.text) && seen.add(o.text));
   }
 
   // ---------------------------------------------------------------- what the page says is wrong
@@ -455,6 +522,18 @@
   }
 
   /**
+   * "+91 98765 43210" → "+91". Written without a separator ("+919876543210"), the last ten digits
+   * are taken as the national number. Null when the number doesn't start with a country code.
+   */
+  function dialCode(phone) {
+    const text = String(phone ?? "").trim();
+    const spaced = /^\+(\d{1,3})[\s\-().]/.exec(text);
+    if (spaced) return `+${spaced[1]}`;
+    const joined = /^\+(\d{11,13})$/.exec(text);
+    return joined ? `+${joined[1].slice(0, -10)}` : null;
+  }
+
+  /**
    * Answers that come straight from profile fields. Anything else goes to the platform's
    * /answers/suggest, which knows preferences (notice period, CTC, work authorisation) and the
    * answer bank. Returns {value, needsReview} or null.
@@ -470,6 +549,7 @@
     if (/last name|surname|family name/.test(l)) return sure(rest.join(" "));
     if (/full name|^(your )?name\b|candidate name|applicant name/.test(l)) return sure(profile.full_name);
     if (/e-?mail/.test(l)) return sure(profile.email);
+    if (/country ?code|dial(?:l?ing)? code|calling code|phone code|\bisd\b/.test(l)) return sure(dialCode(profile.phone));
     if (/phone|mobile|contact (number|no)|whatsapp|telephone/.test(l)) return sure(profile.phone);
     if (/linkedin/.test(l)) return sure(link(/linkedin/i));
     if (/github/.test(l)) return sure(link(/github/i));
@@ -548,7 +628,8 @@
       case "text":
         return !field.el.value.trim();
       case "select":
-        return !field.el.value || field.el.selectedIndex <= 0 && field.el.options[0]?.value === "";
+        return !field.el.value || field.el.selectedIndex <= 0 && field.el.options[0]?.value === ""
+          || isPlaceholderOption(field.el.options[field.el.selectedIndex]?.text);
       case "radio":
         return field.aria
           ? !field.options.some((o) => o.el.getAttribute("aria-checked") === "true")
@@ -648,6 +729,7 @@
 
   globalThis.JobHuntFill = {
     cleanLabel,
+    isPlaceholderOption,
     firstSentence,
     labelOf,
     collectFields,
