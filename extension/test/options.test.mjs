@@ -89,10 +89,10 @@ test('provider dropdown saves required key and model, selects it, and clears the
   } finally { h.close(); }
 });
 
-test('self-hosted setup describes disabled credit charging without account controls', async () => {
+test('billing-off setup describes disabled credit charging without account controls', async () => {
   const h = await setup({ signedIn: true, billingEnabled: false });
   try {
-    assert.match(h.document.querySelector('#accountSummary').textContent, /Self-hosted — no credit charges/);
+    assert.match(h.document.querySelector('#accountSummary').textContent, /No credit charges/);
     assert.equal(h.document.querySelector('#disconnect'), null);
     assert.equal(h.document.querySelector('#retest').hidden, true);
     assert.equal(h.document.querySelector('#manual').hidden, true);

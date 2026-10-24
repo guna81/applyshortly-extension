@@ -47,7 +47,7 @@ privacy policy. The extension cannot control employer page scripts.
 
 When you start the form agent, the extension uses Chrome's debugger permission on that tab only,
 until it finishes or you stop it (Chrome shows a bar while it is attached). After each step it
-sends your ApplyShortly server a description of the application form on the page: the page URL
+sends ApplyShortly a description of the application form on the page: the page URL
 and title, the form's questions, options, buttons, the values currently in the fields, and the
 page's own error messages. When the agent is stuck it also sends a screenshot of the visible part
 of the tab. The server uses these to choose the next step, sending them to the selected AI provider
@@ -99,8 +99,7 @@ storage but does not delete the server account, profile or applications.
 Saved profile, answers and application records remain until deleted. Account deletion removes
 account-owned records and files from the active service. Routine hosted database backups can
 contain deleted records until they expire after 14 days. Payment and AI providers apply their
-own retention policies; downloaded exports remain copies you control. Self-hosted operators
-set their own backup retention. The hosted operator is Guna (ApplyShortly).
+own retention policies; downloaded exports remain copies you control. The operator is Guna (ApplyShortly).
 
 ## Chrome limited-use commitments
 

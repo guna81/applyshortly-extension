@@ -230,7 +230,7 @@ test('invalid platform responses and network failures explain how to recover', a
     delete h.local.token;
     const result = await h.send({ type: 'browserSignIn', baseUrl: 'https://apply.example' });
     assert.equal(result.ok, false);
-    assert.match(result.error, /server/i);
+    assert.match(result.error, /server|internet connection/i);
     assert.equal(h.calls.some((call) => call.loginUrl || call.url?.endsWith('/start')), false);
   }
 });

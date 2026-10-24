@@ -7,13 +7,13 @@ own**. You review the form and click the site's own submit button, or choose **â
 (below) to have it click that button for you once every required field is answered.
 
 Plain JavaScript with no compilation step. The build packages an allowlisted set of runtime files;
-it never reads `.env` or includes local credentials. An ApplyShortly account and compatible server
-are required, including when using a personal AI key. See `../extension-bridge/README.md` for the API.
+it never reads `.env` or includes local credentials. An ApplyShortly account is required,
+including when using a personal AI key. See `../extension-bridge/README.md` for the API.
 
 ## Install
 
 Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd). The store package is built for
-`https://applyshortly.com`. For a self-hosted server or development, build and load it unpacked
+`https://applyshortly.com`. For development, build and load it unpacked
 as below. For Chrome Web Store releases, see the [publishing guide](../docs/operations/extension-publishing.md).
 
 ## Build from source
@@ -29,7 +29,7 @@ make install
 make extension-test
 ```
 
-The build writes `dist/extension/` and `dist/applyshortly-extension-0.3.1.zip`.
+The build writes `dist/extension/` and `dist/applyshortly-extension-0.4.0.zip`.
 Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select
 `dist/extension/` (not the ZIP). Source `extension/` checkouts default to localhost; use the built directory for `.env` configuration.
 After rebuilding, click **Reload** in Chrome and reload the application page.
@@ -39,7 +39,7 @@ Otherwise, click **Sign in with ApplyShortly** to open sign-in. There is no Plat
 the package contains the public `FRONTEND_URL` selected at build time (explicit `--platform-url`,
 environment, root `.env`, then localhost development default). Rebuild after changing this value.
 The package includes permission for that origin; `.env` and its other values are never packaged.
-The extension shows **Connected as**, your plan and credits (or self-hosted status), and never
+The extension shows **Connected as**, your plan and credits, and never
 displays the generated connection credential.
 Use **Open ApplyShortly** to open the website with your extension account. A different website
 account or an unrecognized browser asks for confirmation first.
@@ -96,7 +96,7 @@ You can also manage the same settings in ApplyShortly **Settings â†’ Extension A
 Personal-key mode is available on every account tier. Your provider bills those requests directly;
 no ApplyShortly credits are deducted and there is no automatic fallback to credits.
 
-Personal keys are sent to your ApplyShortly server, stored encrypted there, and never returned to
+Personal keys are sent to ApplyShortly, stored encrypted there, and never returned to
 the browser or employer site. Replace or delete them in extension setup or website Settings. Deleting a selected key leaves
 personal mode selected: restore the key or explicitly choose credits. Facts and lexical answer-bank
 fills remain available without an AI key. AI drafts are always marked for review; automatic drafts
@@ -105,7 +105,7 @@ the popup or Settings). Turning it on drafts the open questions on a panel that'
 
 ### Standalone source archive
 
-`npm run build:source` additionally writes `dist/applyshortly-extension-source-0.3.1.zip`.
+`npm run build:source` additionally writes `dist/applyshortly-extension-source-0.4.0.zip`.
 It contains extension and bridge source, tests, packaging scripts, MIT license and brand notes;
 it contains no backend code, credentials, or repository history. It is ready for a separate public
 repository, but this command does not publish anything. See `LICENSE` and `BRANDING.md`.

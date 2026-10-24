@@ -8,7 +8,7 @@ This repository contains the extension, typed API bridge, tests and packaging to
 
 Install **Apply Shortly Form Assistant** from the [Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd), then open the extension's settings and sign in with your ApplyShortly account. The store version connects to `https://applyshortly.com` and updates automatically.
 
-To use a self-hosted ApplyShortly server, or to develop the extension, build it yourself as below.
+To develop the extension, build it yourself as below.
 
 ## Build from source
 

@@ -74,8 +74,8 @@ async function test() {
   if (connected) {
     showConn("good", `Connected as ${s.name ?? s.email ?? "your account"}`, "You're ready to autofill.");
     const plan = s.plan ? s.plan[0].toUpperCase() + s.plan.slice(1) : "Account";
-    $("accountSummary").textContent = s.billingEnabled === false ? `${s.email} · Self-hosted — no credit charges` : `${s.email} · ${plan} plan · ${s.credits ?? 0} credits available`;
-    $("aiMode").textContent = s.ai?.mode === "personal" ? `Personal key: ${providerNames[s.ai.provider] ?? s.ai.provider}. No ApplyShortly credits used.` : s.billingEnabled === false ? "Self-hosted AI — no credit charges." : `ApplyShortly credits: ${s.credits ?? 0} available.`;
+    $("accountSummary").textContent = s.billingEnabled === false ? `${s.email} · No credit charges` : `${s.email} · ${plan} plan · ${s.credits ?? 0} credits available`;
+    $("aiMode").textContent = s.ai?.mode === "personal" ? `Personal key: ${providerNames[s.ai.provider] ?? s.ai.provider}. No ApplyShortly credits used.` : s.billingEnabled === false ? "ApplyShortly AI — no credit charges." : `ApplyShortly credits: ${s.credits ?? 0} available.`;
     // Automatic connections share this browser's website session; manual keys stand alone.
     $("logoutHint").textContent = s.connectionType === "automatic" ? "Logging out also signs this browser out of the ApplyShortly website." : "Logging out revokes this extension's API key.";
     renderAI(s.ai);

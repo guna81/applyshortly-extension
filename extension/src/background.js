@@ -217,7 +217,7 @@ async function performBrowserSignIn(rawOrigin, interactive) {
   try {
     config = await fetch(`${baseUrl}/api/extension-auth/browser/config?${new URLSearchParams({ redirect_uri: redirectUri })}`, { credentials: "omit" });
   } catch {
-    throw new Error("Cannot reach ApplyShortly. Check that your ApplyShortly server is running.");
+    throw new Error("Cannot reach ApplyShortly. Check your internet connection and try again.");
   }
   // Older servers support approved code pairing but do not have the browser config route.
   if (config.status === 404) {

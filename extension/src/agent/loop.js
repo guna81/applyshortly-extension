@@ -20,7 +20,7 @@ const unsupported = (error) => error?.status === 404 && error.message === "Not F
 /** Platform errors in words the panel can show. */
 export function explain(error) {
   if (unsupported(error)) {
-    return "Your ApplyShortly server doesn't have the form agent yet. Use the assistant chat for now; the agent works once the platform is updated.";
+    return "ApplyShortly doesn't have the form agent yet. Use the assistant chat for now; the agent works once ApplyShortly is updated.";
   }
   if (error?.status === 410) return "This agent session ended. Run the agent again.";
   if (error?.status === 401 || error?.status === 403) return "ApplyShortly didn't accept the API key. Sign in again from settings.";

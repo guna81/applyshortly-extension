@@ -1,6 +1,6 @@
 # Chrome Web Store release
 
-Build and release from this repository. Current package version: 0.3.1.
+Build and release from this repository. Current package version: 0.4.0.
 
 Public listing: <https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd>
 (item ID `pdeffhelbeobnpcbjdegddcfimglmedd`; v0.3.1 live since 20 October 2026). Upload new
@@ -13,7 +13,7 @@ npm run build -- --platform-url https://applyshortly.com
 npm run build:source -- --platform-url https://applyshortly.com
 ```
 
-Upload `dist/applyshortly-extension-0.3.1.zip`; the source archive is for contributors.
+Upload `dist/applyshortly-extension-0.4.0.zip`; the source archive is for contributors.
 The build includes only allowlisted runtime assets and the selected public origin. No local
 credentials, provider keys, user data or platform code belongs in either archive.
 
