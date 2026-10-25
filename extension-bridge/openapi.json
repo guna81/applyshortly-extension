@@ -1014,6 +1014,38 @@
         "title": "ExtensionAssistRequest",
         "type": "object"
       },
+      "ExtensionAutoApply": {
+        "description": "True once per Apply click: the extension may Auto apply (it still submits only when every\nrequired field is answered, after its countdown). False: fill only.",
+        "properties": {
+          "auto_submit": {
+            "title": "Auto Submit",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "auto_submit"
+        ],
+        "title": "ExtensionAutoApply",
+        "type": "object"
+      },
+      "ExtensionAutoApplyClaim": {
+        "additionalProperties": false,
+        "description": "The one-time code from the #jobhunt-auto fragment of the link ApplyShortly opened.",
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ExtensionAutoApplyClaim",
+        "type": "object"
+      },
       "ExtensionEvent": {
         "additionalProperties": false,
         "properties": {
@@ -2081,6 +2113,75 @@
           }
         },
         "summary": "Application",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/applications/{application_id}/auto-apply": {
+      "post": {
+        "description": "The user clicked Apply in ApplyShortly for a job board or sign-in site, which opened it in\ntheir browser with a one-time code. Claimed once, it lets the extension Auto apply; reopening\nthe link, or a link made anywhere else, only fills.",
+        "operationId": "extensionClaimAutoApply",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "application_id",
+            "required": true,
+            "schema": {
+              "title": "Application Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionAutoApplyClaim"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionAutoApply"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Auto Apply",
         "tags": [
           "extension"
         ]

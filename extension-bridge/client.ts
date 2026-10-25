@@ -217,10 +217,22 @@ export interface AgentStepResponse {
 
 /** Fragment the platform's "Open & Autofill" button appends to the posting URL. */
 export const AUTOFILL_FRAGMENT = "jobhunt-autofill";
+/** Added when the user clicked Apply in ApplyShortly: a one-time code that, claimed, lets Auto
+ * apply submit (only once every required field is answered, after its countdown). */
+export const AUTO_APPLY_FRAGMENT = "jobhunt-auto";
 
 export function autofillIdFromUrl(url: string): number | null {
   const match = new URL(url).hash.match(new RegExp(`${AUTOFILL_FRAGMENT}=(\\d+)`));
   return match?.[1] ? Number(match[1]) : null;
+}
+
+export function autoApplyCodeFromUrl(url: string): string | null {
+  const match = new URL(url).hash.match(new RegExp(`${AUTO_APPLY_FRAGMENT}=([A-Za-z0-9_-]{16,64})`));
+  return match?.[1] ?? null;
+}
+
+export interface ExtensionAutoApply {
+  auto_submit: boolean;
 }
 
 export class BridgeError extends Error {
@@ -289,6 +301,11 @@ export class JobHuntBridge {
 
   application(id: number): Promise<ExtensionApplication> {
     return this.request(`/api/extension/applications/${id}`);
+  }
+
+  /** Claims the one-time Auto apply code from the link ApplyShortly opened; true only once. */
+  claimAutoApply(id: number, code: string): Promise<ExtensionAutoApply> {
+    return this.request(`/api/extension/applications/${id}/auto-apply`, { method: "POST", body: JSON.stringify({ code }) });
   }
 
   /** Resolves to null when the page isn't a tracked application. */

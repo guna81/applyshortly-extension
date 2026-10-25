@@ -809,7 +809,9 @@
     }
     // Pages often render their form after load (Google Forms, Workday): give them a moment.
     await new Promise((r) => setTimeout(r, 800));
-    await start(hello.appId);
+    // Apply clicked in ApplyShortly: Auto apply, which still submits only when every required
+    // field is answered, after its countdown.
+    await start(hello.appId, { autoSubmit: hello.autoSubmit === true });
   }
 
   // The ApplyShortly website marks whether it is signed in, so the extension can follow it.

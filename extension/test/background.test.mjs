@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 
-function harness({ blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, packagedOrigin = "http://localhost:3000" } = {}) {
+function harness({ autofillId = null, autoCode = null, claimed = false, blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, packagedOrigin = "http://localhost:3000" } = {}) {
   const local = { baseUrl: 'http://localhost:3000', token: 'fixture-bearer', aiDrafts: false };
   const session = {};
   const access = [];
@@ -30,6 +30,7 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
     account() { if (accountRevoked) throw new BridgeError(401, 'Revoked'); return { name: 'Fixture', email: 'fixture@example.com', credits: 30, plan: "pro", billing_enabled: true, ai: { mode: 'platform' } }; }
     profile() { if (noProfile) throw new BridgeError(404, 'Profile not created yet'); return { full_name: 'Fixture' }; }
     application(id) { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return { id }; }
+    claimAutoApply(id, code) { calls.push({ claim: { id, code } }); return { auto_submit: claimed }; }
     lookup() { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return null; }
     websiteTicket() { return { ticket: 'fixture-short-lived-ticket' }; }
     assistFill(body) { calls.push({ assist: body }); return { reply: 'ok', updates: {}, warnings: [], done: false, choices: [] }; }
@@ -60,8 +61,8 @@ function harness({ blocked = false, revoked = false, accountRevoked = false, wro
     tabs: { onRemoved: { addListener() {} }, create: async (value) => calls.push(value), sendMessage: async () => {} },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autofillIdFromUrl: () => null, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -162,7 +163,7 @@ test('cancelled exchange revokes the issued credential without saving it', async
 test('website sign-in uses a one-time ticket fragment and never exposes the bearer', async () => {
   const h = harness();
   h.local.connectionType = 'automatic';
-  assert.equal((await h.send({ type: 'openWebsite', path: '/apply-queue' })).ok, true);
+  assert.equal((await h.send({ type: 'openWebsite', path: '/applications' })).ok, true);
   const tab = h.calls.find((call) => call.url?.includes('/extension-session#'));
   assert.ok(tab);
   assert.equal(new URL(tab.url).search, '');
@@ -359,4 +360,20 @@ test('the agent refuses an application whose last submission is unconfirmed', as
   assert.equal(result.ok, false);
   assert.equal(result.status, 409);
   assert.equal(h.calls.some((c) => c === 'agentRun'), false);
+});
+
+test('a page opened by Apply in ApplyShortly auto applies once its one-time code is claimed', async () => {
+  const opened = harness({ autofillId: 7, autoCode: 'fixture-one-time-apply-code', claimed: true });
+  const hello = await opened.send({ type: 'hello', url: 'https://www.linkedin.com/jobs/view/9' }, opened.content);
+  // Objects from the worker's own realm: compare their fields.
+  assert.equal(JSON.stringify(hello.data), JSON.stringify({ appId: 7, mode: 'fill', autoSubmit: true }));
+  assert.equal(JSON.stringify(opened.calls.find((c) => c.claim)?.claim), JSON.stringify({ id: 7, code: 'fixture-one-time-apply-code' }));
+
+  // Already claimed (a reload), or forged: fill only.
+  const reloaded = harness({ autofillId: 7, autoCode: 'fixture-one-time-apply-code', claimed: false });
+  assert.equal((await reloaded.send({ type: 'hello', url: 'https://www.linkedin.com/jobs/view/9' }, reloaded.content)).data.autoSubmit, false);
+  // Open & Autofill links carry no code: nothing is claimed.
+  const plain = harness({ autofillId: 7 });
+  assert.equal((await plain.send({ type: 'hello', url: 'https://www.linkedin.com/jobs/view/9' }, plain.content)).data.autoSubmit, false);
+  assert.equal(plain.calls.some((c) => c.claim), false);
 });

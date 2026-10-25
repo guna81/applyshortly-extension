@@ -114,7 +114,8 @@ For an extracted source archive, run `npm ci`, `npm run check` and `npm run buil
 
 ## Use
 
-- **From the platform:** **Apply in your browser** (row menu or after a failed run) opens the posting with `#jobhunt-autofill=<id>`. The extension fills the form on its own.
+- **From the platform:** **Apply in your browser** (row menu or after a failed run), and **Prepare & review** on a job board, open the posting with `#jobhunt-autofill=<id>`. The extension fills the form on its own.
+  **Apply** on a job board or sign-in site adds a one-time code (`&jobhunt-auto=<code>`, valid 10 minutes). The extension claims it (`POST /api/extension/applications/{id}/auto-apply`) and, once claimed, runs **⚡ Auto apply** on that page: the same checks and cancellable countdown. Reloading the page, or a link made anywhere else, only fills.
 - **On any page:** click the toolbar icon. The popup shows whether the page is a job in ApplyShortly
   (`/applications/lookup`) and offers two choices, each with a line saying what it does:
   - **Fill this form**: fills what it can, then the panel asks you the rest. You check and submit.

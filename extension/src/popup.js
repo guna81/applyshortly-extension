@@ -26,7 +26,7 @@ function setConn(kind, text) {
 
 async function openTab(url) {
   const u = new URL(url);
-  const path = u.pathname === "/apply-queue" && u.searchParams.has("add") ? u.pathname + u.search : u.pathname;
+  const path = u.pathname === "/applications" && u.searchParams.has("add") ? u.pathname + u.search : u.pathname;
   const result = await chrome.runtime.sendMessage({ type: "openWebsite", path });
   if (!result?.ok) { setConn("bad", result?.error || "Could not open ApplyShortly."); return; }
   window.close();
@@ -110,7 +110,7 @@ async function render(s, { notFound = false } = {}) {
   $("connText").textContent += s.ai?.mode === "personal" ? ` · Personal ${s.ai.provider} key` : ` · ${s.credits ?? 0} credits`;
   const key = await shortcut();
   $("foot").replaceChildren(
-    el("a", { href: "#", onclick: (e) => { e.preventDefault(); openTab(`${s.baseUrl}/apply-queue`); } }, "Open ApplyShortly"),
+    el("a", { href: "#", onclick: (e) => { e.preventDefault(); openTab(`${s.baseUrl}/applications`); } }, "Open ApplyShortly"),
     key ? el("span", {}, "Shortcut ", el("kbd", {}, key)) : null,
   );
   $("foot").hidden = false;
@@ -118,8 +118,8 @@ async function render(s, { notFound = false } = {}) {
   if (!fillable) {
     return show(el("div", { class: "card" },
       el("b", {}, "Open a job application to get started"),
-      el("p", { class: "muted" }, "Go to an application form (or use Open & Autofill in ApplyShortly), then click this icon."),
-      button("Go to Apply Queue", () => openTab(`${s.baseUrl}/apply-queue`), "block"),
+      el("p", { class: "muted" }, "Go to an application form (or use Apply in ApplyShortly), then click this icon."),
+      button("Go to Applications", () => openTab(`${s.baseUrl}/applications`), "block"),
     ));
   }
 
@@ -145,7 +145,7 @@ async function render(s, { notFound = false } = {}) {
     el("p", { class: "muted" }, "You can fill it, but it won't be tracked."),
     choice("Fill this form", FILL_DETAIL, (e) => void start(true, e.currentTarget), "primary"),
     choice("⚡ Auto apply", AUTO_DETAIL, (e) => void start(true, e.currentTarget, true)),
-    button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/apply-queue?${new URLSearchParams({ add: "1", url: tab.url })}`), "ghost block"),
+    button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/applications?${new URLSearchParams({ add: "1", url: tab.url })}`), "ghost block"),
   ));
 }
 

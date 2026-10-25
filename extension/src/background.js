@@ -3,7 +3,7 @@
 
 import { Agent } from "./agent/loop.js";
 import { TabDriver } from "./agent/cdp.js";
-import { BridgeError, JobHuntBridge, autofillIdFromUrl } from "./bridge.js";
+import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autofillIdFromUrl } from "./bridge.js";
 
 /** @type {{baseUrl: string, token: string, aiDrafts: boolean, connectionType?: string}} */
 // AI drafts are on unless the user turns them off: the website's agent drafts what it can't answer too.
@@ -93,11 +93,23 @@ async function hello(tabId, url) {
   const id = autofillIdFromUrl(url);
   if (id !== null) {
     await setTab(tabId, { appId: id, origin, tracked: true });
-    return { appId: id, mode: "fill" };
+    return { appId: id, mode: "fill", autoSubmit: await claimAutoApply(id, url) };
   }
   const current = await getTab(tabId);
   if (current && current.origin === origin) return { appId: current.appId, mode: "continue" };
   return { appId: null, mode: "idle" };
+}
+
+/** The user clicked Apply in ApplyShortly, which opened this page with a one-time code: claimed,
+ * the page Auto applies. Reloading it, or a link made anywhere else, only fills. */
+async function claimAutoApply(appId, url) {
+  const code = autoApplyCodeFromUrl(url);
+  if (!code) return false;
+  try {
+    return (await (await bridge()).claimAutoApply(appId, code)).auto_submit === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Popup → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
@@ -285,11 +297,11 @@ async function websiteSession(signedIn) {
   return { connected: (await browserSignIn(await platformOrigin(), false)).state === "connected" };
 }
 
-// Fixed destinations, plus the queue's add-job dialog prefilled with an http(s) job URL.
+// Fixed destinations, plus the Applications add-job form prefilled with an http(s) job URL.
 function isWebsitePath(path) {
-  if (["/dashboard", "/apply-queue", "/profile", "/settings#extension-ai"].includes(path)) return true;
-  if (typeof path !== "string" || !path.startsWith("/apply-queue?")) return false;
-  const q = new URLSearchParams(path.slice("/apply-queue?".length));
+  if (["/dashboard", "/applications", "/profile", "/settings#extension-ai"].includes(path)) return true;
+  if (typeof path !== "string" || !path.startsWith("/applications?")) return false;
+  const q = new URLSearchParams(path.slice("/applications?".length));
   if ([...q.keys()].some((k) => k !== "add" && k !== "url") || q.get("add") !== "1") return false;
   try { return /^https?:$/.test(new URL(q.get("url")).protocol); } catch { return false; }
 }

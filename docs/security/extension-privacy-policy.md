@@ -6,8 +6,9 @@ For the hosted service, see the published [Privacy](https://applyshortly.com/pri
 ## Scope and contact
 
 Apply Shortly Form Assistant helps you fill job application forms from your ApplyShortly profile and
-saved answers. It submits an application only when you choose Auto apply, and then only by
-clicking the employer's own Submit button after a countdown you can cancel. Otherwise you review
+saved answers. It submits an application only when you choose Auto apply (in the extension, or
+by clicking Apply for that job in ApplyShortly), and then only by clicking the employer's own
+Submit button after a countdown you can cancel. Otherwise you review
 the form and click the employer's Submit button. This policy describes the extension connecting to `https://applyshortly.com`.
 For that hosted service, privacy questions go to `admin@applyshortly.com`. If you use another
 ApplyShortly server, its operator controls the server-side processing and policy.
@@ -58,7 +59,9 @@ agent's questions are saved to your answer bank.
 
 ## Auto apply and submission records
 
-Ordinary filling does not submit. In versions that offer Auto apply, choosing it authorises
+Ordinary filling does not submit. In versions that offer Auto apply, choosing it (in the
+extension, or with Apply in ApplyShortly, which opens the job with a one-time code the extension
+checks with ApplyShortly once) authorises
 clicking the employer's Submit button after a three-second countdown with Cancel; closing or
 minimising the panel cancels it. Auto apply checks detected required fields, browser validity,
 an identifiable single Submit button and tracked application status. These checks depend on

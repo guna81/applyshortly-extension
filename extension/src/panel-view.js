@@ -391,7 +391,7 @@
           body.append(el("div", { class: "msg good" },
             el("b", {}, "Saved in ApplyShortly"),
             el("p", {}, ctl.state.appId != null ? "This application is now marked Submitted. Good luck!" : "Done."),
-            ctl.state.ctx?.baseUrl ? btn("Open ApplyShortly", () => window.open(`${ctl.state.ctx.baseUrl}/apply-queue`, "_blank"), "primary") : null,
+            ctl.state.ctx?.baseUrl ? btn("Open ApplyShortly", () => window.open(`${ctl.state.ctx.baseUrl}/applications`, "_blank"), "primary") : null,
           ));
         } else {
           body.append(chatView(results));

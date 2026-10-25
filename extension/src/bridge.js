@@ -4,12 +4,25 @@
 // aren't subject to the job page's CORS rules, and the API key never enters page context.
 
 export const AUTOFILL_FRAGMENT = "jobhunt-autofill";
+// Added when the user clicked Apply in ApplyShortly: a one-time code that, claimed, lets Auto apply
+// submit (only once every required field is answered, after its countdown).
+export const AUTO_APPLY_FRAGMENT = "jobhunt-auto";
 
 /** @param {string} url @returns {number | null} */
 export function autofillIdFromUrl(url) {
   try {
     const match = new URL(url).hash.match(new RegExp(`${AUTOFILL_FRAGMENT}=(\\d+)`));
     return match?.[1] ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} url @returns {string | null} */
+export function autoApplyCodeFromUrl(url) {
+  try {
+    const match = new URL(url).hash.match(new RegExp(`${AUTO_APPLY_FRAGMENT}=([A-Za-z0-9_-]{16,64})`));
+    return match?.[1] ?? null;
   } catch {
     return null;
   }
@@ -88,6 +101,11 @@ export class JobHuntBridge {
 
   application(id) {
     return this.request(`/api/extension/applications/${id}`);
+  }
+
+  /** Claims the one-time Auto apply code from the link ApplyShortly opened; true only once. */
+  claimAutoApply(id, code) {
+    return this.request(`/api/extension/applications/${id}/auto-apply`, { method: "POST", body: JSON.stringify({ code }) });
   }
 
   /** Resolves to null when the page isn't a tracked application. */

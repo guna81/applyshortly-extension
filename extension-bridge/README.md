@@ -41,12 +41,16 @@ context.
 
 ## Flow
 
-1. In the platform (Apply Queue / application detail), **Open & Autofill** opens the posting as
-   `<apply url>#jobhunt-autofill=<application id>`.
-   The same link is offered as **Apply via extension** when a Tier A run fails (CAPTCHA, login
+1. In the platform (Applications, or **Apply** / **Prepare & review** on a job board or sign-in
+   site), the posting opens as `<apply url>#jobhunt-autofill=<application id>`.
+   The same link is offered as **Open in your browser** when a Tier A run fails (CAPTCHA, login
    wall, unknown form, browser error, review timeout); the API returns it as the run's
-   `fallback_url`.
-2. The extension reads the id (`autofillIdFromUrl`). If there is no fragment, it calls
+   `fallback_url`. After **Apply** it also carries `&jobhunt-auto=<one-time code>` (10 minutes).
+2. The extension reads the id (`autofillIdFromUrl`) and, if present, the code
+   (`autoApplyCodeFromUrl`), which it claims with
+   `POST /applications/{id}/auto-apply` (`{code}` → `{auto_submit}`, true once). Claimed, the
+   page runs Auto apply: required fields answered, a cancellable countdown. Otherwise it only
+   fills. If there is no fragment, it calls
    `GET /applications/lookup?url=<page url>`, which matches on the job's apply URL or its
    canonical URL (tracking parameters stripped).
 3. `GET /profile` returns:
