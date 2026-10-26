@@ -159,3 +159,51 @@ label; never capture real profiles or answers.
 
 Minimum Chrome version: 125 (from the manifest). Homepage `https://applyshortly.com`; support
 `admin@applyshortly.com`; privacy `https://applyshortly.com/privacy`. Distribution unchanged.
+
+## Next release listing changes (Apply from ApplyShortly)
+
+Prepared 26 October 2026 for the first package after v0.4.0 that includes one-time Apply links
+(`#jobhunt-auto`). Bump the manifest and package version before building it. Everything not
+listed here stays as in the v0.4.0 copy above. The hosted privacy policy must include the Apply
+wording from `docs/security/extension-privacy-policy.md` before submission.
+
+### Summary
+
+Unchanged. Clicking Apply in ApplyShortly is a way of choosing Auto apply.
+
+### Description
+
+In HOW IT WORKS, add after step 4:
+
+5. Or click Apply on a job in ApplyShortly. The job opens in your browser, and the assistant fills it and runs Auto apply with the same checks and three-second Cancel. Anything it can't answer waits for you.
+
+In YOU STAY IN CONTROL, replace the first bullet with:
+
+• Nothing is submitted unless you click Submit yourself, explicitly choose Auto apply, or click Apply for that job in ApplyShortly.
+• A link from ApplyShortly starts Auto apply only with a one-time code that works once and expires after 10 minutes. Reloading the page, or any other link, only fills the form.
+
+### Single purpose
+
+Help users complete job application forms from their ApplyShortly profile and saved answers,
+including multi-step forms, with optional AI drafting and application tracking. Users review
+and submit themselves or explicitly choose Auto apply (in the extension, or by clicking Apply for
+that job in ApplyShortly), which clicks the employer's Submit button after
+detected-required-field checks and a three-second cancellable countdown.
+
+### Permission justifications
+
+- **scripting:** Injects the packaged form-filling scripts into the application tab the user selects, to discover fields, insert answers and show the review panel. Auto apply clicks the page's Submit button only after the user explicitly chooses it (in the extension, or by clicking Apply for that job in ApplyShortly) and the countdown completes.
+
+The other justifications are unchanged.
+
+### Privacy practices
+
+No new category. The extension sends the one-time code from the opened link back to
+ApplyShortly once, to check that the user clicked Apply for that application; it is consumed and
+not stored by the extension.
+
+### Reviewer instructions (private test instructions)
+
+Add: "Apply in ApplyShortly opens the job page with a one-time code, and the extension then runs
+Auto apply. On the review demo, Auto apply must still refuse its disabled Submit control.
+Reloading that page, or opening the same link again, only fills."
