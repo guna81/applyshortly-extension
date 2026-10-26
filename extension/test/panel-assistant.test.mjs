@@ -36,6 +36,7 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
     resume: () => null,
     suggest: (msg) => suggest(msg),
     report: () => null,
+    autoApplied: () => false,
     panelPreference: () => false,
     assist: (msg) => assist(msg),
     webSession: () => ({ connected: true }),
@@ -293,6 +294,62 @@ test("Auto apply submits a complete form after the countdown and reports the att
   assert.equal(submits.length, 1, "a repeat request cannot submit the same page twice");
 });
 
+test("Auto apply tells the background it clicked Submit, so Autopilot's window can close", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  const submits = watchSubmits(page);
+  page.start({ autoSubmit: true });
+  await tick(3600);
+  await until(() => submits.length, "submit");
+  assert.equal(page.sent.filter((m) => m.type === "autoApplied").length, 1);
+});
+
+const CHECK_FORM = `
+  <form>
+    <label for="name">Full name</label><input id="name" required>
+    <label for="notice">Notice period</label><input id="notice" required>
+    <button type="submit">Submit application</button>
+  </form>`;
+const noticeSuggest = (needsReview) => (msg) => (/notice/i.test(msg.question) ? { answer: "30 days", source: "answer_bank", needs_review: needsReview } : { answer: null });
+
+test("Autopilot's window leaves an answer that needs a check for the user, but a person's own Auto apply sends it", async () => {
+  const unattended = panelPage(() => ({}), { form: CHECK_FORM, suggest: noticeSuggest(true) });
+  const quiet = watchSubmits(unattended);
+  unattended.start({ autoSubmit: true, unattended: true });
+  await until(() => /1 answer needs your check/.test(unattended.shadow()?.textContent ?? ""), "check message");
+  await tick(3600);
+  assert.equal(quiet.length, 0);
+  assert.equal(unattended.sent.some((m) => m.type === "autoApplied"), false);
+
+  const attended = panelPage(() => ({}), { form: CHECK_FORM, suggest: noticeSuggest(true) });
+  const submits = watchSubmits(attended);
+  attended.start({ autoSubmit: true });
+  await tick(3600);
+  await until(() => submits.length, "submit");
+});
+
+test("Autopilot's window submits when every answer is certain", async () => {
+  const page = panelPage(() => ({}), { form: CHECK_FORM, suggest: noticeSuggest(false) });
+  const submits = watchSubmits(page);
+  page.start({ autoSubmit: true, unattended: true });
+  await tick(3600);
+  await until(() => submits.length, "submit");
+  assert.equal(page.sent.filter((m) => m.type === "autoApplied").length, 1);
+});
+
+test("Auto apply never submits on a sign-in page and leaves the window for the user", async () => {
+  const form = `<form><label for="name">Full name</label><input id="name" required>
+    <label for="pw">Password</label><input id="pw" type="password">
+    <button type="submit">Submit application</button></form>`;
+  const page = panelPage(() => ({}), { form });
+  const submits = watchSubmits(page);
+  page.start({ autoSubmit: true });
+  await until(() => /needs you to sign in/.test(page.shadow()?.textContent ?? ""), "sign-in message");
+  await tick(3600);
+  assert.equal(submits.length, 0);
+  assert.equal(page.sent.some((m) => m.type === "autoApplied"), false);
+  assert.equal(page.sent.some((m) => m.type === "report" && m.event.event === "submission_attempted"), false);
+});
+
 test("Auto apply can be cancelled, and never submits with a required field empty", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
@@ -471,6 +528,62 @@ test("an unanswered custom dropdown's options are read once, offered as quick re
 });
 
 
+test("a prefilled application is recognized and Auto apply reaches its cancellable countdown", async () => {
+  const form = `<form>
+    <label for="name">First name</label><input id="name" required value="Grace">
+    <label for="city">Current location</label><input id="city" required value="Bengaluru">
+    <label for="source">Source</label><select id="source" required><option value="">Choose</option><option selected>LinkedIn</option></select>
+    <label id="notice-label">Notice period</label>
+    <mat-select role="combobox" aria-required="true" aria-labelledby="notice-label"><span class="mat-mdc-select-value-text">Immediate</span></mat-select>
+    <fieldset><legend>Relocate?</legend><label><input type="radio" name="relocate" checked required>Yes</label></fieldset>
+    <label><input type="checkbox" required checked>Consent</label>
+    <label for="cv">Resume</label><input id="cv" type="file">
+    <button type="submit">Submit application</button></form>`;
+  const page = panelPage(() => ({}), { form });
+  Object.defineProperty(page.win.document.querySelector('#cv'), 'files', { value: [new page.win.File(['fixture'], 'fixture.pdf')] });
+  const submits = watchSubmits(page);
+  page.start({ autoSubmit: true });
+  const cancel = await until(() => [...(page.shadow()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Cancel'), 'countdown');
+  assert.doesNotMatch(page.shadow().textContent, /No fields found/);
+  assert.match(page.shadow().textContent, /All set/);
+  assert.equal(page.win.document.querySelector('#name').value, 'Grace', 'existing answers are not overwritten');
+  assert.equal(page.sent.some((m) => m.type === 'suggest'), false);
+  assert.deepEqual(page.sent.find((m) => m.type === 'report' && m.event.event === 'filled').event.filled_fields, [], 'existing answers are not reported as newly filled');
+  cancel.click();
+  await tick(3200);
+  assert.equal(submits.length, 0);
+  // Existing answers remain live: clearing one blocks submission again.
+  const city = page.win.document.querySelector('#city');
+  city.value = '';
+  city.dispatchEvent(new page.win.Event('input', { bubbles: true }));
+  await until(() => /1 thing left/.test(page.shadow().textContent), 'cleared answer');
+  assert.equal([...page.shadow().querySelectorAll('button')].find((b) => b.textContent === 'Submit for me').disabled, true);
+  page.win.close();
+});
+
+test("prefilled answers rejected by the site still block Auto apply", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM.replace('id="name" required', 'id="name" required value="Rejected" aria-invalid="true"') });
+  const submits = watchSubmits(page);
+  page.start({ autoSubmit: true });
+  await until(() => /Not submitted: 1 required field/.test(page.shadow()?.textContent ?? ''), 'validation blocker');
+  assert.equal(submits.length, 0);
+  assert.doesNotMatch(page.shadow().textContent, /No fields found|Submitting in/);
+  page.win.close();
+});
+
+test("rerunning a filled form preserves answer provenance and review requirements", async () => {
+  const page = panelPage(() => ({}), { form: CHECK_FORM, suggest: noticeSuggest(true) });
+  const submits = watchSubmits(page);
+  page.start();
+  await until(() => page.shadow()?.querySelector('.composer'), 'filled panel');
+  page.start({ autoSubmit: true, unattended: true });
+  await until(() => /1 answer needs your check/.test(page.shadow()?.textContent ?? ''), 'review still required');
+  const report = page.sent.filter((m) => m.type === 'report' && m.event.event === 'filled').at(-1);
+  assert.ok(report.event.filled_fields.some((f) => f.label === 'Notice period' && f.source === 'answer_bank' && f.needs_review));
+  assert.equal(submits.length, 0);
+  page.win.close();
+});
+
 test("Auto apply rechecks newly required fields and changed submit buttons after the countdown", async () => {
   const changes = [
     (doc) => doc.querySelector("form").insertAdjacentHTML("beforeend", '<label>New required answer<input required></label>'),
@@ -539,6 +652,37 @@ const CHOICE_FORM = `
   </form>`;
 const SENTENCES = { "Work authorization": "I am not sure if I am legally authorized", "Highest degree": "Master's degree in Computing" };
 const aiContext = () => ({ profile: { full_name: "Ada Lovelace" }, app: { title: "Engineer", company_name: "Acme" }, aiDrafts: true });
+
+test("automatic drafting asks for salary facts and rejects answers beyond the field's limit", async () => {
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
+    form: '<label for="salary">What is your expected salary package?</label><input id="salary" required maxlength="50">' +
+      '<label for="fit">Why are you a good fit?</label><textarea id="fit" required maxlength="20"></textarea>',
+    context: aiContext,
+    suggest: (msg) => msg.allowGenerate ? { answer: "An AI-generated paragraph that is too long for this field.", source: "generated", needs_review: true } : { answer: null },
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "report" && m.event.event === "filled"), "filled report");
+  assert.equal(page.sent.some((m) => m.type === "suggest" && m.allowGenerate && /salary/.test(m.question)), false);
+  assert.equal(page.win.document.querySelector("#salary").value, "");
+  assert.equal(page.win.document.querySelector("#fit").value, "");
+  const report = page.sent.filter((m) => m.type === "report" && m.event.event === "filled").at(-1);
+  assert.equal(report.event.unresolved_fields.length, 2);
+  page.win.close();
+});
+
+test("Rippling SMS consent is named and left to the user even when the answer bank has an answer", async () => {
+  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
+    form: '<div role="radiogroup" data-testid="sms_opt_in"><div role="radio" aria-label="Yes - I consent" data-value="true" aria-checked="false"></div><div role="radio" aria-label="No - I do not consent" data-value="false" aria-checked="false"></div></div>',
+    context: aiContext,
+    suggest: () => ({ answer: "Yes - I consent", source: "answer_bank", needs_review: false }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "report" && m.event.event === "filled"), "filled report");
+  assert.equal(page.sent.some((m) => m.type === "suggest"), false);
+  assert.equal(page.win.document.querySelector('[aria-checked="true"]'), null);
+  assert.match(page.shadow().textContent, /Receive text message updates about your application/);
+  page.win.close();
+});
 
 test("an AI draft that only contains an option's words leaves the choice to the user", async () => {
   const page = panelPage(() => ({ reply: "", updates: {}, warnings: [], done: false, choices: [] }), {
@@ -740,4 +884,46 @@ test("a hidden field the uploader fills is waited for, then named in words inste
   assert.equal(pointed, 0);
   assert.equal(none.length, 0);
   assert.match(stuck.shadow().querySelector(".hero strong").textContent, /1 thing left for you/);
+});
+
+
+test('a newly registered application id is used for tracking instead of leaving the form untracked', async () => {
+  const page = panelPage(() => ({}), { app: { id: 72, title: 'Engineer', company_name: 'Acme' } });
+  page.start({ appId: null });
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'tracked fill');
+  assert.ok(page.sent.filter((m) => m.type === 'report').every((m) => m.event.application_id === 72));
+  page.win.close();
+});
+
+test('SPA submit clicks sync an attempt, then an explicit receipt syncs confirmation once', async () => {
+  const page = panelPage(() => ({}), { form: '<label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'fill');
+  page.win.document.querySelector('button').click();
+  await until(() => page.sent.find((m) => m.event?.event === 'submission_attempted'), 'attempt');
+  assert.equal(page.sent.some((m) => m.event?.event === 'submitted'), false);
+  const receipt = page.win.document.createElement('div');
+  receipt.setAttribute('role', 'status');
+  receipt.textContent = 'Your application has been successfully submitted';
+  page.win.document.body.append(receipt);
+  await until(() => page.sent.find((m) => m.event?.event === 'submitted'), 'confirmation');
+  receipt.append('!');
+  await tick();
+  assert.equal(page.sent.filter((m) => m.event?.event === 'submitted').length, 1);
+  page.win.close();
+});
+
+test('a duplicate-profile error and existing receipt text never turn an attempt into Applied', async () => {
+  const page = panelPage(() => ({}), { form: '<h2>Thank you for applying</h2><label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'fill');
+  page.win.document.querySelector('button').click();
+  await until(() => page.sent.find((m) => m.event?.event === 'submission_attempted'), 'attempt');
+  const error = page.win.document.createElement('div');
+  error.setAttribute('role', 'alert');
+  error.textContent = 'Profile is already present in the system. Cannot be uploaded again.';
+  page.win.document.body.append(error);
+  await tick(30);
+  assert.equal(page.sent.some((m) => m.event?.event === 'submitted'), false);
+  page.win.close();
 });

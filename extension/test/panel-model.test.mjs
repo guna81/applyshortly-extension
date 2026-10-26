@@ -232,3 +232,11 @@ test("a typed draft request is never written into the form as the answer", () =>
   }
   for (const m of ["I draft legal documents for a living", "Drafting tools and CAD", "write code daily"]) assert.equal(P.isDraftRequest(m), false, m);
 });
+
+test('a sign-in page is recognised by its password box or its path', () => {
+  assert.equal(P.loginWall('/careers/apply', true), true);
+  assert.equal(P.loginWall('/en-US/login', false), true);
+  assert.equal(P.loginWall('/auth/callback', false), true);
+  assert.equal(P.loginWall('/careers/apply', false), false);
+  assert.equal(P.loginWall('/blogin-tips', false), false);
+});

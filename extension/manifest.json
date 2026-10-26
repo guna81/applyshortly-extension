@@ -5,7 +5,7 @@
   "description": "Fills job applications from your ApplyShortly profile and answers, even multi-step forms. Submits only when you choose Auto apply.",
   "minimum_chrome_version": "125",
   "background": { "service_worker": "src/background.js", "type": "module" },
-  "permissions": ["storage", "scripting", "activeTab", "identity", "debugger"],
+  "permissions": ["storage", "scripting", "activeTab", "identity", "debugger", "alarms"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "content_scripts": [
     {

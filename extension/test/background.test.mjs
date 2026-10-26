@@ -2,14 +2,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
+import { autoApplyUrl } from '../src/bridge.js';
 import { webcrypto } from 'node:crypto';
 
-function harness({ autofillId = null, autoCode = null, claimed = false, blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, packagedOrigin = "http://localhost:3000" } = {}) {
+function harness({ autofillId = null, autoCode = null, claimed = false, blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, autopilotItem = null, reportFailures = 0, packagedOrigin = "http://localhost:3000" } = {}) {
   const local = { baseUrl: 'http://localhost:3000', token: 'fixture-bearer', aiDrafts: false };
   const session = {};
   const access = [];
   const calls = [];
   let listener;
+  let alarmListener;
+  const timers = [];
   const area = (data) => ({
     setAccessLevel: async (value) => access.push(value.accessLevel),
     get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((key) => key in data).map((key) => [key, data[key]])),
@@ -32,9 +35,12 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     application(id) { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return { id }; }
     claimAutoApply(id, code) { calls.push({ claim: { id, code } }); return { auto_submit: claimed }; }
     lookup() { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return null; }
+    trackApplication(body) { calls.push({ tracked: body }); return { id: 91, title: body.title, status: 'saved' }; }
     websiteTicket() { return { ticket: 'fixture-short-lived-ticket' }; }
     assistFill(body) { calls.push({ assist: body }); return { reply: 'ok', updates: {}, warnings: [], done: false, choices: [] }; }
     disconnect() { calls.push('revoke'); if (revoked) throw new BridgeError(401, 'Revoked'); }
+    autopilotNext() { calls.push('autopilotNext'); return autopilotItem; }
+    async report(event) { calls.push({ report: event }); if (reportFailures-- > 0) throw new BridgeError(0, 'Offline'); return { application_id: event.application_id, status: 'queued' }; }
   }
   class FakeAgent {
     constructor(opts) { Object.assign(this, opts); this.status = 'running'; this.stopped = false; this.log = []; this.last = {}; calls.push({ agent: { tabId: opts.tabId, appId: opts.appId } }); }
@@ -58,11 +64,13 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
         return `${callback}?${new URLSearchParams({ ...answer, state: wrongState ? 'wrong-state' : params.get('state') })}`;
       },
     },
-    tabs: { onRemoved: { addListener() {} }, create: async (value) => calls.push(value), sendMessage: async () => {} },
+    tabs: { get: async () => ({ title: 'Engineer at Acme' }), onRemoved: { addListener() {} }, create: async (value) => calls.push(value), remove: async (id) => calls.push({ removedTab: id }), sendMessage: async () => {} },
+    alarms: { get: async () => undefined, create: (name, info) => calls.push({ alarm: name, info }), onAlarm: { addListener: (fn) => { alarmListener = fn; } } },
+    windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -81,7 +89,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   const content = { id: runtime.id, url: 'https://example.com/apply', tab: { id: 10, url: 'https://example.com/apply' } };
   const website = { id: runtime.id, url: `${packagedOrigin}/dashboard`, tab: { id: 11, url: `${packagedOrigin}/dashboard` } };
   const send = (msg, sender = ui) => new Promise((resolve) => listener(msg, sender, resolve));
-  return { local, session, calls, access, send, content, website };
+  const alarm = () => alarmListener({ name: 'autopilot' });
+  return { local, session, calls, access, send, content, website, alarm, timers };
 }
 
 test('credentials are restricted to trusted storage and privileged UI messages', async () => {
@@ -336,7 +345,7 @@ test('the agent runs in the tab it was started from, one tab at a time, and take
   const h = harness();
   const started = await h.send({ type: 'agentStart', appId: null }, h.content);
   assert.equal(started.ok, true);
-  assert.deepEqual(h.calls.filter((c) => c.agent || c === 'agentRun'), [{ agent: { tabId: 10, appId: null } }, 'agentRun']);
+  assert.deepEqual(h.calls.filter((c) => c.agent || c === 'agentRun'), [{ agent: { tabId: 10, appId: 91 } }, 'agentRun']);
   // A later page in the same tab shows the agent instead of autofilling over it.
   assert.equal((await h.send({ type: 'hello', url: 'https://ats.example/step-2' }, h.content)).data.mode, 'agent');
 
@@ -376,4 +385,153 @@ test('a page opened by Apply in ApplyShortly auto applies once its one-time code
   const plain = harness({ autofillId: 7 });
   assert.equal((await plain.send({ type: 'hello', url: 'https://www.linkedin.com/jobs/view/9' }, plain.content)).data.autoSubmit, false);
   assert.equal(plain.calls.some((c) => c.claim), false);
+});
+
+const dueItem = { application_id: 21, url: 'https://acme.wd5.myworkdayjobs.com/en-US/careers/job/Dev_R1#old', code: 'fixture-autopilot-code-1' };
+
+test('the extension polls for Autopilot jobs once a minute', async () => {
+  const h = harness();
+  await new Promise((resolve) => setImmediate(resolve));
+  const alarm = h.calls.find((c) => c.alarm);
+  assert.equal(alarm.alarm, 'autopilot');
+  assert.equal(alarm.info.periodInMinutes, 1);
+});
+
+test('Autopilot opens one unfocused window per due job, with the one-time code in the fragment', async () => {
+  const h = harness({ autopilotItem: dueItem });
+  await h.alarm();
+  const opened = h.calls.filter((c) => c.window);
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].window.focused, false);
+  const url = new URL(opened[0].window.url);
+  assert.equal(url.origin + url.pathname, 'https://acme.wd5.myworkdayjobs.com/en-US/careers/job/Dev_R1');
+  assert.equal(url.hash, '#jobhunt-autofill=21&jobhunt-auto=fixture-autopilot-code-1');
+  assert.equal(h.session.autopilotWindow.tabId, 55);
+  // One at a time: while that window is open, nothing is asked for.
+  await h.alarm();
+  assert.equal(h.calls.filter((c) => c.window).length, 1);
+  assert.equal(h.calls.filter((c) => c === 'autopilotNext').length, 1);
+});
+
+test('Autopilot does nothing when the setting is off, when signed out, or when nothing is due', async () => {
+  const off = harness({ autopilotItem: dueItem });
+  off.local.autopilotWindows = false;
+  await off.alarm();
+  assert.equal(off.calls.includes('autopilotNext'), false);
+  const signedOut = harness({ autopilotItem: dueItem });
+  delete signedOut.local.token;
+  await signedOut.alarm();
+  assert.equal(signedOut.calls.includes('autopilotNext'), false);
+  const idle = harness();
+  await idle.alarm();
+  assert.equal(idle.calls.some((c) => c.window), false);
+  assert.equal(JSON.stringify((await idle.send({ type: 'connectionSettings' })).data.autopilotWindows), 'true');
+});
+
+test('a link that is not http(s) never opens a window', async () => {
+  const h = harness({ autopilotItem: { ...dueItem, url: 'javascript:alert(1)' } });
+  await h.alarm();
+  assert.equal(h.calls.some((c) => c.window), false);
+  assert.equal(autoApplyUrl('https://x.test/job', 1, 'short'), null);
+});
+
+test('the window closes shortly after Auto apply clicks Submit, and only then', async () => {
+  const h = harness({ autopilotItem: dueItem });
+  await h.alarm();
+  const tab = { ...h.content, tab: { id: 55, url: 'https://acme.wd5.myworkdayjobs.com/' }, url: 'https://acme.wd5.myworkdayjobs.com/' };
+  // A different tab's Submit doesn't touch Autopilot's window.
+  assert.equal((await h.send({ type: 'autoApplied' }, h.content)).data, false);
+  assert.equal(h.session.autopilotWindow.closeAt, undefined);
+  // Not before the pause that lets the site's confirmation show.
+  assert.equal((await h.send({ type: 'autoApplied' }, tab)).data, true);
+  assert.ok(h.session.autopilotWindow.closeAt > Date.now());
+  assert.equal(h.timers[0].ms, 8000);
+  await h.alarm();
+  assert.equal(h.calls.some((c) => c.removedTab), false);
+  h.session.autopilotWindow.closeAt = Date.now() - 1;
+  await h.alarm();
+  assert.deepEqual(h.calls.filter((c) => c.removedTab).map((c) => c.removedTab), [55]);
+  assert.equal(h.session.autopilotWindow, undefined);
+});
+
+test('a confirmation page also closes the window', async () => {
+  const h = harness({ autopilotItem: dueItem });
+  await h.alarm();
+  h.session['tab:55'] = { appId: 21, origin: 'https://acme.wd5.myworkdayjobs.com', tracked: true };
+  const tab = { id: h.content.id, url: 'https://acme.wd5.myworkdayjobs.com/done', tab: { id: 55 } };
+  await h.send({ type: 'report', event: { application_id: 21, event: 'submitted' } }, tab);
+  assert.ok(h.session.autopilotWindow.closeAt);
+});
+
+test('a window nothing finished is flagged after 15 minutes and left open', async () => {
+  const h = harness({ autopilotItem: dueItem });
+  await h.alarm();
+  await h.alarm();
+  assert.equal(h.calls.some((c) => c.report), false);
+  h.session.autopilotWindow.openedAt = Date.now() - 16 * 60_000;
+  await h.alarm();
+  const failed = h.calls.find((c) => c.report)?.report;
+  assert.equal(failed.event, 'failed');
+  assert.equal(failed.application_id, 21);
+  assert.equal(failed.failure_code, 'blocker_not_cleared');
+  assert.equal(h.calls.some((c) => c.removedTab), false);
+  assert.equal(h.session.autopilotWindow, undefined);
+});
+
+test('Autopilot\'s window is told it is unattended, and gets no AI drafting', async () => {
+  const h = harness({ autopilotItem: dueItem, autofillId: 21, autoCode: 'fixture-autopilot-code-1', claimed: true });
+  h.local.aiDrafts = true;
+  await h.alarm();
+  const window = { id: h.content.id, url: 'https://acme.wd5.myworkdayjobs.com/job', tab: { id: 55 } };
+  const hello = await h.send({ type: 'hello', url: 'https://acme.wd5.myworkdayjobs.com/job#jobhunt-autofill=21' }, window);
+  assert.equal(hello.data.unattended, true);
+  h.session['tab:55'] = { appId: 21, origin: 'https://acme.wd5.myworkdayjobs.com', tracked: true };
+  assert.equal((await h.send({ type: 'context', appId: 21 }, window)).data.aiDrafts, false);
+  // Any other tab is the person's own: nothing changes there.
+  const mine = await h.send({ type: 'hello', url: 'https://example.com/apply#jobhunt-autofill=21' }, h.content);
+  assert.equal(mine.data.unattended, undefined);
+  h.session['tab:10'] = { appId: 21, origin: 'https://example.com', tracked: true };
+  assert.equal((await h.send({ type: 'context', appId: 21 }, h.content)).data.aiDrafts, true);
+});
+
+
+test('a page started directly in the extension is tracked and later outcomes use its id', async () => {
+  const h = harness();
+  const ctx = await h.send({ type: 'context', appId: null, page: { title: 'Engineer', company: 'Acme' } }, h.content);
+  assert.equal(ctx.ok, true);
+  assert.equal(ctx.data.app.id, 91);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.find((c) => c.tracked).tracked)), { url: 'https://example.com/apply', title: 'Engineer', company: 'Acme' });
+  assert.equal(h.session['tab:10'].appId, 91);
+  assert.equal((await h.send({ type: 'report', event: { application_id: 92, event: 'submitted' } }, h.content)).ok, false);
+  assert.equal((await h.send({ type: 'report', event: { application_id: 91, event: 'submission_attempted' } }, h.content)).ok, true);
+  assert.equal(h.session['tab:10'].attemptPending, true);
+  assert.equal((await h.send({ type: 'hello', url: h.content.url }, h.content)).data.attemptPending, true);
+});
+
+test('temporary outcome delivery failures retry in order, even with Autopilot windows off', async () => {
+  const h = harness({ reportFailures: 2 });
+  h.local.autopilotWindows = false;
+  await h.send({ type: 'context', appId: null }, h.content);
+  for (const event of ['submission_attempted', 'submitted']) {
+    const res = await h.send({ type: 'report', event: { application_id: 91, event, filled_fields: [{ value: 'private answer' }] } }, h.content);
+    assert.equal(res.ok, true);
+    assert.equal(res.data.pending, true);
+  }
+  assert.equal(h.local.outcomeQueue.events.length, 2);
+  assert.equal(JSON.stringify(h.local.outcomeQueue).includes('private answer'), false);
+  await h.alarm();
+  assert.deepEqual(h.calls.filter((c) => c.report).slice(-2).map((c) => c.report.event), ['submission_attempted', 'submitted']);
+  assert.equal(h.local.outcomeQueue.events.length, 0);
+});
+
+test('sign-out discards pending outcomes so another account cannot receive them', async () => {
+  const h = harness({ reportFailures: 1 });
+  await h.send({ type: 'context', appId: null }, h.content);
+  await h.send({ type: 'report', event: { application_id: 91, event: 'submitted' } }, h.content);
+  assert.equal(h.local.outcomeQueue.events.length, 1);
+  await h.send({ type: 'disconnect' });
+  assert.equal(h.local.outcomeQueue, undefined);
+  h.local.token = 'other-account';
+  await h.alarm();
+  assert.equal(h.calls.filter((c) => c.report).length, 1);
 });

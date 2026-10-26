@@ -96,6 +96,7 @@ async function load() {
   const s = await send("connectionSettings");
   $("token").value = "";
   $("aiDrafts").checked = Boolean(s.aiDrafts);
+  $("autopilotWindows").checked = s.autopilotWindows !== false;
   $("version").textContent = chrome.runtime.getManifest().version;
   try {
     const cmd = (await chrome.commands.getAll()).find((c) => c.name === "autofill");
@@ -211,6 +212,11 @@ $("reveal").addEventListener("click", () => {
 });
 $("aiDrafts").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ aiDrafts: /** @type {HTMLInputElement} */ (event.target).checked });
+  $("prefMsg").textContent = "Saved";
+  setTimeout(() => ($("prefMsg").textContent = ""), 1500);
+});
+$("autopilotWindows").addEventListener("change", async (event) => {
+  await chrome.storage.local.set({ autopilotWindows: /** @type {HTMLInputElement} */ (event.target).checked });
   $("prefMsg").textContent = "Saved";
   setTimeout(() => ($("prefMsg").textContent = ""), 1500);
 });

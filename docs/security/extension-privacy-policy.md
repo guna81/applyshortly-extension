@@ -57,6 +57,14 @@ descriptions or screenshots. Buttons the agent clicked to get through a form (th
 no answers) are kept per website so later visits need no AI. Answers you type in reply to the
 agent's questions are saved to your answer bank.
 
+## Autopilot windows
+
+If you turn on nightly submission in ApplyShortly, the extension asks ApplyShortly about once a
+minute whether a job needs your signed-in browser. A reply contains only that job's link, its
+application number and a one-time code. The extension opens the link in a separate window and runs
+Auto apply as described below, then closes that window. Nothing about your browsing is sent in the
+request. You can turn this off in the extension's Settings.
+
 ## Auto apply and submission records
 
 Ordinary filling does not submit. In versions that offer Auto apply, choosing it (in the
@@ -72,8 +80,10 @@ can be submitted as filled without separate approval of that draft.
 Submission sends form values and attachments to the employer or its application service.
 For tracked applications, ApplyShortly stores attempt and confirmation events; an unconfirmed
 attempt is Needs verification, excluded from submitted metrics, and blocks retries/autofill
-until resolved. Confirmation may be detected on the page or supplied by the user. Untracked
-forms do not create an ApplyShortly application record.
+until resolved. Confirmation may be detected on the page or supplied by the user. Starting the extension on a posting creates or reuses an application record in your connected
+account using its URL, page title and company. Attempt and confirmation metadata (without form
+answers) is kept in restricted local extension storage while delivery is pending; temporary
+connection failures retry once a minute. Signing out clears pending metadata.
 
 ## Storage and security
 

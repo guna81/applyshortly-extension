@@ -11,6 +11,8 @@
   const P = globalThis.JobHuntPanel;
   let state = null; // {appId, ctx, resume, results}
   let submittedReported = false;
+  let attemptPending = false;
+  let receiptBaseline = [];
   let autoSubmitting = false; // Auto apply clicked Submit; its own report covers the submit event
   const AUTO_APPLY_DELAY_S = 3;
   // The assistant's conversation for this page; reset with `state`.
@@ -38,6 +40,11 @@
   /** @param {string} event @param {{note?: string, [key: string]: unknown}} [extra] */
   function report(event, extra = {}) {
     if (state?.appId == null) return Promise.resolve(null);
+    if (event === "submission_attempted") {
+      if (!attemptPending) receiptBaseline = receiptTexts();
+      attemptPending = true;
+      if (state.ctx?.app) state.ctx.app = { ...state.ctx.app, status: "submission_unconfirmed" };
+    }
     // The API caps url at 2000 and note at 1000 characters.
     /** @type {Record<string, unknown>} */
     const payload = { application_id: state.appId, event, url: location.href.slice(0, 2000), ...extra };
@@ -80,6 +87,7 @@
   let draftError = null;
 
   async function resolveAnswer(field, allowGenerate) {
+    if (field.consent) return null;
     const local = F.profileAnswer(field.label, state.ctx.profile, state.ctx.app);
     if (local) return { value: local.value, source: "profile", needsReview: local.needsReview };
     if (!field.label) return null;
@@ -87,7 +95,7 @@
     // answer bank poorly as a whole, so retry with just the first sentence before drafting with AI.
     const head = F.firstSentence(field.label);
     const attempts = head !== field.label ? [[field.label, false], [head, false]] : [[field.label, false]];
-    if (allowGenerate) attempts.push([field.label, true]);
+    if (allowGenerate && (field.kind !== "text" || P.draftable(field))) attempts.push([field.label, true]);
     for (const [question, generate] of attempts) {
       try {
         const s = await suggest(question, state.appId, generate);
@@ -124,6 +132,7 @@
     }
     const written = F.apply(field, answer.value, { strict });
     if (written === null) {
+      if (field.kind === "text") return { field, status: "unresolved", reason: "This answer doesn't fit the field. Please enter it on the page." };
       return { field, status: "unresolved", reason: `None of the options match “${answer.value}”`, suggestion: answer.value };
     }
     return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
@@ -139,6 +148,18 @@
     const answerFor = new Map(answerable.map((f, i) => [f, answers[i]]));
 
     for (const field of fields) {
+      // A reopened or agent-filled form still has fields, even when this pass writes nothing.
+      // Retain this run's provenance/review flags rather than relabelling its drafts as manual.
+      if (answeredNow(field)) {
+        const previous = state.results.find((r) => r.field.el === field.el);
+        const value = currentValue(field);
+        const unchanged = previous && ["filled", "done"].includes(previous.status) &&
+          (value === null || value === previous.value);
+        results.push(unchanged ? { ...previous, field } : {
+          field, status: "done", source: "you", value, optional: !field.required,
+        });
+        continue;
+      }
       if (field.kind === "checkbox") {
         if (field.required && !answeredNow(field)) {
           results.push({ field, status: "unresolved", reason: field.options?.length ? "Select the options that apply on the form" : "Tick it yourself if you agree" });
@@ -271,9 +292,9 @@
     try {
       if (!state || state.appId !== appId) {
         panel.busy("Loading your profile…");
-        const [ctx, resume] = await Promise.all([send({ type: "context", appId }), loadResume()]);
+        const [ctx, resume] = await Promise.all([send({ type: "context", appId, page: { title: pageJob().title, company: pageJob().company } }), loadResume()]);
         if (state) chat = newChat(); // another application; a fresh page keeps what the agent said
-        state = { appId, ctx, resume, results: [] };
+        state = { appId: ctx.app?.id ?? appId, ctx, resume, results: [] };
         if (!quiet) await report("opened");
       }
       const generate = allowGenerate ?? state.ctx.aiDrafts;
@@ -608,6 +629,23 @@
     }
   }
 
+  // Only explicit receipt evidence in a visible status/heading counts as confirmation.
+  // A duplicate-profile error, a submit click, and general job-description text do not.
+  function receiptTexts() {
+    return [...document.querySelectorAll('h1, h2, [role="status"], [role="alert"], .alert, .toast')].filter((el) => {
+      if (!el.getClientRects().length || el.closest('jobhunt-autofill-panel')) return false;
+      const text = F.cleanLabel(el.textContent ?? "");
+      return text.length <= 600 && !/\b(not|unable|failed|error|already|cannot|couldn.t)\b/i.test(text) &&
+        /\b(?:your application (?:has been |was )?(?:successfully )?(?:submitted|received)|application (?:submitted|received) successfully|thank you for applying|we (?:have )?received your application)\b/i.test(text);
+    }).map((el) => F.cleanLabel(el.textContent ?? ""));
+  }
+
+  const hasReceipt = () => receiptTexts().some((text) => !receiptBaseline.includes(text));
+
+  new MutationObserver(() => {
+    if (attemptPending && !submittedReported && hasReceipt()) void markSubmitted("site confirmed application receipt");
+  }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+
   async function markSubmitted(note) {
     if (submittedReported || state?.appId == null) return;
     submittedReported = true;
@@ -653,11 +691,20 @@
    * "Auto apply": clicks the form's own Submit button, but only when every required field is
    * answered, there is exactly one submit button, and the user doesn't cancel the countdown.
    */
-  async function autoApply() {
+  async function autoApply(unattended = false) {
     if (!state?.ctx || autoSubmitting || submittedReported) return;
+    // A sign-in page (or account creation) is the user's to complete: the window stays for them.
+    if (P.loginWall(location.pathname, [...document.querySelectorAll("input[type=password]")].some((el) => !isHidden(el)))) {
+      return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Submit for me”.");
+    }
     recheck();
     const blocked = P.autoApplyBlockers(state.results, state.ctx.app);
     if (blocked.length) return panel.stop(`Not submitted: ${blocked.join(". ")}.`);
+    // Autopilot's window sends only what is certain: a guessed or drafted answer is for the user to check.
+    const unchecked = unattended ? state.results.filter((r) => r.status === "filled" && r.needsReview && !r.reviewed) : [];
+    if (unchecked.length) {
+      return panel.stop(`Not submitted: ${unchecked.length} ${unchecked.length === 1 ? "answer needs" : "answers need"} your check. This window is open for you.`);
+    }
     const button = F.findSubmitButton(document, state.results.map((r) => r.field), { includeDisabled: true });
     if (!button) return panel.stop("Not submitted: couldn't find a single Submit button. Click the form's own Submit button.");
     if (button.disabled || button.getAttribute("aria-disabled") === "true") {
@@ -680,6 +727,8 @@
     await report("submission_attempted", { note: "auto apply clicked the form's submit button; confirmation not yet detected" });
     if (state.ctx.app) state.ctx.app = { ...state.ctx.app, status: "submission_unconfirmed" };
     button.click();
+    // Autopilot's window, if this is one, closes shortly after.
+    void send({ type: "autoApplied" }).catch(() => {});
     panel.idle();
     panel.toast("Submission attempted. Check the page for the site's confirmation.");
     // Keep this page locked after an attempt; another click must not submit it twice.
@@ -705,11 +754,26 @@
   // fetch instead are covered by the confirmation-page check or the panel's "I already submitted".
   document.addEventListener(
     "submit",
-    () => {
-      if (!autoSubmitting && state?.appId != null && state.results.length) void report("submission_attempted", { note: "form submit event; confirmation not yet detected" });
+    (event) => {
+      if (autoSubmitting || attemptPending || state?.appId == null || !state.results.length) return;
+      const button = F.findSubmitButton(document, state.results.map((r) => r.field)) ?? F.findSubmitButton(document, []);
+      if (!button || (event.submitter && event.submitter !== button)) return;
+      void report("submission_attempted", { note: "form submit event; confirmation not yet detected" });
     },
     true,
   );
+
+  // SPA forms may send through fetch without a native submit event. Observe the user's final
+  // button click too, while treating it only as an attempt until receipt evidence appears.
+  document.addEventListener("click", (event) => {
+    if (autoSubmitting || attemptPending || !state?.results.length || state.appId == null) return;
+    const target = event.target instanceof Element ? event.target.closest('button, input[type="submit"], [role="button"]') : null;
+    const button = F.findSubmitButton(document, []);
+    if (!target || target !== button || target.matches(':disabled, [aria-disabled="true"]')) return;
+    if (state.results.some((r) => (r.field.required && !answeredNow(r.field)) || F.isInvalid(r.field))) return;
+    if (target.closest('form')?.querySelector(':invalid')) return;
+    void report("submission_attempted", { note: "final submit clicked; confirmation not yet detected" });
+  }, true);
 
   async function startAgent() {
     agent = { status: "starting", log: [], appId: state?.appId ?? null };
@@ -759,8 +823,14 @@
     if (!(await run(appId)) || agentLive()) return;
     // A page that needs clicking through (an Apply pop-up, Next steps, a form in a frame): carry on.
     const reason = handedOff ? null : P.navigationNeeded(pageShape());
+    // Autopilot's window has nobody watching: no agent (it spends a run's credits behind a debugging
+    // bar), the page stays for the user.
+    if (reason && opts.unattended) {
+      handedOff = true;
+      return panel.stop("Autopilot can't submit a form with several steps. This window is open for you to finish it.");
+    }
     if (reason) return handOff(reason, opts);
-    if (opts.autoSubmit) await autoApply();
+    if (opts.autoSubmit) await autoApply(opts.unattended === true);
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -775,7 +845,7 @@
     if (msg?.type === "run") {
       // Same application: keep what's been filled and answered; another one starts over.
       if (state && state.appId !== (msg.appId ?? null)) { state = null; chat = newChat(); }
-      void start(msg.appId ?? null, { show: true, autoSubmit: msg.autoSubmit === true });
+      void start(msg.appId ?? null, { show: true, autoSubmit: msg.autoSubmit === true, unattended: msg.unattended === true });
       sendResponse({ ok: true });
     }
   });
@@ -799,7 +869,7 @@
       return;
     }
     if (hello.mode === "continue") {
-      if (F.looksSubmitted(document, location.href)) {
+      if (hello.attemptPending && (F.looksSubmitted(document, location.href) || hasReceipt())) {
         state = { appId: hello.appId, ctx: null, results: [] };
         await markSubmitted("confirmation page");
         return;
@@ -811,7 +881,7 @@
     await new Promise((r) => setTimeout(r, 800));
     // Apply clicked in ApplyShortly: Auto apply, which still submits only when every required
     // field is answered, after its countdown.
-    await start(hello.appId, { autoSubmit: hello.autoSubmit === true });
+    await start(hello.appId, { autoSubmit: hello.autoSubmit === true, unattended: hello.unattended === true });
   }
 
   // The ApplyShortly website marks whether it is signed in, so the extension can follow it.

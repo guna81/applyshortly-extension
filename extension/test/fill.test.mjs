@@ -35,6 +35,57 @@ const PROFILE = {
   ],
 };
 
+// Reduced from Rippling's live application markup; no applicant data.
+const ripplingQuestion = (caption, control, required = true) => `<div class="marginY--36">
+  <div><div><p>${caption}${required ? '<span>*</span>' : ''}</p></div></div>
+  <div data-testid="field"><div><div data-testid="customQuestions.fixture">${control}</div></div></div>
+</div>`;
+
+test("Rippling custom text and radio questions retain captions, required markers and readable options", () => {
+  const { doc, F } = page(ripplingQuestion("What is your current/lasy salary package?", '<input name="randomValue" maxlength="50">') +
+    ripplingQuestion("Any prior experience working in startups?", '<div><div role="radiogroup">' +
+      ["Strong No", "No", "Yes", "Strong Yes"].map((text, i) => `<div role="radio" data-value="${i + 1}" aria-label="${text}" aria-checked="false">${text}</div>`).join('') + '</div></div>'));
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map(({ label, required }) => ({ label, required }))), [
+    { label: "What is your current/lasy salary package?", required: true },
+    { label: "Any prior experience working in startups?", required: true },
+  ]);
+  assert.deepEqual(plain(fields[1].options.map((o) => o.text)), ["Strong No", "No", "Yes", "Strong Yes"]);
+  assert.equal(F.apply(fields[0], "A".repeat(51)), null);
+  assert.equal(fields[0].el.value, "");
+  // React creates invalid-in-HTML p > div nesting directly through DOM APIs.
+  for (const caption of doc.querySelectorAll("p")) {
+    caption.querySelector("span").remove();
+    caption.append(doc.createElement("div"));
+  }
+  assert.ok(F.collectFields(doc, { checkLayout: false }).every((f) => f.required));
+});
+
+test("Rippling upload reads its field caption and required flag, and nested radios aren't duplicated", () => {
+  const { doc, F } = page(`<div data-testid="field"><div><span id="resume-label">Résumé</span><span>*</span></div>
+    <div><label aria-labelledby="file-input resume-label"><input type="File"><button>Drop or select (.pdf)</button></label></div></div>
+    <div role="radiogroup" aria-label="SMS consent"><div role="radio" aria-label="Yes" data-value="true"><input type="radio" name="sms"></div>
+    <div role="radio" aria-label="No" data-value="false"><input type="radio" name="sms"></div></div>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields[0].label, "Résumé");
+  assert.equal(fields[0].required, true);
+  assert.equal(fields.filter((f) => f.kind === "radio").length, 1);
+});
+
+test("Rippling split phone control fills a country code before the national number", () => {
+  const { doc, F } = page(`<div data-testid="field"><div data-testid="phone_number-code"><input role="combobox" aria-label="Search" value="+44 GB"></div></div>
+    <label>Phone number<input data-input="phone_number"></label>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  const code = fields[0];
+  assert.equal(code.kind, "dropdown");
+  assert.equal(code.label, "Phone country code");
+  assert.equal(F.isEmpty(code), true);
+  assert.equal(F.profileAnswer(code.label, { phone: "919876543210" }).value, "+91");
+  code.el.value = "+91 IN";
+  assert.equal(F.apply(fields[1], "919876543210"), "9876543210");
+  assert.equal(F.isEmpty(code), false);
+});
+
 test("Contact Form 7: required questions, option groups and hidden anti-spam field", () => {
   const fixture = `<!doctype html>
 <!-- Contact Form 7 structure from AkraTech's AI Developer form. No external scripts. -->
@@ -580,4 +631,54 @@ test("field names read as words, and a country-code question gets the profile ph
   assert.equal(code("+1 (415) 555-0100"), "+1");
   assert.equal(code("9876543210"), null);
   assert.equal(F.profileAnswer("Mobile phone number", { phone: "+91 98765 43210" }, null).value, "+91 98765 43210");
+});
+
+test("custom dropdown whose caption is a plain <div> above it: the question, not the 'Select' prompt", () => {
+  const { doc, F } = page(`<form>
+    <div class="q"><div class="caption">Availability <span>*</span></div>
+      <div class="control"><div role="combobox" aria-haspopup="listbox" aria-required="true"><span>Select</span></div></div></div>
+    <div class="q"><div class="control"><div role="combobox" aria-haspopup="listbox"><span>Select</span></div></div></div>
+  </form>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields[0].label, "Availability");
+  assert.equal(fields[0].required, true);
+  // Nothing above it to read: the second control must not borrow the first one's caption.
+  assert.equal(fields[1].label, "Select");
+});
+
+test("Rippling custom question: aria-label 'Select' is a prompt, the caption sits beside the field wrapper", () => {
+  const { doc, F } = page(`<form><div>
+    <div><div><p>Availability<div></div></p></div>
+      <div data-testid="field"><div><div data-testid="customQuestions.6aa"><div><div data-testid="select-controller"><div><div role="combobox" aria-haspopup="listbox" aria-required="true" aria-label="Select" aria-expanded="false" id="field-55" tabindex="0"><p>Select</p></div></div></div></div></div></div></div></div>
+    <div><div><p>Notice period</p></div>
+      <div data-testid="field"><div><div><div data-testid="select-controller"><div><div role="combobox" aria-haspopup="listbox" aria-label="Select" id="field-60"><p>Select</p></div></div></div></div></div></div></div>
+  </div></form>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => f.label)), ["Availability", "Notice period"]);
+  assert.equal(fields[0].required, true);
+});
+
+test("Rippling dropdowns: each list is found by '<id>-list', and an Escape-proof list closes before the next is read", async () => {
+  const { doc, F, win } = page(`<form>
+    <div><p>Availability</p><div role="combobox" aria-haspopup="listbox" aria-label="Select" id="field-55"><p>Select</p></div></div>
+    <div><p>Years of work experience</p><div role="combobox" aria-haspopup="listbox" aria-label="Select" id="field-61"><p>Select</p></div></div>
+  </form>`);
+  const choices = { "field-55": ["Immediate", "30 days"], "field-61": ["0-1", "1-3", "3-7", "7+"] };
+  // Opens on click, ignores Escape, closes (a tick late, like React) on a click elsewhere; no aria-controls.
+  for (const id of Object.keys(choices)) {
+    doc.getElementById(id).addEventListener("click", () => {
+      const ul = doc.createElement("ul");
+      ul.id = `${id}-list`;
+      ul.setAttribute("role", "listbox");
+      ul.innerHTML = choices[id].map((t) => `<li role="option">${t}</li>`).join("");
+      doc.body.append(ul);
+    });
+  }
+  doc.body.addEventListener("click", (e) => {
+    if (e.target.closest('[role="combobox"]')) return;
+    setTimeout(() => doc.querySelectorAll('[role="listbox"]').forEach((p) => p.remove()), 5);
+  });
+  const [first, second] = F.collectFields(doc, { checkLayout: false }).filter((f) => f.kind === "dropdown");
+  assert.deepEqual(plain(await F.readDropdownOptions(first, { pollMs: 10 })), [{ text: "Immediate" }, { text: "30 days" }]);
+  assert.deepEqual(plain(await F.readDropdownOptions(second, { pollMs: 10 })), [{ text: "0-1" }, { text: "1-3" }, { text: "3-7" }, { text: "7+" }]);
 });

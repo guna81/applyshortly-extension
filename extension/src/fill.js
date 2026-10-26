@@ -26,6 +26,7 @@
    */
   function selectLikeInput(el) {
     if (!el.matches('input:is([role="combobox"], [aria-haspopup="listbox"])')) return false;
+    if (el.closest('[data-testid="phone_number-code"]')) return true;
     return el.readOnly || el.getAttribute("inputmode") === "none" || PICK_PLACEHOLDER.test(el.getAttribute("placeholder") ?? "");
   }
 
@@ -63,6 +64,8 @@
 
   function rawLabel(el) {
     const doc = el.ownerDocument;
+    const rippling = ripplingField(el);
+    if (rippling) return rippling.label;
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
       const t = cleanLabel(textOfIds(doc, labelledBy));
@@ -75,6 +78,12 @@
     }
     const wrapping = el.closest("label");
     if (wrapping) {
+      const ids = wrapping.getAttribute("aria-labelledby");
+      if (ids) {
+        const caption = ids.split(/\s+/).filter((id) => /-label$/.test(id));
+        const text = cleanLabel(textOfIds(doc, caption.join(" ")));
+        if (text) return text;
+      }
       const clone = wrapping.cloneNode(true);
       clone.querySelectorAll("input, select, textarea, option").forEach((n) => n.remove());
       if (cleanLabel(clone.textContent)) return cleanLabel(clone.textContent);
@@ -120,6 +129,27 @@
     return "";
   }
 
+  // Rippling puts custom question captions outside data-testid="field". Its required
+  // marker is an empty element in that caption, rather than an input attribute.
+  function ripplingField(el) {
+    if (el.closest('[data-testid="phone_number-code"]')) return { label: "Phone country code", required: true };
+    if (el.matches('[role="radiogroup"][data-testid="sms_opt_in"]')) return { label: "Receive text message updates about your application?", required: false };
+    const box = el.closest('[data-testid="field"]');
+    if (!box) return null;
+    if (box.querySelector('[data-testid^="customQuestions."]')) {
+      const caption = box.previousElementSibling;
+      const question = caption?.querySelector("p");
+      const text = cleanLabel(question?.textContent);
+      if (text) return { label: text, required: Boolean(question.querySelector("div")) || /\*/.test(question.textContent) };
+    }
+    if (el.matches('input[type="file" i]')) {
+      const caption = box.querySelector('[id$="-label"]');
+      const text = cleanLabel(caption?.textContent);
+      if (text) return { label: text, required: /\*/.test(caption.parentElement?.textContent ?? "") };
+    }
+    return null;
+  }
+
   /**
    * Zoho Recruit career sites: a row's <label id="crc-label-rec-form_N"> sits several wrappers
    * above its field and its "*" span is the only required marker. A row can also hold a control
@@ -158,6 +188,7 @@
 
   function isRequired(el) {
     if (el.required || el.getAttribute("aria-required") === "true") return true;
+    if (ripplingField(el)?.required) return true;
     if ((zohoTabular(el) ?? zohoRow(el))?.required) return true;
     if (el.closest('.wpcf7-validates-as-required')) return true;
     const cf7 = el.closest('.wpcf7-form-control-wrap');
@@ -181,7 +212,7 @@
   }
 
   function optionText(el) {
-    return cleanLabel(el.getAttribute("data-value") || el.getAttribute("aria-label") || el.textContent || el.value);
+    return cleanLabel(el.getAttribute("aria-label") || el.textContent || el.getAttribute("data-value") || el.value);
   }
 
   /**
@@ -208,6 +239,7 @@
     const radioGroups = new Map();
     for (const el of doc.querySelectorAll("input[type=radio]")) {
       if (!visible(el) || !isEditable(el)) continue;
+      if (el.closest('[role="radiogroup"]')?.querySelector('[role="radio"]')) continue;
       const key = el.name || el.closest("fieldset") || el;
       if (!radioGroups.has(key)) radioGroups.set(key, []);
       radioGroups.get(key).push(el);
@@ -222,7 +254,8 @@
     for (const group of doc.querySelectorAll('[role="radiogroup"]')) {
       const options = [...group.querySelectorAll('[role="radio"]')].map((r) => ({ text: optionText(r), el: r }));
       if (!options.length || !visible(group)) continue;
-      fields.push({ kind: "radio", el: group, label: labelOf(group), required: isRequired(group), options, aria: true });
+      fields.push({ kind: "radio", el: group, label: labelOf(group), required: isRequired(group), options, aria: true,
+        consent: group.matches('[data-testid="sms_opt_in"]') });
     }
     const seenCheckboxGroups = new Set();
     for (const el of doc.querySelectorAll('input[type=checkbox], [role="checkbox"]')) {
@@ -279,12 +312,15 @@
   /** The question a custom dropdown answers, never the value it currently shows. */
   function dropdownLabel(el) {
     const doc = el.ownerDocument;
+    const rippling = ripplingField(el);
+    if (rippling) return rippling.label;
     const ids = (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean);
     const own = ids.map((id) => doc.getElementById(id)).filter((n) => n && !el.contains(n));
     const fromIds = cleanLabel(own.map((n) => n.textContent).join(" "));
     if (fromIds) return fromIds;
+    // "Select" / "Search" are the control's prompt (Rippling), not its question.
     const aria = cleanLabel(el.getAttribute("aria-label") ?? "");
-    if (aria) return aria;
+    if (aria && !PICK_PLACEHOLDER.test(aria) && !/^search$/i.test(aria)) return aria;
     const id = el.getAttribute("id");
     const forLabel = id && doc.querySelector(`label[for="${CSS.escape(id)}"]`);
     if (forLabel && cleanLabel(forLabel.textContent)) return cleanLabel(forLabel.textContent);
@@ -295,8 +331,30 @@
     if (inBox && cleanLabel(inBox.textContent)) return cleanLabel(inBox.textContent);
     const near = nearbyLabel(el);
     if (near) return near;
+    const shown = cleanLabel(el.textContent ?? "");
+    // "Select" is the prompt, not the question: the text above the control is.
+    if (!shown || PICK_PLACEHOLDER.test(shown)) return textAbove(el) || shown;
     // The placeholder is often the question ("Gender*").
-    return cleanLabel(el.textContent ?? "");
+    return shown;
+  }
+
+  /**
+   * The closest short text before a control, whatever element holds it (a <div> or <p> caption with
+   * no <label>, class or for/id). The control is often wrapped several times (Rippling puts the
+   * caption beside the whole field wrapper), so this climbs until an ancestor holds another control.
+   */
+  const CONTROLS = "input, select, textarea, [role=combobox], [role=listbox]";
+  function textAbove(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
+      for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
+        if (sib.querySelector(CONTROLS) || sib.matches(CONTROLS)) return "";
+        const t = cleanLabel(sib.textContent);
+        if (t && t.length <= 150 && !PICK_PLACEHOLDER.test(t)) return t;
+      }
+      if ((node.parentElement?.querySelectorAll(CONTROLS).length ?? 0) > 1) return "";
+    }
+    return "";
   }
 
   /** What a dropdown currently shows as its answer; "" while nothing is chosen. */
@@ -376,7 +434,10 @@
   function openOptions(field, before = null) {
     const el = field.el;
     const doc = el.ownerDocument;
-    const owned = ["aria-controls", "aria-owns"].map((a) => el.getAttribute(a)).filter(Boolean).map((id) => doc.getElementById(id)).filter(Boolean);
+    // Some libraries (Rippling) link nothing but name the list after the control: "field-5" → "field-5-list".
+    const named = el.id ? [`${el.id}-list`, `${el.id}-listbox`] : [];
+    const owned = [...["aria-controls", "aria-owns"].map((a) => el.getAttribute(a)).filter(Boolean), ...named]
+      .map((id) => doc.getElementById(id)).filter(Boolean);
     const scopes = owned.length ? owned : [doc];
     const options = scopes
       .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option')])
@@ -444,6 +505,8 @@
         if (!options.length) await sleep(pollMs);
       }
       dismiss(el, () => openOptions(field, before).length > 0);
+      // The next dropdown must not find this one's list still on screen.
+      for (let i = 0; i < polls && openOptions(field).length; i++) await sleep(pollMs);
       if (options.length) break;
     }
     const seen = new Set();
@@ -529,7 +592,7 @@
     const text = String(phone ?? "").trim();
     const spaced = /^\+(\d{1,3})[\s\-().]/.exec(text);
     if (spaced) return `+${spaced[1]}`;
-    const joined = /^\+(\d{11,13})$/.exec(text);
+    const joined = /^\+?(\d{11,13})$/.exec(text);
     return joined ? `+${joined[1].slice(0, -10)}` : null;
   }
 
@@ -637,6 +700,8 @@
       case "file":
         return !field.el.files?.length;
       case "dropdown":
+        if (field.el.closest('[data-testid="phone_number-code"]') &&
+            !field.el.ownerDocument.querySelector('[data-input="phone_number"]')?.value?.trim()) return true;
         return !dropdownValue(field);
       default:
         return true;
@@ -648,6 +713,14 @@
     const win = field.el.ownerDocument.defaultView;
     if (field.kind === "text") {
       let value = answer;
+      const max = field.el.maxLength;
+      if (max >= 0 && String(value).length > max) return null;
+      if (field.el.matches('[data-input="phone_number"]')) {
+        const code = field.el.ownerDocument.querySelector('[data-testid="phone_number-code"] input');
+        const prefix = /^\+(\d{1,3})\b/.exec(code?.value ?? "")?.[1];
+        const digits = String(value).replace(/\D/g, "");
+        if (prefix && dialCode(value) === `+${prefix}`) value = digits.slice(prefix.length);
+      }
       if (field.el.type === "number") {
         const n = /-?\d+(\.\d+)?/.exec(answer)?.[0];
         if (!n) return null;

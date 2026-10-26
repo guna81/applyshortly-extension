@@ -10,6 +10,7 @@ const TEXT_LIMIT = 4000;
 const TYPEAHEAD_WAIT_MS = 700;
 const DROPDOWN_WAIT_MS = 350;
 const ACTION_PAUSE_MS = 120;
+const CAPTCHA_HANDOFF = "There's a CAPTCHA on this page. Please solve it yourself.";
 const LOAD_WAIT_MS = 10_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -260,6 +261,7 @@ export class Agent {
     let results = [];
     let extra = {};
     let wantScreenshot = false;
+    let captchaCleared = false;
     try {
       await this.driver.attach();
       this.status = "running";
@@ -274,6 +276,23 @@ export class Agent {
         const { observation, refs, frames } = await observeTab(this.driver, { screenshot: wantScreenshot });
         if (this.stopped) break;
         this.url = observation.url;
+        // A CAPTCHA is never ours to solve or to plan around: hand the form to the user right away,
+        // without asking the platform. After they say it's done, one pass runs even if a solved
+        // widget stays on the page.
+        if (!observation.blockers.includes("captcha")) captchaCleared = false;
+        else if (!captchaCleared) {
+          this.say("There's a CAPTCHA on this page. Solve it yourself; I haven't touched it.");
+          this.last = { question: { kind: "blocker", text: CAPTCHA_HANDOFF }, filled: this.last?.filled, unresolved: this.last?.unresolved };
+          this.status = "waiting";
+          this.emit();
+          const input = await this.waitForUser();
+          if (input.kind === "stop") break;
+          this.status = "running";
+          captchaCleared = true;
+          extra = { resumed: true };
+          this.say("Continuing…");
+          continue;
+        }
         const res = await this.step({
           session_id: sessionId,
           application_id: this.appId,

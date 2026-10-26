@@ -187,3 +187,34 @@ test("questionChoices: radio groups, listed options, and a dropdown opened once 
   assert.deepEqual(await ask("0.5"), []);
   assert.deepEqual(await ask(null), []);
 });
+
+test("Agent: a CAPTCHA hands the form to the user without asking the platform, then continues once", async () => {
+  let captcha = true;
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Email" }], { blockers: captcha ? ["captcha"] : [] }) });
+  const bodies = [];
+  const updates = [];
+  let agent;
+  agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async (body) => {
+      bodies.push(structuredClone(body));
+      return { session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] };
+    },
+    files: async () => null,
+    notify: async (m) => {
+      updates.push(m);
+      // The user solves it (the solved widget stays on the page) and taps Continue.
+      if (m.status === "waiting") setTimeout(() => agent.resume(), 10);
+    },
+    report: async () => {},
+  });
+  await agent.run();
+  const waiting = updates.filter((u) => u.status === "waiting");
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0].question.kind, "blocker");
+  assert.match(waiting[0].question.text, /CAPTCHA/);
+  // Nothing reached the platform until the user said it was done.
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].resumed, true);
+  assert.equal(agent.status, "ready");
+});

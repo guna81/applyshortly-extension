@@ -4,7 +4,7 @@
 // A result is {field, status, value?, source?, needsReview?, reviewed?, reason?, suggestion?}:
 //   status "filled"      the extension wrote a value
 //   status "unresolved"  the user has to act
-//   status "done"        was unresolved, and the user has since answered it (or marked it done)
+//   status "done"        already answered on the page, or the user answered/marked it done
 //   status "optional"    an optional field nothing could answer; listed, never counted as a to-do
 
 (() => {
@@ -92,6 +92,18 @@
     const unresolved = results.filter((r) => r.status === "unresolved");
     if (unresolved.length) blockers.push(`${plural(unresolved.length, "required field")} still ${unresolved.length === 1 ? "needs" : "need"} you`);
     return blockers;
+  }
+
+  // The same sign-in paths the form agent treats as a login wall (agent/page.js).
+  const LOGIN_URL = /\/(login|signin|sign_in|sign-in)\b|\/auth\//i;
+
+  /**
+   * Whether the page is asking the user to sign in: a password box is showing, or the path is a
+   * sign-in one. Auto apply never submits there; the user signs in first.
+   * @param {string} pathname @param {boolean} passwordShown
+   */
+  function loginWall(pathname, passwordShown) {
+    return passwordShown || LOGIN_URL.test(pathname ?? "");
   }
 
   /** Turns an error from the background worker into words and the one action that fixes it. */
@@ -350,7 +362,7 @@
   }
 
   globalThis.JobHuntPanel = {
-    summarize, autoApplyBlockers, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
+    summarize, autoApplyBlockers, loginWall, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
     nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

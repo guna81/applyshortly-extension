@@ -3,11 +3,12 @@
 
 import { Agent } from "./agent/loop.js";
 import { TabDriver } from "./agent/cdp.js";
-import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autofillIdFromUrl } from "./bridge.js";
+import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./bridge.js";
 
-/** @type {{baseUrl: string, token: string, aiDrafts: boolean, connectionType?: string}} */
+/** @type {{baseUrl: string, token: string, aiDrafts: boolean, autopilotWindows: boolean, connectionType?: string}} */
 // AI drafts are on unless the user turns them off: the website's agent drafts what it can't answer too.
-const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true };
+// Autopilot windows are on too: the user turned Autopilot's auto-submit on, and the toggle here is the way out.
+const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
@@ -34,7 +35,7 @@ async function platformOrigin() {
 
 async function settings() {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "connectionType"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -48,6 +49,42 @@ async function bridge() {
   const s = await settings();
   if (!s.token) throw new BridgeError(401, "Sign in with ApplyShortly in the extension settings.");
   return new JobHuntBridge(s.baseUrl, s.token);
+}
+
+// Persist only outcome metadata, never form answers. Keep attempts before confirmations, and
+// retry transient delivery failures after service-worker/browser restarts. Sign-out clears it.
+let outcomeDelivery = Promise.resolve();
+function syncOutcome(event = null) {
+  const task = outcomeDelivery.then(async () => {
+    const s = await settings();
+    if (!s.token) return null;
+    const owner = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${s.baseUrl}|${s.token}`))));
+    const stored = (await chrome.storage.local.get("outcomeQueue")).outcomeQueue;
+    const events = stored?.owner === owner ? stored.events : [];
+    if (event) events.push({ application_id: event.application_id, event: event.event, url: event.url, note: event.note });
+    const save = async () => {
+      // A connection changed while a request was in flight: never restore the old account's queue.
+      const current = await settings();
+      if (current.token === s.token && current.baseUrl === s.baseUrl) await chrome.storage.local.set({ outcomeQueue: { owner, events } });
+    };
+    await save();
+    let result = null;
+    while (events.length) {
+      const current = await settings();
+      if (current.token !== s.token || current.baseUrl !== s.baseUrl) return null;
+      try { result = await new JobHuntBridge(s.baseUrl, s.token).report(events[0]); }
+      catch (error) {
+        if (error.status === 401) { await clearConnection(); throw error; }
+        if (error.status === 0 || error.status >= 500) return { pending: true };
+        throw error;
+      }
+      events.shift();
+      await save();
+    }
+    return result;
+  });
+  outcomeDelivery = task.then(() => {}, () => {});
+  return task;
 }
 
 async function profile() {
@@ -93,10 +130,12 @@ async function hello(tabId, url) {
   const id = autofillIdFromUrl(url);
   if (id !== null) {
     await setTab(tabId, { appId: id, origin, tracked: true });
-    return { appId: id, mode: "fill", autoSubmit: await claimAutoApply(id, url) };
+    // Autopilot's window has nobody watching: Auto apply sends only what is certain (see content.js).
+    const unattended = (await autopilotWindow())?.tabId === tabId;
+    return { appId: id, mode: "fill", autoSubmit: await claimAutoApply(id, url), ...(unattended ? { unattended } : {}) };
   }
   const current = await getTab(tabId);
-  if (current && current.origin === origin) return { appId: current.appId, mode: "continue" };
+  if (current && current.origin === origin) return { appId: current.appId, mode: "continue", attemptPending: current.attemptPending === true };
   return { appId: null, mode: "idle" };
 }
 
@@ -135,14 +174,20 @@ async function sendToTab(tabId, message) {
   }
 }
 
-async function context(appId) {
+async function context(appId, tabId, url, page) {
   const b = await bridge();
-  const [p, app, s] = await Promise.all([
+  const [p, found, s] = await Promise.all([
     profile(),
     appId !== null ? b.application(appId) : Promise.resolve(null),
     settings(),
   ]);
-  return { profile: p, app, aiDrafts: s.aiDrafts, baseUrl: s.baseUrl };
+  const app = found ?? await b.trackApplication({ url: url.split("#")[0], title: clip(page?.title, 300), company: clip(page?.company, 200) });
+  if (tabId !== undefined && appId === null) {
+    await setTab(tabId, { appId: app.id, origin: new URL(url).origin, tracked: true });
+  }
+  // No AI drafting in Autopilot's window: nobody is there to check what it writes.
+  const unattended = tabId !== undefined && (await autopilotWindow())?.tabId === tabId;
+  return { profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
 }
 
 /** What the popup shows: connection, and which application (if any) the tab's page is. */
@@ -204,7 +249,7 @@ async function pairingPoll() {
 }
 
 async function clearConnection() {
-  await chrome.storage.local.remove(["token", "connectionType"]);
+  await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue"]);
   await chrome.storage.session.clear();
   profileCache = null;
 }
@@ -318,6 +363,101 @@ async function openWebsite(path = "/dashboard") {
   return true;
 }
 
+// ------------------------------------------------------------------ Autopilot sign-in jobs
+
+// Autopilot can't finish a job that needs this browser's sign-ins (Workday, Taleo, …). The user
+// turned its auto-submit on as a standing approval, so the platform hands such a job over with a
+// one-time code. It opens in its own window; Auto apply runs there with its usual checks (every
+// required field answered, one Submit button, a cancellable countdown) and the window closes
+// shortly after the attempt. Anything else (a sign-in, a CAPTCHA, a missing answer, a form with
+// several steps) leaves the window open for the user. Job boards never come this way: the platform
+// doesn't offer them, and the form agent only runs in a tab the user started.
+const AUTOPILOT_ALARM = "autopilot";
+const AUTOPILOT_CLOSE_MS = 8_000; // lets the site's confirmation show before the window goes
+const AUTOPILOT_WATCHDOG_MS = 15 * 60_000;
+let autopilotPolling = false;
+
+/** @returns {Promise<{appId: number, tabId: number, windowId: number, openedAt: number, closeAt?: number} | null>} */
+async function autopilotWindow() {
+  return (await chrome.storage.session.get("autopilotWindow")).autopilotWindow ?? null;
+}
+
+/** One poll: watches the window that is open, or opens one for the next job that is due. */
+async function autopilotPoll() {
+  if (autopilotPolling) return false;
+  autopilotPolling = true;
+  try {
+    const s = await settings();
+    if (!s.token || s.autopilotWindows === false) return false;
+    const open = await autopilotWindow();
+    if (open) return await autopilotWatch(open);
+    const item = await (await bridge()).autopilotNext();
+    const url = item ? autoApplyUrl(item.url, item.application_id, item.code) : null;
+    if (!url) return false;
+    const created = await chrome.windows.create({ url, focused: false });
+    const tabId = created.tabs?.[0]?.id;
+    if (created.id == null || tabId == null) return false;
+    await chrome.storage.session.set({ autopilotWindow: { appId: item.application_id, tabId, windowId: created.id, openedAt: Date.now() } });
+    return true;
+  } finally {
+    autopilotPolling = false;
+  }
+}
+
+/** Closes the window once its close time has passed; a window nothing finished is flagged and left to the user. */
+async function autopilotWatch(open) {
+  if (open.closeAt) return autopilotCloseIfDue();
+  if (Date.now() - open.openedAt < AUTOPILOT_WATCHDOG_MS) return false;
+  await chrome.storage.session.remove("autopilotWindow");
+  const agent = agents.get(open.tabId);
+  // The form agent took the page over: it reports its own outcome.
+  if (agent && !agent.stopped) return false;
+  await (await bridge()).report({
+    application_id: open.appId,
+    event: "failed",
+    failure_code: "blocker_not_cleared",
+    note: "Autopilot opened this page in a window, but nothing was submitted within 15 minutes (a sign-in, a missing answer or a form with several steps). It was left open for you to finish.",
+  }).catch((err) => console.warn("[JobHunt] autopilot report failed:", err.message));
+  return false;
+}
+
+/** Auto apply clicked Submit (or the page shows it went through) in a tab: if Autopilot opened it, close it soon. */
+async function autopilotAttempted(tabId) {
+  const open = await autopilotWindow();
+  if (!open || open.tabId !== tabId || open.closeAt) return false;
+  await chrome.storage.session.set({ autopilotWindow: { ...open, closeAt: Date.now() + AUTOPILOT_CLOSE_MS } });
+  setTimeout(() => void autopilotCloseIfDue().catch(() => {}), AUTOPILOT_CLOSE_MS);
+  return true;
+}
+
+async function autopilotCloseIfDue() {
+  const open = await autopilotWindow();
+  if (!open?.closeAt || Date.now() < open.closeAt) return false;
+  await chrome.storage.session.remove("autopilotWindow");
+  // Only the tab Autopilot opened: anything the user added to that window stays.
+  await chrome.tabs.remove(open.tabId).catch(() => {});
+  return true;
+}
+
+async function ensureAutopilotAlarm() {
+  if (!chrome.alarms || (await chrome.alarms.get(AUTOPILOT_ALARM))) return;
+  chrome.alarms.create(AUTOPILOT_ALARM, { periodInMinutes: 1 });
+}
+
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name !== AUTOPILOT_ALARM) return;
+  return syncOutcome().then(() => autopilotPoll()).catch(async (error) => {
+    if (error.status === 401) await clearConnection();
+    else console.warn("[JobHunt] autopilot poll failed:", error.message);
+  });
+});
+
+// The user closed the window (or its tab) themselves: stop watching it.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  if ((await autopilotWindow())?.tabId === tabId) await chrome.storage.session.remove("autopilotWindow");
+});
+void ensureAutopilotAlarm();
+
 // ------------------------------------------------------------------ form agent
 
 // One agent at a time: it drives a tab the user started it in, never in the background.
@@ -372,7 +512,7 @@ async function agentStart(tabId, url, appId) {
   if (busy) throw new Error("The agent is already working in another tab. Stop it there first.");
   agents.get(tabId)?.stop("Restarted.");
   const b = await bridge();
-  const app = appId != null ? await b.application(appId) : await b.lookup(url);
+  const app = appId != null ? await b.application(appId) : (await b.lookup(url) ?? await b.trackApplication({ url: url.split("#")[0], title: clip((await chrome.tabs.get(tabId)).title, 300) }));
   const id = app?.id ?? null;
   const p = await profile();
   await setTab(tabId, { appId: id, origin: new URL(url).origin, tracked: id !== null });
@@ -434,7 +574,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), aiDrafts: s.aiDrafts, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), aiDrafts: s.aiDrafts, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();
@@ -463,7 +603,7 @@ const handlers = {
     return websiteSession(msg.signedIn === true);
   },
   start: (msg) => start(msg.tabId, msg.url, Boolean(msg.allowUntracked), msg.autoSubmit === true),
-  context: (msg) => context(msg.appId ?? null),
+  context: (msg, sender) => context(msg.appId ?? null, sender.tab?.id, sender.url, msg.page),
   suggest: async (msg) =>
     (await bridge()).suggestAnswer({
       question: msg.question,
@@ -484,10 +624,20 @@ const handlers = {
   },
   report: async (msg, sender) => {
     if (msg.event.application_id == null) return null;
-    const result = await (await bridge()).report(msg.event);
-    if (msg.event.event === "submitted" && sender.tab) await clearTab(sender.tab.id);
+    if (msg.event.event === "submission_attempted" && sender.tab) {
+      const tab = await getTab(sender.tab.id);
+      if (tab) await setTab(sender.tab.id, { ...tab, attemptPending: true });
+    }
+    const result = ["submission_attempted", "submitted"].includes(msg.event.event)
+      ? await syncOutcome(msg.event) : await (await bridge()).report(msg.event);
+    if (msg.event.event === "submitted" && sender.tab) {
+      await clearTab(sender.tab.id);
+      await autopilotAttempted(sender.tab.id);
+    }
     return result;
   },
+  // Auto apply clicked the form's Submit button in this tab.
+  autoApplied: (msg, sender) => autopilotAttempted(sender.tab.id),
   status: (msg) => status(msg.tabId, msg.url),
   // From the page's panel: its own tab. From the popup or options page: the tab they name.
   agentStart: (msg, sender) => (fromPage(sender)
@@ -519,7 +669,7 @@ function pageJob(page) {
   return job.title ? job : null;
 }
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied"]);
 
 async function dispatch(msg, sender) {
   await storageReady;
@@ -552,5 +702,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   await storageReady;
   await platformOrigin();
+  await ensureAutopilotAlarm();
   if (reason === "install" && !(await settings()).token) await chrome.runtime.openOptionsPage();
 });

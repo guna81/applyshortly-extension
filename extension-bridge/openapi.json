@@ -1046,6 +1046,33 @@
         "title": "ExtensionAutoApplyClaim",
         "type": "object"
       },
+      "ExtensionAutopilotItem": {
+        "description": "A job Autopilot couldn't finish on its own because it needs the user's signed-in browser.\nThe extension opens `url` in a window with the one-time `code` in the link's fragment, where\nAuto apply runs as usual (every required field answered, a cancellable countdown).",
+        "properties": {
+          "application_id": {
+            "title": "Application Id",
+            "type": "integer"
+          },
+          "code": {
+            "maxLength": 64,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Code",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "application_id",
+          "url",
+          "code"
+        ],
+        "title": "ExtensionAutopilotItem",
+        "type": "object"
+      },
       "ExtensionEvent": {
         "additionalProperties": false,
         "properties": {
@@ -1450,6 +1477,34 @@
           "resume_url"
         ],
         "title": "ExtensionProfile",
+        "type": "object"
+      },
+      "ExtensionTrackApplication": {
+        "additionalProperties": false,
+        "properties": {
+          "company": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Company",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2000,
+            "minLength": 8,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "ExtensionTrackApplication",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2060,6 +2115,66 @@
         ]
       }
     },
+    "/api/extension/applications/track": {
+      "post": {
+        "description": "Track the page the user started filling, without fetching it or starting an apply run.",
+        "operationId": "extensionTrackApplication",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionTrackApplication"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionApplication"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Track Application",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
     "/api/extension/applications/{application_id}": {
       "get": {
         "operationId": "extensionApplication",
@@ -2242,6 +2357,64 @@
           }
         },
         "summary": "Assistant Fill",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/autopilot/next": {
+      "post": {
+        "description": "The extension polls this. When Autopilot has a job that needs the user's signed-in browser\n(a sign-in site, or a session that lapsed) and its night has come, this hands it over with a\none-time code: the extension opens it in a window and Auto apply runs there as usual. Only\nwith auto-submit on (the user's standing approval), one job at a time, never while a\nsubmission waits for verification, and never a job board.",
+        "operationId": "extensionAutopilotNext",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ExtensionAutopilotItem"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Extensionautopilotnext"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Autopilot Next",
         "tags": [
           "extension"
         ]

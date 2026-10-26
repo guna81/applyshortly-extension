@@ -143,6 +143,8 @@ The panel at the bottom right has:
   reported as *submission attempted* until a confirmation is detected or you mark it.
 - **I already submitted it** (footer, tracked pages) covers sites where it can't detect the submit.
 
+Answers already present when filling starts count toward completion and are checked against the site's validation. Rerunning preserves the source and review flags of answers filled in the current session.
+
 When you type an answer on the page, the panel notices and moves on to the next question. **–** or Esc shrinks the panel to a pill showing what's
 left. It stays minimised on later pages until you open it again.
 
@@ -172,6 +174,29 @@ Inside, this is the form agent (`src/agent/`); to you it is the same chat.
   form it had to step through.
 - **Pause** and **Stop and take over** are always available. Chrome shows a "started debugging
   this browser" bar while it runs (the `debugger` permission); closing the bar stops it.
+
+### Autopilot windows
+
+When you turn on **Submit complete applications every night** in ApplyShortly, jobs on sites that
+need your sign-in (Workday, Taleo, SuccessFactors, iCIMS, Oracle), or an application whose site
+session lapsed before the night's submit, are handed to the extension. About once a minute the
+service worker (an alarm, the `alarms` permission) asks `POST /api/extension/autopilot/next`. When
+a job is due, the reply carries its link and a one-time code, and the extension opens the link in
+its own unfocused window (`#jobhunt-autofill=<id>&jobhunt-auto=<code>`, http(s) only). From there
+it is the usual Auto apply: the code is claimed once, every required field must be answered, there
+must be one Submit button, and the countdown still runs.
+
+The window has nobody watching, so it is stricter than Auto apply you start yourself: it never
+starts the form agent (which would attach the debugger), never drafts answers with AI, and
+doesn't submit while an answer is marked **Check**. It also stops on a sign-in page (a visible
+password box or a `/login` path) and says so in the panel. Eight seconds after the click the
+extension closes that tab, and only that tab. If nothing was submitted within 15 minutes it leaves
+the window open and reports `failed` (`blocker_not_cleared`) so the job isn't offered again.
+Anything it can't finish stays open for you. Job boards are never offered this way.
+
+It is on by default (you opted in by turning on nightly submission) and can be switched off in
+Settings: **Let Autopilot open sign-in jobs in a window**. Chrome must be running at your
+Autopilot hour; otherwise the job waits and rolls to the next night.
 
 ## How answers are chosen
 
@@ -251,6 +276,8 @@ not need additional extension resource permissions. Keep these copies in sync wh
   to or was clicked in, so on-demand injection would break these flows. On other pages the
   scripts stay idle: one `hello` message to the service worker, and a watch on the `<html>`
   attribute the ApplyShortly website uses for its signed-in mark.
+- **`alarms`.** The once-a-minute check for a job Autopilot has handed over (see Autopilot
+  windows). It opens a window only for a link ApplyShortly returned, and only with the setting on.
 - **`debugger`.** The form agent's trusted input and cross-origin frames
   (`src/agent/cdp.js`). It attaches only to the tab the agent was started in, and Chrome shows its
   debugging bar meanwhile.
@@ -267,3 +294,17 @@ not need additional extension resource permissions. Keep these copies in sync wh
 - **The form agent** can't see inside closed shadow roots or Google's file picker, and needs
   Chrome 125 or later.
 - **Submits done with `fetch`** on single-page apps aren't detected; use **Mark as submitted**.
+
+
+### Automatic application tracking
+
+Starting Fill this form, Auto apply or the form agent registers that posting in the connected
+account's web app, including pages opened directly on an employer's site. Repeated starts on the
+same posting reuse its application. The extension sends the page URL, title and company for
+tracking; it does not fetch job boards or submit just by registering a page.
+
+A final Submit click records an attempt as **Needs verification**. An explicit application receipt
+on the page, or your confirmation through **I already submitted it**, moves it to **Applied**.
+Duplicate-profile errors do not count as a successful application. Temporary connection errors
+queue outcome metadata locally and retry once a minute, even with Autopilot windows off.
+Signing out discards this queue so it cannot sync to another account.

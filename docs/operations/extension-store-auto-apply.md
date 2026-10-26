@@ -160,6 +160,34 @@ label; never capture real profiles or answers.
 Minimum Chrome version: 125 (from the manifest). Homepage `https://applyshortly.com`; support
 `admin@applyshortly.com`; privacy `https://applyshortly.com/privacy`. Distribution unchanged.
 
+## Next release listing changes (Autopilot windows)
+
+Prepared 26 October 2026 for the package that adds the `alarms` permission and Autopilot's window
+(on top of the Apply wording below). Everything not listed stays as in the previous copy.
+
+### Description
+
+In HOW IT WORKS, add: "6. If you turn on nightly submission in ApplyShortly, jobs on sites that
+need your sign-in open in their own window at your hour, run Auto apply with the same checks and
+Cancel, and the window closes a few seconds after. Anything it can't finish stays open for you."
+
+In YOU STAY IN CONTROL, add: "• Autopilot windows only open for jobs ApplyShortly hands over with a
+one-time code after you turned on nightly submission, never for job boards, and can be switched
+off in Settings."
+
+### Permission justifications
+
+- **alarms:** Checks about once a minute whether ApplyShortly has a job it can't finish itself
+  because the site needs the user's sign-in, so the extension can open it in a separate window and
+  run Auto apply there. It opens only a link ApplyShortly returned, only with the user's setting
+  on, and closes only the tab it opened.
+
+### Reviewer instructions
+
+Add: "Autopilot windows need an ApplyShortly account with nightly submission on and a job at a
+sign-in site; the setting 'Let Autopilot open sign-in jobs in a window' is in Settings and can be
+turned off."
+
 ## Next release listing changes (Apply from ApplyShortly)
 
 Prepared 26 October 2026 for the first package after v0.4.0 that includes one-time Apply links

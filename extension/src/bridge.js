@@ -28,6 +28,22 @@ export function autoApplyCodeFromUrl(url) {
   }
 }
 
+/**
+ * The page Autopilot's window opens: the posting with the application id and the one-time code in
+ * the fragment, like the link ApplyShortly's Apply button opens. Null unless the link is http(s).
+ * @param {string} url @param {number} id @param {string} code @returns {string | null}
+ */
+export function autoApplyUrl(url, id, code) {
+  try {
+    const target = new URL(url);
+    if (!/^https?:$/.test(target.protocol) || !Number.isInteger(id) || !/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
+    target.hash = `${AUTOFILL_FRAGMENT}=${id}&${AUTO_APPLY_FRAGMENT}=${code}`;
+    return target.href;
+  } catch {
+    return null;
+  }
+}
+
 export class BridgeError extends Error {
   /** @param {number} status @param {string} message */
   constructor(status, message) {
@@ -103,9 +119,23 @@ export class JobHuntBridge {
     return this.request(`/api/extension/applications/${id}`);
   }
 
+  /** Register a page the user started filling so its outcome syncs to Applications. */
+  trackApplication(body) {
+    return this.request("/api/extension/applications/track", { method: "POST", body: JSON.stringify(body) });
+  }
+
   /** Claims the one-time Auto apply code from the link ApplyShortly opened; true only once. */
   claimAutoApply(id, code) {
     return this.request(`/api/extension/applications/${id}/auto-apply`, { method: "POST", body: JSON.stringify({ code }) });
+  }
+
+  /**
+   * The next job Autopilot couldn't finish on its own because it needs this browser's sign-ins, with
+   * the one-time Auto apply code for it; null when nothing is due.
+   * @returns {Promise<{application_id: number, url: string, code: string} | null>}
+   */
+  autopilotNext() {
+    return this.request("/api/extension/autopilot/next", { method: "POST" });
   }
 
   /** Resolves to null when the page isn't a tracked application. */
