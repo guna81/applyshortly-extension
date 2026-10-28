@@ -136,7 +136,7 @@
         role: "radio",
         name: clip(o.text, 500),
         group: label,
-        checked: field.aria ? o.el.getAttribute("aria-checked") === "true" : Boolean(o.el.checked),
+        checked: field.aria ? o.el.getAttribute(field.pressed ? "aria-pressed" : "aria-checked") === "true" : Boolean(o.el.checked),
         required,
         ...invalidInfo(field),
       }));
@@ -339,7 +339,10 @@
   function normaliseDate(type, value) {
     const v = String(value).trim();
     if (type !== "date" && type !== "month") return v;
-    if (/^\d{4}-\d{2}(-\d{2})?$/.test(v)) return type === "month" ? v.slice(0, 7) : v;
+    // A month alone ("2020-12", how résumés and profiles store a job's dates) is a full date's
+    // first day: a date box refuses it without a day.
+    if (/^\d{4}-\d{2}$/.test(v)) return type === "month" ? v : `${v}-01`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return type === "month" ? v.slice(0, 7) : v;
     const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(v);
     const parsed = dmy ? new Date(Date.UTC(+dmy[3], +dmy[2] - 1, +dmy[1])) : new Date(`${v} UTC`);
     if (Number.isNaN(parsed.getTime())) return v;

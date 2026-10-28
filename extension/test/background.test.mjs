@@ -10,6 +10,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   const session = {};
   const access = [];
   const calls = [];
+  const agentInstances = [];
   let listener;
   let alarmListener;
   const timers = [];
@@ -43,7 +44,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     async report(event) { calls.push({ report: event }); if (reportFailures-- > 0) throw new BridgeError(0, 'Offline'); return { application_id: event.application_id, status: 'queued' }; }
   }
   class FakeAgent {
-    constructor(opts) { Object.assign(this, opts); this.status = 'running'; this.stopped = false; this.log = []; this.last = {}; calls.push({ agent: { tabId: opts.tabId, appId: opts.appId } }); }
+    constructor(opts) { Object.assign(this, opts); this.status = 'running'; this.stopped = false; this.log = []; this.last = {}; agentInstances.push(this); calls.push({ agent: { tabId: opts.tabId, appId: opts.appId } }); }
     run() { calls.push('agentRun'); return Promise.resolve(); }
     reply(text) { calls.push({ agentReply: text }); }
     skip() { calls.push('agentSkip'); }
@@ -64,7 +65,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
         return `${callback}?${new URLSearchParams({ ...answer, state: wrongState ? 'wrong-state' : params.get('state') })}`;
       },
     },
-    tabs: { get: async () => ({ title: 'Engineer at Acme' }), onRemoved: { addListener() {} }, create: async (value) => calls.push(value), remove: async (id) => calls.push({ removedTab: id }), sendMessage: async () => {} },
+    tabs: { get: async () => ({ title: 'Engineer at Acme' }), onRemoved: { addListener() {} }, create: async (value) => calls.push(value), remove: async (id) => calls.push({ removedTab: id }), sendMessage: async (tabId, message) => { calls.push({ tabMessage: { tabId, message } }); } },
     alarms: { get: async () => undefined, create: (name, info) => calls.push({ alarm: name, info }), onAlarm: { addListener: (fn) => { alarmListener = fn; } } },
     windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
@@ -90,8 +91,41 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   const website = { id: runtime.id, url: `${packagedOrigin}/dashboard`, tab: { id: 11, url: `${packagedOrigin}/dashboard` } };
   const send = (msg, sender = ui) => new Promise((resolve) => listener(msg, sender, resolve));
   const alarm = () => alarmListener({ name: 'autopilot' });
-  return { local, session, calls, access, send, content, website, alarm, timers };
+  return { local, session, calls, access, send, content, website, alarm, timers, agentInstances };
 }
+
+test('agent handoff carries Auto apply once to the same tab, never through status replay', async () => {
+  const h = harness();
+  assert.equal((await h.send({ type: 'agentStart', appId: null, autoSubmit: true }, h.content)).ok, true);
+  const agent = h.agentInstances[0];
+  await agent.notify({ type: 'agentUpdate', status: 'running', appId: 91 });
+  await agent.notify({ type: 'agentUpdate', status: 'ready', appId: 91 });
+  await agent.notify({ type: 'agentUpdate', status: 'ready', appId: 91 });
+  const messages = h.calls.filter((c) => c.tabMessage).map((c) => c.tabMessage);
+  assert.deepEqual(messages.map((m) => m.tabId), [10, 10, 10]);
+  assert.deepEqual(messages.map((m) => m.message.autoSubmit), [false, true, false]);
+  agent.status = 'ready';
+  assert.notEqual((await h.send({ type: 'agentStatus' }, h.content)).data.autoSubmit, true);
+});
+
+test('ordinary agent runs and stopped or failed Auto apply runs cannot authorize submission', async () => {
+  for (const terminal of [null, 'stopped', 'failed']) {
+    const h = harness();
+    await h.send({ type: 'agentStart', appId: null, autoSubmit: terminal !== null }, h.content);
+    const agent = h.agentInstances[0];
+    if (terminal) await agent.notify({ type: 'agentUpdate', status: terminal, appId: 91 });
+    await agent.notify({ type: 'agentUpdate', status: 'ready', appId: 91 });
+    assert.equal(h.calls.some((c) => c.tabMessage?.message.autoSubmit === true), false);
+  }
+});
+
+test('changing accounts cancels the old agent run\'s Auto apply continuation', async () => {
+  const h = harness();
+  await h.send({ type: 'agentStart', appId: null, autoSubmit: true }, h.content);
+  h.local.token = 'another-account-fixture';
+  await h.agentInstances[0].notify({ type: 'agentUpdate', status: 'ready', appId: 91 });
+  assert.equal(h.calls.find((c) => c.tabMessage)?.tabMessage.message.autoSubmit, false);
+});
 
 test('credentials are restricted to trusted storage and privileged UI messages', async () => {
   const h = harness();

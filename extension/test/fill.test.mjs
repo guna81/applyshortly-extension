@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { test } from "node:test";
+import { ashbyYesNo, ashbyProviders, ashbyConsent } from "./ashby-fixture.mjs";
 
 // Values built inside the jsdom window have its prototypes; compare plain copies.
 const plain = (x) => JSON.parse(JSON.stringify(x));
@@ -167,13 +168,44 @@ test("Google Forms: questions come from the heading, without the required marker
   );
 });
 
+// Google Forms' long-text boxes carry aria-label="Your answer" and no aria-labelledby: the
+// question is only in the item's heading.
+test("Google Forms: a generic aria-label on the box doesn't hide the question heading", () => {
+  const { doc, F } = page(
+    gformItem(1, "6 How many automation projects have you built?") +
+      `<div role="listitem"><div role="heading"><span>Describe your best project.</span><span aria-label="Required question"> *</span></div>
+         <textarea aria-label="Your answer" required></textarea></div>`,
+    "https://docs.google.com/forms/d/e/x/viewform",
+  );
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(
+    plain(fields.map((f) => [f.kind, f.label, f.required])),
+    [
+      ["text", "6 How many automation projects have you built?", true],
+      ["text", "Describe your best project.", true],
+    ],
+  );
+});
+
+test("an aria-label that is a real question is kept; a generic one is the last resort", () => {
+  const { doc, F } = page(
+    `<textarea aria-label="Answer to the screening question"></textarea><textarea aria-label="Your answer"></textarea>`,
+  );
+  const labels = F.collectFields(doc, { checkLayout: false }).map((f) => f.label);
+  assert.deepEqual(plain(labels), ["Answer to the screening question", "Your answer"]);
+});
+
 test("profile answers for the questions on a typical Indian tech-hiring form", () => {
   const { F } = page("");
   const answer = (q) => F.profileAnswer(q, PROFILE, null)?.value ?? null;
   assert.equal(answer("Full Name ?"), "Ada Lovelace King");
+  assert.equal(answer("Name and Surname"), "Ada Lovelace King");
+  assert.equal(answer("First and last name"), "Ada Lovelace King");
   assert.equal(answer("First name"), "Ada");
   assert.equal(answer("Last name"), "Lovelace King");
   assert.equal(answer("Contact Number ?"), "+44 20 7946 0000");
+  assert.equal(answer("Phone number (please include country code)"), "+44 20 7946 0000");
+  assert.equal(answer("Mobile phone country code"), "+44");
   assert.equal(answer("E-Mail ID?"), "ada@example.com");
   assert.equal(answer("Current Location?"), "London, UK");
   assert.equal(answer("Current company Name ?"), "Analytical Engines");
@@ -192,6 +224,24 @@ test("current company is flagged for review when no job is marked current", () =
   const { F } = page("");
   const past = { ...PROFILE, experience: [{ ...PROFILE.experience[1], is_current: false, end_date: "2026-08" }] };
   assert.deepEqual(plain(F.profileAnswer("Current company name", past, null)), { value: "Analytical Engines", needsReview: true });
+});
+
+test("annual expectations use saved compensation only for the question's currency", () => {
+  const { F } = page("");
+  const profile = { ...PROFILE, preferences: { expected_ctc: "2200000", currency: "INR" } };
+  assert.equal(F.profileAnswer("What are your annual expectations (in INR)?", profile).value, "2200000");
+  assert.equal(F.profileAnswer("What are your annual expectations (in USD)?", profile), null);
+  assert.equal(F.profileAnswer("What are your annual expectations?", profile), null);
+});
+
+test("Ashby and native date inputs reject prose and receive valid calendar dates", () => {
+  const { F, doc } = page('<label>Start date<input class="ashby-application-form-input-date" required></label><label>Other date<input type="date"></label>');
+  const [ashby, native] = F.collectFields(doc, { checkLayout: false });
+  assert.equal(F.apply(ashby, "I can start immediately."), null);
+  assert.equal(F.apply(ashby, "2026-02-30"), null);
+  assert.equal(ashby.el.value, "");
+  assert.equal(F.apply(ashby, "2026-10-28"), "10/28/2026");
+  assert.equal(F.apply(native, "10/28/2026"), "2026-10-28");
 });
 
 test("generic form: labels, selects, radios, consent checkbox and file input", () => {
@@ -681,4 +731,59 @@ test("Rippling dropdowns: each list is found by '<id>-list', and an Escape-proof
   const [first, second] = F.collectFields(doc, { checkLayout: false }).filter((f) => f.kind === "dropdown");
   assert.deepEqual(plain(await F.readDropdownOptions(first, { pollMs: 10 })), [{ text: "Immediate" }, { text: "30 days" }]);
   assert.deepEqual(plain(await F.readDropdownOptions(second, { pollMs: 10 })), [{ text: "0-1" }, { text: "1-3" }, { text: "3-7" }, { text: "7+" }]);
+});
+
+
+test("Ashby: yes/no buttons and required multi-selects are complete questions, not backing checkboxes", () => {
+  const { doc, F } = page(ashbyYesNo() + ashbyYesNo("Need a work visa?", false) + ashbyProviders + ashbyConsent);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map(({ kind, label, required }) => ({ kind, label, required }))), [
+    { kind: "radio", label: "Have you used Python professionally?", required: true },
+    { kind: "radio", label: "Need a work visa?", required: false },
+    { kind: "checkbox", label: "Which providers have you used?", required: true },
+    { kind: "checkbox", label: "I agree to recruitment communications", required: true },
+  ]);
+  const yesno = fields[0];
+  for (const option of yesno.options) option.el.addEventListener("click", () => {
+    for (const o of yesno.options) o.el.setAttribute("aria-pressed", String(o === option));
+  });
+  assert.equal(F.isEmpty(yesno), true);
+  assert.equal(F.apply(yesno, "No"), "No");
+  assert.equal(F.isEmpty(yesno), false, "a No answer is answered, despite the unchecked backing input");
+  assert.equal(F.apply(fields[2], "Llama"), null, "checkbox selections remain the user's choice");
+  assert.equal(F.apply(fields[3], "Yes"), null, "consent is never inferred");
+});
+
+test("text filling notifies delegated focusout handlers and sends an InputEvent", () => {
+  const { doc, F, win } = page('<label>Email<input type="email" required></label>');
+  const field = F.collectFields(doc, { checkLayout: false })[0];
+  let committed = "";
+  let inputEvent;
+  doc.addEventListener("input", (event) => { inputEvent = event; });
+  doc.addEventListener("focusout", (event) => { committed = event.target.value; });
+  F.apply(field, "fixture@example.com");
+  assert.equal(committed, "fixture@example.com");
+  assert.ok(inputEvent instanceof win.InputEvent);
+  assert.equal(doc.activeElement, doc.body);
+});
+
+// Breezy names its custom-question boxes "section_<id>_question_<n>" and puts the question in a
+// heading inside the list item: that heading is the label, not the box's name.
+test("a question heading in the same list item labels a box named section_x_question_n", () => {
+  const { doc, F } = page(
+    `<ul><li class="question"><h3><span>Where are you currently based (City, Country)?</span><span class="required">*</span></h3>
+       <input name="section_1747783397549_question_0" type="text" placeholder=""></li></ul>`,
+  );
+  const [field] = F.collectFields(doc, { checkLayout: false });
+  assert.equal(field.label, "Where are you currently based (City, Country)?");
+});
+
+// Binary-style forms: the "*" ends the question's <label>; the box sits in a sibling block.
+test("a label ending in * marks the box in its wrapper as required", () => {
+  const { doc, F } = page(
+    `<div><div><label><span>Proud work<span> *</span></span></label></div><div><textarea></textarea></div></div>
+     <div><div><label><span>X profile</span></label></div><div><input type="text"></div></div>`,
+  );
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual([...fields.map((f) => f.required)], [true, false]);
 });

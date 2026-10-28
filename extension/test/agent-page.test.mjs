@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { test } from "node:test";
+import { ashbyYesNo } from "./ashby-fixture.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const FILL_SRC = readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
@@ -66,8 +67,8 @@ test("observe: fields, radio options, buttons and the site's errors", () => {
       ["radio", "Yes"],
       ["radio", "No"],
       ["select", "Country"],
-      ["file", "Resume"],
       ["textbox", "Start date"],
+      ["file", "Resume"],
       ["textarea", "Cover note"],
       ["button", "Save & Continue"],
       ["button", "Submit application"],
@@ -151,6 +152,10 @@ test("actions: clickable refuses the final submit; native selects, dates and upl
   assert.equal(A.setDirect(ref("Start date"), "05/01/2026").ok, true);
   assert.equal(doc.getElementById("d").value, "2026-01-05");
   assert.equal(A.normaliseDate("month", "2026-03-09"), "2026-03");
+  // A month alone is the first of the month for a date box (profiles store jobs as "2020-12").
+  assert.equal(A.normaliseDate("date", "2020-12"), "2020-12-01");
+  assert.equal(A.normaliseDate("month", "2020-12"), "2020-12");
+  assert.equal(A.normaliseDate("date", "2023-01-15"), "2023-01-15");
   assert.equal(A.focusForTyping(ref("Name")).mode, "keys");
 
   const b64 = Buffer.from("%PDF-1.4").toString("base64");
@@ -216,4 +221,15 @@ test("observe: a closed combobox lists the options its listbox already holds, wi
   assert.deepEqual(byName(obs, "Gender").options, ["Male", "Female"]);
   assert.deepEqual(byName(obs, "Title").options, []);
   assert.deepEqual(plain(A.shownChoices(byName(obs, "Gender").ref, false)), ["Male", "Female"]);
+});
+
+
+test("Ashby yes/no observations retain the question, requirement and selected No", () => {
+  const { doc, observe } = page(ashbyYesNo());
+  let radios = observe().elements.filter((e) => e.role === "radio");
+  assert.equal(radios.length, 2);
+  assert.ok(radios.every((e) => e.required && e.group === "Have you used Python professionally?" && !e.checked));
+  doc.querySelector('[data-option="no"]').setAttribute("aria-pressed", "true");
+  radios = observe().elements.filter((e) => e.role === "radio");
+  assert.equal(radios.find((e) => e.name === "No").checked, true);
 });

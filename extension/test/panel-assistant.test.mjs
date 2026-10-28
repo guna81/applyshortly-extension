@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { test } from "node:test";
+import { ashbyYesNo, ashbyProviders, ashbyConsent, ashbyReceipt } from "./ashby-fixture.mjs";
 
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 const plain = (x) => JSON.parse(JSON.stringify(x));
@@ -73,6 +74,26 @@ async function until(check, label) {
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
+
+test("consecutive answers let batched form state commit between fields", async () => {
+  const page = panelPage(() => ({}), {
+    form: '<label>Name<input id="name" required></label><label>Email<input id="email" type="email" required></label>',
+    context: () => ({ profile: { full_name: "Ada Lovelace", email: "ada@example.com" }, app: { id: 5 }, aiDrafts: false }),
+  });
+  let committed = {};
+  let pending;
+  let scheduled = false;
+  page.win.document.addEventListener("input", (event) => {
+    pending = { ...committed, [event.target.id]: event.target.value };
+    if (scheduled) return;
+    scheduled = true;
+    page.win.setTimeout(() => { committed = pending; scheduled = false; }, 0);
+  });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "filled form");
+  assert.deepEqual(committed, { name: "Ada Lovelace", email: "ada@example.com" });
+  page.win.close();
+});
 
 test("the assistant asks the open question, offers its options, and fills the answer without AI", async () => {
   const page = panelPage(() => ({ reply: "Updated your name.", updates: {}, warnings: [], done: true, choices: [] }));
@@ -269,6 +290,39 @@ const AUTO_FORM = `
     <button type="button">Back</button>
     <button type="submit">Submit application</button>
   </form>`;
+
+test("calendar answers use saved dates or immediate availability without AI prose", async () => {
+  for (const prefs of [{ available_from: "2026-11-02" }, { notice_period_days: 0 }, {}]) {
+    const page = panelPage(() => ({}), {
+      form: '<form><label>When would you be available to start?<input class="ashby-application-form-input-date" required></label><button type="submit">Submit application</button></form>',
+      context: () => ({ profile: { full_name: "Ada Lovelace", preferences: prefs }, app: { id: 5 }, aiDrafts: true }),
+      suggest: () => { throw new Error("A calendar date must not be generated"); },
+    });
+    page.start();
+    await until(() => page.sent.some((m) => m.event?.event === "filled"), "calendar fill");
+    const today = new Date();
+    const expected = prefs.available_from ? "11/02/2026" : prefs.notice_period_days === 0
+      ? `${String(today.getMonth() + 1).padStart(2, "0")}/${String(today.getDate()).padStart(2, "0")}/${today.getFullYear()}` : "";
+    assert.equal(page.win.document.querySelector("input").value, expected);
+    assert.equal(page.sent.some((m) => m.type === "suggest"), false);
+    page.win.close();
+  }
+});
+
+test("a typeahead that clears an unselected value no longer counts as answered", async () => {
+  const page = panelPage(() => ({}), {
+    form: '<form><label for="city">Location*</label><input id="city" role="combobox"><button type="submit">Submit application</button></form>',
+    context: () => ({ profile: { location: "London, UK" }, app: { id: 5 }, aiDrafts: false }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.event?.event === "filled"), "typeahead fill");
+  const input = page.win.document.querySelector("input");
+  input.value = "";
+  input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  await until(() => /needs your answer/.test(page.shadow()?.textContent ?? ""), "cleared typeahead question");
+  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me").disabled, true);
+  page.win.close();
+});
 
 function watchSubmits(page) {
   const submits = [];
@@ -746,6 +800,61 @@ const STEP_FORM = `<form>
   <button type="button">Next</button>
 </form>`;
 
+test("explicit Auto apply continues after the form agent is ready, through the usual countdown", async () => {
+  const page = panelPage(() => ({}), { form: STEP_FORM.replace('<button', '<label>Department<input required></label><button') });
+  page.start({ autoSubmit: true });
+  await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
+  assert.equal(page.sent.find((m) => m.type === "agentStart").autoSubmit, true);
+  page.win.document.querySelector("form").innerHTML = '<label>Full name<input required value="Ada Lovelace"></label><button type="submit">Submit application</button>';
+  const submits = watchSubmits(page);
+  page.message({ type: "agentUpdate", status: "ready", appId: 5, autoSubmit: true });
+  await until(() => /Submitting in 3s/.test(page.shadow()?.textContent ?? ""), "countdown after agent");
+  assert.equal(submits.length, 0);
+  await tick(3100);
+  await until(() => submits.length, "submission after agent");
+  assert.equal(page.sent.filter((m) => m.event?.event === "submission_attempted").length, 1);
+  page.message({ type: "agentUpdate", status: "ready", appId: 5, autoSubmit: true });
+  await tick(20);
+  assert.equal(submits.length, 1);
+});
+
+test("agent readiness without Auto apply approval leaves the completed form for review", async () => {
+  const page = panelPage(() => ({}), { form: STEP_FORM });
+  page.start();
+  await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
+  assert.notEqual(page.sent.find((m) => m.type === "agentStart").autoSubmit, true);
+  page.win.document.querySelector("form").innerHTML = '<label>Full name<input required value="Ada Lovelace"></label><button type="submit">Submit application</button>';
+  const submits = watchSubmits(page);
+  page.message({ type: "agentUpdate", status: "ready", appId: 5 });
+  await until(() => /I've been through/.test(page.shadow()?.textContent ?? ""), "review prompt");
+  assert.doesNotMatch(page.shadow().textContent, /Submitting in/);
+  assert.equal(submits.length, 0);
+  page.win.close();
+});
+
+test("Auto apply after the agent still blocks missing answers and supports cancellation", async () => {
+  for (const incomplete of [false, true]) {
+    const page = panelPage(() => ({}), { form: STEP_FORM });
+    page.start({ autoSubmit: true });
+    await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
+    page.win.document.querySelector("form").innerHTML = '<label>Full name<input required value="Ada Lovelace"></label>' +
+      (incomplete ? '<label>Department<input required></label>' : '') + '<button type="submit">Submit application</button>';
+    const submits = watchSubmits(page);
+    page.message({ type: "agentUpdate", status: "ready", appId: 5, autoSubmit: true });
+    if (incomplete) {
+      await until(() => /Not submitted:/.test(page.shadow()?.textContent ?? ""), "required answer blocker");
+      assert.doesNotMatch(page.shadow().textContent, /Submitting in/);
+    } else {
+      const cancel = await until(() => [...(page.shadow()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === "Cancel"), "cancellable countdown");
+      cancel.click();
+      await until(() => /Submit cancelled/.test(page.shadow()?.textContent ?? ""), "cancelled");
+    }
+    assert.equal(submits.length, 0);
+    assert.equal(page.sent.some((m) => m.event?.event === "submission_attempted"), false);
+    page.win.close();
+  }
+});
+
 test("the chat is the agent: it clicks through a multi-step form itself and asks in the chat", async () => {
   const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
     form: STEP_FORM,
@@ -925,5 +1034,45 @@ test('a duplicate-profile error and existing receipt text never turn an attempt 
   page.win.document.body.append(error);
   await tick(30);
   assert.equal(page.sent.some((m) => m.event?.event === 'submitted'), false);
+  page.win.close();
+});
+
+
+test("Ashby required questions block auto apply and Yes/No can be answered in extension chat", async () => {
+  const page = panelPage(() => ({}), { form: `<form>${ashbyYesNo()}${ashbyProviders}${ashbyConsent}<button type="submit">Submit application</button></form>` });
+  const submits = watchSubmits(page);
+  for (const button of page.win.document.querySelectorAll("button[data-option]")) button.addEventListener("click", () => {
+    for (const b of button.parentElement.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b === button));
+  });
+  page.start({ autoSubmit: true });
+  await until(() => page.shadow()?.querySelector(".question"), "screening question");
+  const report = page.sent.filter((m) => m.event?.event === "filled").at(-1);
+  assert.equal(report.event.unresolved_fields.length, 3);
+  assert.equal(page.shadow().querySelector(".question .label").textContent, "Have you used Python professionally?");
+  [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "No").click();
+  await until(() => page.win.document.querySelector('[data-option="no"]').getAttribute("aria-pressed") === "true", "No answer");
+  await until(() => /Select the options that apply/.test(page.shadow().textContent), "provider group");
+  assert.equal(submits.length, 0);
+  assert.equal(page.win.document.querySelector("#consent").checked, false);
+  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me").disabled, true);
+  page.win.close();
+});
+
+test("Ashby positive receipt confirms only a new submission attempt, not a generic Success notice", async () => {
+  const page = panelPage(() => ({}), { form: '<label>Full name<input required></label><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.some((m) => m.event?.event === "filled"), "fill");
+  page.win.document.body.insertAdjacentHTML("beforeend", ashbyReceipt);
+  await tick(20);
+  assert.equal(page.sent.some((m) => m.event?.event === "submitted"), false, "receipt without attempt is ignored");
+  page.win.document.querySelector(".ashby-application-form-success-container").remove();
+  page.win.document.querySelector("button").click();
+  await until(() => page.sent.some((m) => m.event?.event === "submission_attempted"), "attempt");
+  page.win.document.body.insertAdjacentHTML("beforeend", '<div role="status"><h2>Success</h2><p>Saved profile</p></div>');
+  await tick(20);
+  assert.equal(page.sent.some((m) => m.event?.event === "submitted"), false);
+  page.win.document.body.insertAdjacentHTML("beforeend", ashbyReceipt);
+  await until(() => page.sent.some((m) => m.event?.event === "submitted"), "Ashby receipt");
+  assert.equal(page.sent.filter((m) => m.event?.event === "submitted").length, 1);
   page.win.close();
 });

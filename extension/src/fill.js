@@ -9,7 +9,7 @@
   // Custom dropdowns that aren't a <select> or a Google Forms listbox: Angular Material's mat-select
   // and the ARIA combobox / listbox-popup pattern. Their options only exist while open.
   const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
-  const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input:not([type]), textarea';
+  const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input[type=date], input:not([type]), textarea';
   const PICK_PLACEHOLDER = /^[\s-]*(select|choose|please select|pick)\b/i;
   // The "nothing chosen" entry of a list: "Select…", "--", Zoho's "-None-".
   const EMPTY_OPTION = /^(select|choose|please select|-+|-+\s*none\s*-+)$/i;
@@ -46,6 +46,10 @@
       .join(" ");
   }
 
+  // What a form puts on a box instead of its question (Google Forms' long-text boxes carry
+  // aria-label="Your answer"): never a label while the real question can still be found.
+  const GENERIC_LABEL = /^(?:(?:your|type your|enter your|write your) )?(?:answer|response|reply|text|value|input)s?\W*$|^(?:short|long) answer(?: text)?\W*$|^(?:type|enter|write) (?:here|text)\W*$/i;
+
   // "mobilePhone.countryCode", "first_name", "candidate-email": a field name, not a question.
   const IDENTIFIER = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*|[._-][A-Za-z0-9]+)+(?:\[\d*\])?$/;
 
@@ -64,6 +68,8 @@
 
   function rawLabel(el) {
     const doc = el.ownerDocument;
+    const ashby = ashbyField(el);
+    if (ashby?.label) return ashby.label;
     const rippling = ripplingField(el);
     if (rippling) return rippling.label;
     const labelledBy = el.getAttribute("aria-labelledby");
@@ -88,8 +94,8 @@
       clone.querySelectorAll("input, select, textarea, option").forEach((n) => n.remove());
       if (cleanLabel(clone.textContent)) return cleanLabel(clone.textContent);
     }
-    const aria = el.getAttribute("aria-label");
-    if (aria && cleanLabel(aria)) return cleanLabel(aria);
+    const aria = cleanLabel(el.getAttribute("aria-label"));
+    if (aria && !GENERIC_LABEL.test(aria)) return aria;
     // Google Forms and similar: the question heading lives in the enclosing list item.
     const heading = el.closest('[role="listitem"]')?.querySelector('[role="heading"]');
     if (heading && cleanLabel(heading.textContent)) return cleanLabel(heading.textContent);
@@ -97,7 +103,12 @@
     if (legend && cleanLabel(legend.textContent)) return cleanLabel(legend.textContent);
     const nearby = nearbyLabel(el);
     if (nearby) return nearby;
-    return cleanLabel(el.getAttribute("placeholder") || el.getAttribute("name") || "");
+    // Breezy and similar: the question is a heading inside the list item that holds the box.
+    const questionHeading = el.closest('li.question, .question')?.querySelector("h1, h2, h3, h4, h5, h6");
+    if (questionHeading && cleanLabel(questionHeading.textContent)) return cleanLabel(questionHeading.textContent);
+    const named = cleanLabel(el.getAttribute("placeholder") || el.getAttribute("name") || "");
+    // A generic name is still better than none (it keeps the box listed), after the aria text.
+    return GENERIC_LABEL.test(named) && aria ? aria : named || aria;
   }
 
   /**
@@ -186,8 +197,20 @@
     return { label: `${prefix}${text}${suffix}`, required: Boolean(label.querySelector(".crc-form-mandatory")) };
   }
 
+  // Ashby uses CSS markers for required questions, including choice groups.
+  function ashbyField(el) {
+    const box = el.closest(".ashby-application-form-field-entry, .ashby-application-form-input-radio-group, .ashby-application-form-input-checkbox-group");
+    const title = box?.querySelector(".ashby-application-form-question-title");
+    if (!title) return null;
+    return {
+      label: cleanLabel(title.textContent),
+      required: [...title.classList].some((name) => /(?:^|_)required(?:_|$)/.test(name)) || /\*/.test(title.textContent),
+    };
+  }
+
   function isRequired(el) {
     if (el.required || el.getAttribute("aria-required") === "true") return true;
+    if (ashbyField(el)?.required) return true;
     if (ripplingField(el)?.required) return true;
     if ((zohoTabular(el) ?? zohoRow(el))?.required) return true;
     if (el.closest('.wpcf7-validates-as-required')) return true;
@@ -195,7 +218,21 @@
     const cf7Label = cf7?.closest('label') || cf7?.parentElement?.querySelector('label');
     if (cf7 && /\*/.test(cf7Label?.textContent ?? '')) return true;
     const item = el.closest('[role="listitem"]');
-    return Boolean(item?.querySelector('[aria-label="Required question"]'));
+    if (item?.querySelector('[aria-label="Required question"]')) return true;
+    return starredLabelAbove(el);
+  }
+
+  // A "*" ending the question's own <label>, when that label isn't tied to the box by for/id
+  // (the box sits in the label's sibling block, inside a wrapper that holds only this one box).
+  function starredLabelAbove(el) {
+    let wrapper = el.parentElement;
+    for (let depth = 0; wrapper && depth < 4; depth += 1, wrapper = wrapper.parentElement) {
+      if (wrapper.querySelectorAll("input:not([type=hidden]), textarea, select").length !== 1) continue;
+      const label = wrapper.querySelector("label");
+      if (label && !label.contains(el)) return /\*\s*$/.test(label.textContent ?? "");
+      if (label) return false;
+    }
+    return false;
   }
 
   function isVisible(el, checkLayout) {
@@ -257,16 +294,27 @@
       fields.push({ kind: "radio", el: group, label: labelOf(group), required: isRequired(group), options, aria: true,
         consent: group.matches('[data-testid="sms_opt_in"]') });
     }
+    for (const group of doc.querySelectorAll(".ashby-application-form-input-yesno")) {
+      if (!visible(group)) continue;
+      const options = [...group.querySelectorAll("button[aria-pressed][data-option]")]
+        .filter(isEditable).map((el) => ({ text: optionText(el), el }));
+      if (options.length !== 2) continue;
+      fields.push({ kind: "radio", el: group, label: labelOf(group), required: isRequired(group), options, aria: true, pressed: true });
+    }
     const seenCheckboxGroups = new Set();
     for (const el of doc.querySelectorAll('input[type=checkbox], [role="checkbox"]')) {
       if (!visible(el)) continue;
+      // The backing checkbox of a yes/no question isn't a separate consent field.
+      if (el.closest(".ashby-application-form-input-yesno")) continue;
       const cf7 = el.closest('.wpcf7-checkbox');
-      if (cf7) {
-        if (seenCheckboxGroups.has(cf7)) continue;
-        seenCheckboxGroups.add(cf7);
-        const inputs = [...cf7.querySelectorAll('input[type=checkbox]')].filter(visible);
+      const ashby = el.closest('.ashby-application-form-input-checkbox-group');
+      const group = cf7 || (ashby?.querySelectorAll('input[type=checkbox]').length > 1 ? ashby : null);
+      if (group) {
+        if (seenCheckboxGroups.has(group)) continue;
+        seenCheckboxGroups.add(group);
+        const inputs = [...group.querySelectorAll('input[type=checkbox]')].filter(visible);
         const options = inputs.map((input) => ({ text: labelOfOption(input), el: input }));
-        fields.push({ kind: "checkbox", el, label: nearbyLabel(el), required: inputs.some(isRequired), options });
+        fields.push({ kind: "checkbox", el, label: ashby ? labelOf(group) : nearbyLabel(el), required: isRequired(group) || inputs.some(isRequired), options });
         continue;
       }
       fields.push({ kind: "checkbox", el, label: labelOf(el) || optionText(el), required: isRequired(el) });
@@ -608,12 +656,19 @@
     const [first, ...rest] = (profile.full_name ?? "").trim().split(/\s+/);
     const link = (re) => profile.links?.find((x) => re.test(x.url) || re.test(x.label ?? ""))?.url;
 
+    if (/(?:first(?: name)?|given(?: name)?|name)\s*(?:and|&|\/)\s*(?:last(?: name)?|family(?: name)?|surname)/.test(l)) return sure(profile.full_name);
     if (/first name|given name/.test(l)) return sure(first);
     if (/last name|surname|family name/.test(l)) return sure(rest.join(" "));
     if (/full name|^(your )?name\b|candidate name|applicant name/.test(l)) return sure(profile.full_name);
     if (/e-?mail/.test(l)) return sure(profile.email);
-    if (/country ?code|dial(?:l?ing)? code|calling code|phone code|\bisd\b/.test(l)) return sure(dialCode(profile.phone));
+    const includeCode = /\b(?:include|including|with)\b.{0,20}\b(?:country|dial(?:l?ing)?|calling) ?code\b/.test(l);
+    if (!includeCode && /country ?code|dial(?:l?ing)? code|calling code|phone code|\bisd\b/.test(l)) return sure(dialCode(profile.phone));
     if (/phone|mobile|contact (number|no)|whatsapp|telephone/.test(l)) return sure(profile.phone);
+    if (/\b(?:annual|yearly) (?:salary |compensation |pay )?expectations?\b/.test(l)) {
+      const currency = /\b(INR|USD|EUR|GBP|SGD|AED|CAD|AUD)\b/i.exec(label)?.[1].toUpperCase();
+      const prefs = profile.preferences;
+      return currency && currency === prefs?.currency ? sure(prefs.expected_ctc) : null;
+    }
     if (/linkedin/.test(l)) return sure(link(/linkedin/i));
     if (/github/.test(l)) return sure(link(/github/i));
     if (/portfolio|personal (web)?site|^website/.test(l)) return sure(link(/portfolio|website|^https?:\/\/(?!.*(linkedin|github))/i));
@@ -654,9 +709,10 @@
     const proto = el instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
     el.focus?.();
     Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
-    el.dispatchEvent(new win.Event("input", { bubbles: true }));
+    el.dispatchEvent(new win.InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: String(value) }));
     el.dispatchEvent(new win.Event("change", { bubbles: true }));
-    el.dispatchEvent(new win.FocusEvent("blur", { bubbles: false }));
+    // React delegates onBlur through focusout; synthetic blur alone doesn't notify it.
+    el.blur?.();
   }
 
   function normalise(s) {
@@ -695,7 +751,7 @@
           || isPlaceholderOption(field.el.options[field.el.selectedIndex]?.text);
       case "radio":
         return field.aria
-          ? !field.options.some((o) => o.el.getAttribute("aria-checked") === "true")
+          ? !field.options.some((o) => o.el.getAttribute(field.pressed ? "aria-pressed" : "aria-checked") === "true")
           : !field.options.some((o) => o.el.checked);
       case "file":
         return !field.el.files?.length;
@@ -713,6 +769,17 @@
     const win = field.el.ownerDocument.defaultView;
     if (field.kind === "text") {
       let value = answer;
+      if (field.el.matches('input[type=date], input.ashby-application-form-input-date')) {
+        // Date widgets need their expected format, never a generated sentence about availability.
+        const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+        const us = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(value));
+        if (!iso && !us) return null;
+        const [year, month, day] = iso ? iso.slice(1).map(Number) : [Number(us[3]), Number(us[1]), Number(us[2])];
+        const date = new Date(year, month - 1, day);
+        if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+        const mm = String(month).padStart(2, "0"), dd = String(day).padStart(2, "0");
+        value = field.el.type === "date" ? `${year}-${mm}-${dd}` : `${mm}/${dd}/${year}`;
+      }
       const max = field.el.maxLength;
       if (max >= 0 && String(value).length > max) return null;
       if (field.el.matches('[data-input="phone_number"]')) {

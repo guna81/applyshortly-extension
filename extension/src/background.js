@@ -507,10 +507,11 @@ async function agentReport(appId, event, res, url) {
 }
 
 /** Starts the agent in a tab: from the popup (finds the application by URL) or the page's panel. */
-async function agentStart(tabId, url, appId) {
+async function agentStart(tabId, url, appId, autoSubmit = false) {
   const busy = [...agents.values()].find((a) => a.tabId !== tabId && !a.stopped && !["ready", "failed"].includes(a.status));
   if (busy) throw new Error("The agent is already working in another tab. Stop it there first.");
   agents.get(tabId)?.stop("Restarted.");
+  const owner = await settings();
   const b = await bridge();
   const app = appId != null ? await b.application(appId) : (await b.lookup(url) ?? await b.trackApplication({ url: url.split("#")[0], title: clip((await chrome.tabs.get(tabId)).title, 300) }));
   const id = app?.id ?? null;
@@ -522,7 +523,15 @@ async function agentStart(tabId, url, appId) {
     driver: new TabDriver(tabId, await pageSources()),
     step: (body) => b.agentStep(body),
     files: agentFiles(p, app),
-    notify: (message) => chrome.tabs.sendMessage(tabId, message, { frameId: 0 }).catch(() => {}),
+    notify: async (message) => {
+      // Keep approval in this background run across page navigation, and deliver it
+      // once. Status lookups and reloads must never replay a submission choice.
+      const current = await settings();
+      if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) autoSubmit = false;
+      const submit = autoSubmit && message.status === "ready";
+      if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
+      return chrome.tabs.sendMessage(tabId, { ...message, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
+    },
     report: (event, res, pageUrl) => agentReport(id, event, res, pageUrl),
   });
   agents.set(tabId, agent);
@@ -641,8 +650,8 @@ const handlers = {
   status: (msg) => status(msg.tabId, msg.url),
   // From the page's panel: its own tab. From the popup or options page: the tab they name.
   agentStart: (msg, sender) => (fromPage(sender)
-    ? agentStart(sender.tab.id, sender.url, msg.appId ?? null)
-    : agentStart(msg.tabId, msg.url, msg.appId ?? null)),
+    ? agentStart(sender.tab.id, sender.url, msg.appId ?? null, msg.autoSubmit === true)
+    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true)),
   agentControl: (msg, sender) => agentControl(fromPage(sender) ? sender.tab.id : msg.tabId, msg.action, msg.text),
   agentStatus: (msg, sender) => agentStatus(fromPage(sender) ? sender.tab.id : msg.tabId),
   openOptions: () => chrome.runtime.openOptionsPage(),

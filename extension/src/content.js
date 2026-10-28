@@ -88,6 +88,15 @@
 
   async function resolveAnswer(field, allowGenerate) {
     if (field.consent) return null;
+    if (field.kind === "text" && field.el.matches('input[type=date], input.ashby-application-form-input-date')) {
+      const prefs = state.ctx.profile.preferences;
+      let value = prefs?.available_from;
+      if (!value && prefs?.notice_period_days === 0) {
+        const today = new Date();
+        value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      }
+      return value ? { value, source: "profile", needsReview: false } : null;
+    }
     const local = F.profileAnswer(field.label, state.ctx.profile, state.ctx.app);
     if (local) return { value: local.value, source: "profile", needsReview: local.needsReview };
     if (!field.label) return null;
@@ -135,6 +144,9 @@
       if (field.kind === "text") return { field, status: "unresolved", reason: "This answer doesn't fit the field. Please enter it on the page." };
       return { field, status: "unresolved", reason: `None of the options match “${answer.value}”`, suggestion: answer.value };
     }
+    // Give frameworks a task boundary to commit this change before writing the next field.
+    // Several onChange handlers can otherwise use the same stale form-state snapshot.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
   }
 
@@ -261,7 +273,7 @@
 
   function merge(previous, next) {
     // Keep earlier "filled" and "done" rows (their fields aren't empty, so a re-run skips them).
-    const byEl = new Map(previous.map((r) => [r.field.el, r]));
+    const byEl = new Map(previous.filter((r) => r.field.el.isConnected).map((r) => [r.field.el, r]));
     for (const r of next) byEl.set(r.field.el, r);
     return [...byEl.values()].sort((a, b) => (a.field.el.compareDocumentPosition(b.field.el) & 4 ? -1 : 1));
   }
@@ -409,7 +421,7 @@
     handedOff = true;
     chat.lines.push({ role: "assistant", local: true, text: P.handoffText(reason, { autoSubmit }) });
     panel.idle();
-    await startAgent();
+    await startAgent({ autoSubmit });
   }
 
   /** The user's reply while the agent waits: an answer, a draft request, or "done on the page". */
@@ -461,10 +473,13 @@
     if (!["ready", "failed", "stopped"].includes(next.status)) return panel.agent(previous == null);
     // Done driving: read the page as it is now, so the chat can follow up and Submit knows the state.
     const lead = next.status === "ready" ? "I've been through the form." : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
-    await run(state?.appId ?? next.appId ?? null, { quiet: true });
+    const refreshed = await run(state?.appId ?? next.appId ?? null, { quiet: true });
     const follow = next.status === "ready" && state ? P.nextPrompt(state.results) : null;
     chat.lines.push({ role: "assistant", local: true, ...(next.status === "ready" ? followedBy(lead, follow) : { text: lead, choices: [] }) });
     panel.agent(true);
+    // The agent never submits. Resume only this run's explicit Auto apply choice,
+    // through the same required-field checks and cancellable countdown as a single page.
+    if (refreshed && next.status === "ready" && next.autoSubmit === true && next.appId === state?.appId) await autoApply();
   }
 
   /** One chat turn. Like the web app's review assistant: it fills fields, the user submits. */
@@ -567,6 +582,9 @@
       } else if (r.status === "done" && (!r.manual || r.field.kind === "checkbox" && r.field.options?.length) && !answeredNow(r.field)) {
         r.status = r.optional ? "optional" : "unresolved";
         changed = true;
+      } else if (r.status === "filled" && !answeredNow(r.field)) {
+        Object.assign(r, { status: r.optional ? "optional" : "unresolved", reason: "The form cleared this answer. Please choose a value." });
+        changed = true;
       } else if (r.status === "filled" && F.isInvalid(r.field)) {
         const why = F.invalidReason(r.field);
         Object.assign(r, { status: "unresolved", reason: why ? `The site says: “${why}”` : "The site doesn't accept this answer" });
@@ -635,6 +653,11 @@
     return [...document.querySelectorAll('h1, h2, [role="status"], [role="alert"], .alert, .toast')].filter((el) => {
       if (!el.getClientRects().length || el.closest('jobhunt-autofill-panel')) return false;
       const text = F.cleanLabel(el.textContent ?? "");
+      // Ashby's receipt has a generic heading and company-specific thanks. Require its
+      // dedicated positive status container, never a generic Success heading or toast.
+      if (el.matches('.ashby-application-form-success-container[role="status"]') &&
+          el.getAttribute("data-highlight") === "positive" &&
+          [...el.querySelectorAll("h2")].some((h) => F.cleanLabel(h.textContent) === "Success")) return true;
       return text.length <= 600 && !/\b(not|unable|failed|error|already|cannot|couldn.t)\b/i.test(text) &&
         /\b(?:your application (?:has been |was )?(?:successfully )?(?:submitted|received)|application (?:submitted|received) successfully|thank you for applying|we (?:have )?received your application)\b/i.test(text);
     }).map((el) => F.cleanLabel(el.textContent ?? ""));
@@ -775,11 +798,11 @@
     void report("submission_attempted", { note: "final submit clicked; confirmation not yet detected" });
   }, true);
 
-  async function startAgent() {
+  async function startAgent({ autoSubmit = false } = {}) {
     agent = { status: "starting", log: [], appId: state?.appId ?? null };
     panel.agent(true);
     try {
-      await send({ type: "agentStart", appId: state?.appId ?? null });
+      await send({ type: "agentStart", appId: state?.appId ?? null, autoSubmit });
     } catch (err) {
       agent = null;
       const e = P.friendlyError(err.message, err.status, state?.ctx?.baseUrl, err.code);

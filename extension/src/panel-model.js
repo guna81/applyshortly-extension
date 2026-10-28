@@ -196,7 +196,7 @@
     return [
       HANDOFF[reason] ?? HANDOFF.asked,
       "I'll ask here when I need you. Chrome shows a “started debugging” bar while I click through, and it uses one apply run of credits.",
-      autoSubmit ? "Auto apply can't submit a form with several steps, so I'll stop before the end for you to check and submit." : "",
+      autoSubmit ? "Once every required answer is complete, Auto apply will resume with its cancellable countdown." : "",
     ].filter(Boolean).join(" ");
   }
 
@@ -238,6 +238,8 @@
     if (!row || !["unresolved", "optional"].includes(row.status) || !canAssist(row) || LOCAL_REPLIES.includes(message) || isDraftRequest(message)) return null;
     const options = (row.field.options ?? []).map((o) => String(o.text ?? "").trim()).filter(Boolean);
     if (options.length) return options.find((o) => o.toLowerCase() === message.toLowerCase()) ?? null;
+    // Editing instructions belong to the assistant, not verbatim in the current answer.
+    if (/^(?:please\s+)?(?:set|change|update|correct|replace|use my|fill (?:these|this|the|my))\b/i.test(message.trim())) return null;
     return row.field.kind === "text" ? message : null;
   }
 

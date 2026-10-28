@@ -97,7 +97,7 @@ test("the chat carries on through the form only where filling in place can't fin
   assert.equal(P.navigationNeeded({ total: 8, hasSubmit: true, bigFrame: true }), null); // its own form and a video
 
   assert.match(P.handoffText("steps"), /more than one step.*ask here when I need you.*debugging.*one apply run/);
-  assert.match(P.handoffText("none", { autoSubmit: true }), /can't see a form.*stop before the end for you to check and submit/);
+  assert.match(P.handoffText("none", { autoSubmit: true }), /can't see a form.*every required answer is complete.*cancellable countdown/);
 
   for (const ask of ["go to the next page", "Next step", "do the rest", "fill the rest of the form", "continue the form", "click next"]) {
     assert.equal(P.isNavigateRequest(ask), true, ask);
@@ -147,6 +147,8 @@ test("directAnswer takes an option or free text for the asked question, never a 
   assert.equal(P.directAnswer(radio, "yes"), "Yes");
   assert.equal(P.directAnswer(radio, "I can relocate"), null); // not an option: the assistant decides
   assert.equal(P.directAnswer(text, "Pune"), "Pune");
+  assert.equal(P.directAnswer(text, "Change name to Ada and salary to 2200000"), null);
+  assert.equal(P.directAnswer(text, "Use my full name, not just my surname"), null);
   assert.equal(P.directAnswer(text, P.SKIP_REPLY), null);
   assert.equal(P.directAnswer({ ...text, status: "filled" }, "Pune"), null);
   assert.equal(P.directAnswer({ field: { kind: "checkbox" }, status: "unresolved" }, "Yes"), null); // consent stays a tap

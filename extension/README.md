@@ -72,7 +72,11 @@ through it when it has more than one page, drafts answers and asks you what it c
 fills the fields as you answer; you can also ask it to change an answer ("set notice period to
 60 days"). An open question (like "Why are you suitable for this role?") comes with a
 **Draft it for me** button, required or not, and typing "draft it for me" does the same; personal
-facts (experience, notice period, joining date, names, numbers) are never drafted. Optional questions nothing could answer (like "Why are you a good fit?") are offered
+facts (experience, notice period, joining date, names, numbers) are never drafted. Calendar fields
+use a saved start date, or today when your saved notice period is zero; otherwise they wait for
+your answer. Annual compensation is filled from saved expectations only when the question's
+currency matches. Instructions to change several fields go to the assistant instead of being
+copied into the current answer. Optional questions nothing could answer (like "Why are you a good fit?") are offered
 next: **Draft it for me** writes an AI draft from your profile and the job, **Leave it blank** skips
 it. Last, it brings up what only you can do: a consent checkbox (**I agree, tick it** ticks it only
 when you tap it, or tick it yourself) and file uploads (**Show me** highlights the field). When the
@@ -86,6 +90,11 @@ the page and is gone when you leave it. Only the page's question labels, options
 values are sent with each message, never the rest of the page. The AI never answers checkboxes
 or uploads. Each reply costs 1 credit unless you use a personal AI key, and the
 assistant never submits.
+
+Ashby Yes/No buttons are counted as screening questions, including a selected **No**.
+Required multi-select questions count as one question and stay open until you select an option.
+Consent still asks for your explicit choice. Auto apply waits for those required answers;
+a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
 
 ### Choose how AI drafts are paid for
 
@@ -169,9 +178,11 @@ Inside, this is the form agent (`src/agent/`); to you it is the same chat.
   open questions, or **I'll fill it on the page**), for a CAPTCHA or sign-in (**Continue** once
   you've done it), and on job boards for the posting's own **Apply / Easy Apply** click, because
   there that can apply in one click. It never solves CAPTCHAs.
-- It never submits. When it has been through the form, the chat picks up anything still open, and
-  you check the form and submit (yourself or with **Submit for me**). Auto apply doesn't submit a
-  form it had to step through.
+- The form agent never submits. When it has been through the form, the chat picks up anything
+  still open. If you started with **Auto apply** or **Apply with extension**, the panel resumes
+  Auto apply with the same required-field checks and cancellable countdown. Otherwise, review
+  and submit yourself or choose **Submit for me**. Stopping the agent cancels that continuation;
+  reloading or checking its status never replays approval.
 - **Pause** and **Stop and take over** are always available. Chrome shows a "started debugging
   this browser" bar while it runs (the `debugger` permission); closing the bar stops it.
 
@@ -221,6 +232,7 @@ option exactly, by yes/no, or by unambiguous containment. Otherwise they're left
 Custom dropdowns (Angular Material `mat-select` and other ARIA comboboxes) are opened, and the
 matching option is clicked the same way.
 
+Each answer write gives the form time to commit its state before the next field is filled.
 After filling, the extension waits a moment for the page to validate and reads what the site says.
 A value the site rejects is retried as a plain number ("5.6 years" → "5.6"); one it still rejects
 is listed under **Needs you** with the site's own message. The panel only says *All set* when
