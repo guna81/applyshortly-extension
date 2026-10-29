@@ -113,7 +113,7 @@
 
   /**
    * A label that sits next to the field without being linked to it (no for/id, not wrapping):
-   * the closest preceding label-like sibling, checked at the field and then up to two ancestors.
+   * the closest preceding label-like sibling, checked through nested control wrappers.
    * Placeholders are sample values on many forms ("Arjun"), so this must win over them.
    */
   function nearbyLabel(el) {
@@ -125,7 +125,7 @@
       if (label && !cf7.contains(label)) return cleanLabel(label.textContent);
     }
     let node = el;
-    for (let depth = 0; node && depth < 3; depth++, node = node.parentElement) {
+    for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
       for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
         if (sib.matches("label, legend, [class*=label i]")) {
           const t = cleanLabel(sib.textContent);
@@ -263,6 +263,11 @@
 
     for (const el of doc.querySelectorAll(TEXT_INPUT)) {
       if (!visible(el) || !isEditable(el) || selectLikeInput(el)) continue;
+      // React Select (including Greenhouse) adds an invisible input for native required
+      // validation. It has a layout box, but the sibling combobox is the actual question.
+      if (el.matches('input[aria-hidden="true"][tabindex="-1"]') &&
+          el.parentElement?.querySelectorAll("input").length === 2 &&
+          el.parentElement?.querySelector('input[role="combobox"]')) continue;
       const label = labelOf(el);
       // Typing a CAPTCHA answer is always left to the user.
       if (/captcha/i.test(`${label} ${el.name} ${el.id}`)) continue;

@@ -799,6 +799,52 @@ test("a question heading in the same list item labels a box named section_x_ques
   assert.equal(field.label, "Where are you currently based (City, Country)?");
 });
 
+test("Greenhouse React Select validation inputs are not extra unanswered questions", () => {
+  // Reduced from the Coinbase embedded Greenhouse application. The validation inputs
+  // are aria-hidden, but still have layout boxes; display/visibility checks don't hide them.
+  const select = (id, label, placeholder = "") => `<div>
+    <label id="${id}-label" for="${id}">${label} *</label>
+    <div class="select-shell remix-css-b62m3t-container">
+      <span id="react-select-${id}-live-region"></span><span aria-live="polite" role="log"></span>
+      <div><div class="select__control"><div class="select__value-container">
+        <div class="select__placeholder" id="react-select-${id}-placeholder">${placeholder}</div>
+        <div class="select__input-container"><input id="${id}" type="text" role="combobox"
+          aria-labelledby="${id}-label" aria-required="true" aria-haspopup="true" tabindex="0"></div>
+      </div></div></div>
+      <input required tabindex="-1" aria-hidden="true" class="remix-css-1a0ro4n-requiredInput" value="">
+    </div></div>`;
+  const { doc, F } = page(`<form>${select("country", "Country")}${select("candidate-location", "Location (City)")}
+    ${select("question_1", "Are you at least 18 years of age?", "Select...")}
+    <label for="resume">Resume/CV *</label><input id="resume" type="file" required style="opacity:0">
+    <label for="standalone">Other answer</label><input id="standalone" aria-hidden="true" tabindex="-1">
+  </form>`, "https://job-boards.greenhouse.io/embed/job_app?token=fixture&for=example");
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => f.label)), [
+    "Country", "Location (City)", "Are you at least 18 years of age?", "Resume/CV", "Other answer",
+  ]);
+  assert.ok(fields.slice(0, 4).every((f) => f.required));
+  assert.equal(fields[3].kind, "file", "retains transparent upload inputs");
+  assert.ok(fields.every((f) => !f.el.classList.contains("remix-css-1a0ro4n-requiredInput")));
+});
+
+test("deeply wrapped application controls retain their own labels without borrowing adjacent ones", () => {
+  const wrap = (control) => `<div><div><div><div><div>${control}</div></div></div></div></div>`;
+  const { doc, F } = page(`<form>
+    <div><label>Country *</label>${wrap('<input role="combobox" readonly aria-required="true">')}</div>
+    <div><label>Location (City) *</label>${wrap('<input role="combobox" aria-required="true">')}</div>
+    <div>${wrap('<input required>')}</div>
+    <div><label>Email</label><input type="email">${wrap('<input required>')}</div>
+  </form>`, "https://job-boards.greenhouse.io/example/jobs/1");
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map(({ kind, label, required }) => ({ kind, label, required }))), [
+    { kind: "dropdown", label: "Country", required: true },
+    { kind: "text", label: "Location (City)", required: true },
+    { kind: "text", label: "", required: true },
+    { kind: "text", label: "Email", required: false },
+    { kind: "text", label: "", required: true },
+  ]);
+});
+
 // Binary-style forms: the "*" ends the question's <label>; the box sits in a sibling block.
 test("a label ending in * marks the box in its wrapper as required", () => {
   const { doc, F } = page(
