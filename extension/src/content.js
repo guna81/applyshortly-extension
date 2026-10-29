@@ -13,6 +13,7 @@
   let submittedReported = false;
   let attemptPending = false;
   let receiptBaseline = [];
+  let attemptUrl = "";
   let autoSubmitting = false; // Auto apply clicked Submit; its own report covers the submit event
   const AUTO_APPLY_DELAY_S = 3;
   // The assistant's conversation for this page; reset with `state`.
@@ -41,7 +42,10 @@
   function report(event, extra = {}) {
     if (state?.appId == null) return Promise.resolve(null);
     if (event === "submission_attempted") {
-      if (!attemptPending) receiptBaseline = receiptTexts();
+      if (!attemptPending) {
+        receiptBaseline = receiptTexts();
+        attemptUrl = location.href;
+      }
       attemptPending = true;
       if (state.ctx?.app) state.ctx.app = { ...state.ctx.app, status: "submission_unconfirmed" };
     }
@@ -146,7 +150,7 @@
     }
     // Give frameworks a task boundary to commit this change before writing the next field.
     // Several onChange handlers can otherwise use the same stale form-state snapshot.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
   }
 
@@ -649,8 +653,11 @@
 
   // Only explicit receipt evidence in a visible status/heading counts as confirmation.
   // A duplicate-profile error, a submit click, and general job-description text do not.
+  // Sites put the receipt in a heading, a status region or just a paragraph or box, so any
+  // visible short element can carry it; the wording and the "new since the attempt" check decide.
+  const RECEIPT_ELEMENTS = 'h1, h2, h3, p, div, span, [role="status"], [role="alert"], .alert, .toast';
   function receiptTexts() {
-    return [...document.querySelectorAll('h1, h2, [role="status"], [role="alert"], .alert, .toast')].filter((el) => {
+    return [...document.querySelectorAll(RECEIPT_ELEMENTS)].filter((el) => {
       if (!el.getClientRects().length || el.closest('jobhunt-autofill-panel')) return false;
       const text = F.cleanLabel(el.textContent ?? "");
       // Ashby's receipt has a generic heading and company-specific thanks. Require its
@@ -664,10 +671,17 @@
   }
 
   const hasReceipt = () => receiptTexts().some((text) => !receiptBaseline.includes(text));
+  // The site moved to its own confirmation page (a single-page app changes the address without reloading).
+  const reachedConfirmationPage = () => location.href !== attemptUrl && F.confirmationPath(location.href);
 
-  new MutationObserver(() => {
-    if (attemptPending && !submittedReported && hasReceipt()) void markSubmitted("site confirmed application receipt");
-  }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  function checkConfirmation() {
+    if (!attemptPending || submittedReported) return;
+    if (hasReceipt()) void markSubmitted("site confirmed application receipt");
+    else if (reachedConfirmationPage()) void markSubmitted("confirmation page");
+  }
+
+  // A single-page app re-renders when its route changes, so the same observer sees the move.
+  new MutationObserver(checkConfirmation).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
   async function markSubmitted(note) {
     if (submittedReported || state?.appId == null) return;

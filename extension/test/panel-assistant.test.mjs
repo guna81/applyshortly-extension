@@ -67,7 +67,7 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
 }
 
 async function until(check, label) {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) {
     const value = check();
     if (value && value.length !== 0) return value; // an empty list is not there yet
     await tick(10);
@@ -1018,6 +1018,37 @@ test('SPA submit clicks sync an attempt, then an explicit receipt syncs confirma
   await until(() => page.sent.find((m) => m.event?.event === 'submitted'), 'confirmation');
   receipt.append('!');
   await tick();
+  assert.equal(page.sent.filter((m) => m.event?.event === 'submitted').length, 1);
+  page.win.close();
+});
+
+test('a receipt in a plain paragraph confirms the attempt, like any site that skips headings and status regions', async () => {
+  const page = panelPage(() => ({}), { form: '<label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'fill');
+  page.win.document.querySelector('button').click();
+  await until(() => page.sent.find((m) => m.event?.event === 'submission_attempted'), 'attempt');
+  page.win.document.body.insertAdjacentHTML('beforeend', '<div class="done"><p>Thanks for applying! We have received your application.</p></div>');
+  await until(() => page.sent.find((m) => m.event?.event === 'submitted'), 'confirmation');
+  assert.equal(page.sent.filter((m) => m.event?.event === 'submitted').length, 1);
+  page.win.close();
+});
+
+test('moving to the site\'s own thank-you page confirms the attempt; a job path that merely contains the word does not', async () => {
+  const page = panelPage(() => ({}), { form: '<label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'fill');
+  page.win.document.querySelector('button').click();
+  await until(() => page.sent.find((m) => m.event?.event === 'submission_attempted'), 'attempt');
+  const route = (path, html) => {
+    page.win.history.pushState({}, '', path);
+    page.win.document.body.insertAdjacentHTML('beforeend', html);
+  };
+  route('/jobs/customer-success-manager/apply', '<p>Saving…</p>');
+  await tick(30);
+  assert.equal(page.sent.some((m) => m.event?.event === 'submitted'), false);
+  route('/jobs/customer-success-manager/apply/thank-you', '<p>Done</p>');
+  await until(() => page.sent.find((m) => m.event?.event === 'submitted'), 'confirmation page');
   assert.equal(page.sent.filter((m) => m.event?.event === 'submitted').length, 1);
   page.win.close();
 });

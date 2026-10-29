@@ -226,12 +226,27 @@ test("current company is flagged for review when no job is marked current", () =
   assert.deepEqual(plain(F.profileAnswer("Current company name", past, null)), { value: "Analytical Engines", needsReview: true });
 });
 
-test("annual expectations use saved compensation only for the question's currency", () => {
+test("annual compensation uses the saved current or expected amount only in matching currency", () => {
   const { F } = page("");
-  const profile = { ...PROFILE, preferences: { expected_ctc: "2200000", currency: "INR" } };
-  assert.equal(F.profileAnswer("What are your annual expectations (in INR)?", profile).value, "2200000");
+  const profile = { ...PROFILE, preferences: { current_ctc: "1850000", expected_ctc: "2450000", currency: "INR" } };
+  assert.equal(F.profileAnswer("What are your annual expectations (in INR)?", profile).value, "2450000");
   assert.equal(F.profileAnswer("What are your annual expectations (in USD)?", profile), null);
   assert.equal(F.profileAnswer("What are your annual expectations?", profile), null);
+  assert.equal(F.profileAnswer("Last drawn annual compensation (in INR)?", profile).value, "1850000");
+  assert.equal(F.profileAnswer("Current yearly salary (INR)", profile).value, "1850000");
+  assert.equal(F.profileAnswer("Last drawn annual compensation (USD)?", profile), null);
+  assert.equal(F.profileAnswer("Last drawn monthly salary (INR)?", profile), null);
+});
+
+test("salary in lakhs per annum converts saved rupees to the requested unit", () => {
+  const { F } = page("");
+  const profile = { ...PROFILE, preferences: { current_ctc: "1,850,000", expected_ctc: "2450000", currency: "INR" } };
+  assert.equal(F.profileAnswer("What’s your current salary? (in lakhs per annum)", profile).value, "18.5");
+  assert.equal(F.profileAnswer("Expected CTC (LPA)", profile).value, "24.5");
+  assert.equal(F.profileAnswer("Current salary in lakhs per month", profile), null);
+  assert.equal(F.profileAnswer("Current salary in USD (LPA)", profile), null);
+  assert.equal(F.profileAnswer("Current CTC (LPA)", { ...profile, preferences: { ...profile.preferences, currency: "USD" } }), null);
+  assert.equal(F.profileAnswer("Salary in LPA", profile), null);
 });
 
 test("Ashby and native date inputs reject prose and receive valid calendar dates", () => {
@@ -754,14 +769,20 @@ test("Ashby: yes/no buttons and required multi-selects are complete questions, n
   assert.equal(F.apply(fields[3], "Yes"), null, "consent is never inferred");
 });
 
-test("text filling notifies delegated focusout handlers and sends an InputEvent", () => {
+test("text filling lets input commit before delegated focusout validation", async () => {
   const { doc, F, win } = page('<label>Email<input type="email" required></label>');
   const field = F.collectFields(doc, { checkLayout: false })[0];
   let committed = "";
   let inputEvent;
-  doc.addEventListener("input", (event) => { inputEvent = event; });
-  doc.addEventListener("focusout", (event) => { committed = event.target.value; });
+  let inputCommitted = false;
+  doc.addEventListener("input", (event) => {
+    inputEvent = event;
+    win.setTimeout(() => { inputCommitted = true; }, 0);
+  });
+  doc.addEventListener("focusout", (event) => { committed = inputCommitted ? event.target.value : "stale"; });
   F.apply(field, "fixture@example.com");
+  assert.equal(committed, "");
+  await new Promise((resolve) => setTimeout(resolve, 80));
   assert.equal(committed, "fixture@example.com");
   assert.ok(inputEvent instanceof win.InputEvent);
   assert.equal(doc.activeElement, doc.body);

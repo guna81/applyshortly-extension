@@ -216,6 +216,8 @@ For each empty field, in order:
 1. **Profile facts** (`src/fill.js` → `profileAnswer`): name and first/last name, email, phone,
    location, links, total experience, current company and title, highest qualification, college
    and branch, cover letter, summary.
+   Annual compensation uses saved amounts in the matching currency. Questions explicitly in
+   lakhs per annum (LPA) convert saved INR amounts to lakhs; monthly pay is not inferred.
 2. **`POST /answers/suggest`** with `allow_generate: false`, which covers preferences (notice
    period, CTC, relocation, work authorisation, sponsorship) and the answer bank. If the full
    question doesn't match, it retries with the first sentence. *"Current CTC? Mention fixed and

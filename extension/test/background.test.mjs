@@ -479,7 +479,7 @@ test('the window closes shortly after Auto apply clicks Submit, and only then', 
   // Not before the pause that lets the site's confirmation show.
   assert.equal((await h.send({ type: 'autoApplied' }, tab)).data, true);
   assert.ok(h.session.autopilotWindow.closeAt > Date.now());
-  assert.equal(h.timers[0].ms, 8000);
+  assert.equal(h.timers[0].ms, 60000);
   await h.alarm();
   assert.equal(h.calls.some((c) => c.removedTab), false);
   h.session.autopilotWindow.closeAt = Date.now() - 1;
@@ -495,6 +495,20 @@ test('a confirmation page also closes the window', async () => {
   const tab = { id: h.content.id, url: 'https://acme.wd5.myworkdayjobs.com/done', tab: { id: 55 } };
   await h.send({ type: 'report', event: { application_id: 21, event: 'submitted' } }, tab);
   assert.ok(h.session.autopilotWindow.closeAt);
+});
+
+test('a confirmation brings the close forward from the wait for it, and an attempt never pushes it back', async () => {
+  const h = harness({ autopilotItem: dueItem });
+  await h.alarm();
+  const tab = { ...h.content, tab: { id: 55, url: 'https://acme.wd5.myworkdayjobs.com/' }, url: 'https://acme.wd5.myworkdayjobs.com/' };
+  await h.send({ type: 'autoApplied' }, tab);
+  const waiting = h.session.autopilotWindow.closeAt;
+  assert.ok(waiting - Date.now() > 50_000);
+  assert.equal((await h.send({ type: 'autoApplied' }, tab)).data, false);
+  assert.equal(h.session.autopilotWindow.closeAt, waiting);
+  h.session['tab:55'] = { appId: 21, origin: 'https://acme.wd5.myworkdayjobs.com', tracked: true };
+  await h.send({ type: 'report', event: { application_id: 21, event: 'submitted' } }, { id: h.content.id, url: tab.url, tab: { id: 55 } });
+  assert.ok(h.session.autopilotWindow.closeAt - Date.now() <= 3_000);
 });
 
 test('a window nothing finished is flagged after 15 minutes and left open', async () => {

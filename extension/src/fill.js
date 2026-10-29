@@ -664,10 +664,20 @@
     const includeCode = /\b(?:include|including|with)\b.{0,20}\b(?:country|dial(?:l?ing)?|calling) ?code\b/.test(l);
     if (!includeCode && /country ?code|dial(?:l?ing)? code|calling code|phone code|\bisd\b/.test(l)) return sure(dialCode(profile.phone));
     if (/phone|mobile|contact (number|no)|whatsapp|telephone/.test(l)) return sure(profile.phone);
-    if (/\b(?:annual|yearly) (?:salary |compensation |pay )?expectations?\b/.test(l)) {
+    if (/\b(?:lpa|(?:lakhs?|lacs?) per annum)\b/.test(l) && /\b(?:salary|ctc|compensation|pay)\b/.test(l)) {
+      const prefs = profile.preferences;
+      if (prefs?.currency !== "INR" || /\b(?:USD|EUR|GBP|SGD|AED|CAD|AUD|NPR|PKR|BDT|LKR)\b/i.test(label)) return null;
+      const raw = /\b(?:expected|desired)\b/.test(l) ? prefs.expected_ctc
+        : /\b(?:current|last drawn)\b/.test(l) ? prefs.current_ctc : null;
+      const amount = Number(String(raw ?? "").replace(/,/g, ""));
+      return amount > 0 && Number.isFinite(amount) ? sure(amount / 100000) : null;
+    }
+    const annualExpected = /\b(?:annual|yearly) (?:salary |compensation |pay )?expectations?\b/.test(l);
+    const annualDrawn = /\b(?:last drawn|current) (?:annual|yearly) (?:salary|compensation|pay)\b/.test(l);
+    if (annualExpected || annualDrawn) {
       const currency = /\b(INR|USD|EUR|GBP|SGD|AED|CAD|AUD)\b/i.exec(label)?.[1].toUpperCase();
       const prefs = profile.preferences;
-      return currency && currency === prefs?.currency ? sure(prefs.expected_ctc) : null;
+      return currency && currency === prefs?.currency ? sure(annualDrawn ? prefs.current_ctc : prefs.expected_ctc) : null;
     }
     if (/linkedin/.test(l)) return sure(link(/linkedin/i));
     if (/github/.test(l)) return sure(link(/github/i));
@@ -711,8 +721,11 @@
     Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
     el.dispatchEvent(new win.InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: String(value) }));
     el.dispatchEvent(new win.Event("change", { bubbles: true }));
-    // React delegates onBlur through focusout; synthetic blur alone doesn't notify it.
-    el.blur?.();
+    // Commit input state before onBlur validation reads it. Blurring in the same task can
+    // let a framework's stale blur handler overwrite the value we just entered.
+    win.setTimeout(() => {
+      if (el.isConnected && el.ownerDocument.activeElement === el) el.blur?.();
+    }, 50);
   }
 
   function normalise(s) {
@@ -823,6 +836,18 @@
     input.dispatchEvent(new win.Event("change", { bubbles: true }));
   }
 
+  // A whole path segment, never a word inside one: "customer-success-manager" is a job, "success" a receipt.
+  const CONFIRMATION_SEGMENT = /^(?:thanks?|thank-?you|confirmation|confirmed|submitted|success|applied|complete[d]?|application-(?:submitted|received|complete[d]?))$/i;
+
+  /** Whether the address is a site's own confirmation page, e.g. /apply/thank-you. */
+  function confirmationPath(url) {
+    try {
+      return new URL(url).pathname.split("/").some((segment) => CONFIRMATION_SEGMENT.test(segment));
+    } catch {
+      return false;
+    }
+  }
+
   /** Google Forms' "Your response has been recorded" page, or a generic thank-you page. */
   function looksSubmitted(doc, url) {
     const u = new URL(url);
@@ -830,7 +855,7 @@
       const hasQuestions = doc.querySelector('[role="listitem"] input:not([type=hidden]), [role="listitem"] textarea');
       return !hasQuestions;
     }
-    return false;
+    return confirmationPath(url);
   }
 
   const SUBMIT_TEXT = /\b(submit|apply|send( my)? application)\b/i;
@@ -888,5 +913,6 @@
     attachFile,
     findSubmitButton,
     looksSubmitted,
+    confirmationPath,
   };
 })();

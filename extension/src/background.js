@@ -373,7 +373,8 @@ async function openWebsite(path = "/dashboard") {
 // several steps) leaves the window open for the user. Job boards never come this way: the platform
 // doesn't offer them, and the form agent only runs in a tab the user started.
 const AUTOPILOT_ALARM = "autopilot";
-const AUTOPILOT_CLOSE_MS = 8_000; // lets the site's confirmation show before the window goes
+const AUTOPILOT_CONFIRM_WAIT_MS = 60_000; // the window stays open this long for the site's confirmation to show
+const AUTOPILOT_CONFIRMED_CLOSE_MS = 3_000; // once the page confirms, just long enough to see it
 const AUTOPILOT_WATCHDOG_MS = 15 * 60_000;
 let autopilotPolling = false;
 
@@ -421,12 +422,16 @@ async function autopilotWatch(open) {
   return false;
 }
 
-/** Auto apply clicked Submit (or the page shows it went through) in a tab: if Autopilot opened it, close it soon. */
-async function autopilotAttempted(tabId) {
+/** Auto apply clicked Submit (or the page confirmed it went through) in a tab: if Autopilot opened it, close it after the confirmation wait, or a moment after the page confirms. */
+async function autopilotAttempted(tabId, { confirmed = false } = {}) {
   const open = await autopilotWindow();
-  if (!open || open.tabId !== tabId || open.closeAt) return false;
-  await chrome.storage.session.set({ autopilotWindow: { ...open, closeAt: Date.now() + AUTOPILOT_CLOSE_MS } });
-  setTimeout(() => void autopilotCloseIfDue().catch(() => {}), AUTOPILOT_CLOSE_MS);
+  if (!open || open.tabId !== tabId) return false;
+  const wait = confirmed ? AUTOPILOT_CONFIRMED_CLOSE_MS : AUTOPILOT_CONFIRM_WAIT_MS;
+  const closeAt = Date.now() + wait;
+  // A confirmation brings the close forward; a second attempt never pushes it back.
+  if (open.closeAt && open.closeAt <= closeAt) return false;
+  await chrome.storage.session.set({ autopilotWindow: { ...open, closeAt } });
+  setTimeout(() => void autopilotCloseIfDue().catch(() => {}), wait);
   return true;
 }
 
@@ -641,7 +646,7 @@ const handlers = {
       ? await syncOutcome(msg.event) : await (await bridge()).report(msg.event);
     if (msg.event.event === "submitted" && sender.tab) {
       await clearTab(sender.tab.id);
-      await autopilotAttempted(sender.tab.id);
+      await autopilotAttempted(sender.tab.id, { confirmed: true });
     }
     return result;
   },
