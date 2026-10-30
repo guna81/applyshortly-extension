@@ -204,11 +204,13 @@ export interface AgentAction {
 
 export interface AgentStepResponse {
   session_id: string;
+  agent_engine?: "classic" | "browser" | null;
   status: "continue" | "ask_user" | "ready_for_review" | "failed";
   actions: AgentAction[];
   message: string;
   question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null } | null;
   want_screenshot: boolean;
+  annotate_screenshot?: boolean;
   filled: { label: string; value: string; source: string; needs_review: boolean }[];
   unresolved: string[];
   failure_code: string | null;

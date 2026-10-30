@@ -122,14 +122,18 @@
     const { el } = field;
     const label = clip(clean(field.label), 500);
     const required = Boolean(field.required);
+    // A phone number box and its country selector share the number's label as their group, so the
+    // platform can treat them as one phone answer while each keeps its own element.
+    const phone = field.phoneCountry ? field.label : field.phoneFor?.label;
+    const group = phone ? { group: clip(clean(phone), 500) } : {};
     if (field.kind === "text") {
       const role = el.tagName === "TEXTAREA" ? "textarea" : "textbox";
-      return [base(el, { role, name: label, input_type: el.type || "text", value: clip(el.value ?? "", 2000), required, ...invalidInfo(field) })];
+      return [base(el, { role, name: label, input_type: el.type || "text", value: clip(el.value ?? "", 2000), required, ...group, ...invalidInfo(field) })];
     }
     if (field.kind === "select") {
       const chosen = el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
-      const value = F.isEmpty(field) ? "" : clean(chosen?.text);
-      return [base(el, { role: "select", name: label, value, required, options: field.options.filter((o) => !F.isPlaceholderOption(o.text)).slice(0, 100).map((o) => clip(o.text, 500)), ...invalidInfo(field) })];
+      const value = field.phoneFor ? F.countryText(field) : F.isEmpty(field) ? "" : clean(chosen?.text);
+      return [base(el, { role: "select", name: label, value, required, ...group, options: field.options.filter((o) => !F.isPlaceholderOption(o.text)).slice(0, 100).map((o) => clip(o.text, 500)), ...invalidInfo(field) })];
     }
     if (field.kind === "radio") {
       return field.options.map((o) => base(o.el, {
@@ -153,7 +157,7 @@
     }
     if (field.kind === "dropdown") {
       const options = listedOptions(el).slice(0, 100).map((t) => clip(t, 500));
-      return [base(el, { role: "combobox", name: label, value: clip(F.dropdownValue(field), 2000), required, options, ...invalidInfo(field) })];
+      return [base(el, { role: "combobox", name: label, value: clip(field.phoneFor ? F.countryText(field) : F.dropdownValue(field), 2000), required, options, ...group, ...invalidInfo(field) })];
     }
     return [];
   }
@@ -282,6 +286,30 @@
 
   // ---------------------------------------------------------------- acting
 
+  // Temporary ref labels for a requested screenshot. Never scroll or intercept input.
+  function screenshotRefs(items = []) {
+    clearScreenshotRefs();
+    const layer = document.createElement("div");
+    layer.setAttribute("data-applyshortly-screenshot-refs", "");
+    layer.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647";
+    for (const { local, ref } of items) {
+      const el = find(local);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height || r.bottom < 0 || r.top > innerHeight) continue;
+      const tag = document.createElement("span");
+      tag.textContent = ref;
+      tag.style.cssText = `position:absolute;left:${Math.max(0, r.left)}px;top:${Math.max(0, r.top - 15)}px;` +
+        "background:#111;color:#fff;font:12px monospace;padding:1px 3px;border:1px solid #fff";
+      layer.appendChild(tag);
+    }
+    document.documentElement.appendChild(layer);
+  }
+
+  function clearScreenshotRefs() {
+    document.querySelectorAll("[data-applyshortly-screenshot-refs]").forEach((el) => el.remove());
+  }
+
   /** Scrolls the element into view and returns its box (this frame's viewport), or null. */
   function box(ref) {
     const el = find(ref);
@@ -406,6 +434,24 @@
     return chosen ? { ok: true, ref: chosen.ref, text: chosen.text } : { ok: false, options: options.map((o) => o.text).slice(0, 15) };
   }
 
+  /**
+   * Scrolls a virtualized option list (only the options in view are rendered) one page further,
+   * from the top when restart is set. False when there is nothing more to scroll.
+   */
+  function scrollOptions(ref, restart = false, checkLayout = true) {
+    const first = visibleOptions(ref, checkLayout)[0];
+    let scroller = first ? find(first.ref)?.parentElement : null;
+    while (scroller && !(scroller.scrollHeight > scroller.clientHeight + 1)) scroller = scroller.parentElement;
+    if (!scroller) return false;
+    if (restart) {
+      scroller.scrollTop = 0;
+      return true;
+    }
+    const at = scroller.scrollTop;
+    scroller.scrollTop = at + Math.max(40, scroller.clientHeight * 0.8);
+    return scroller.scrollTop !== at;
+  }
+
   /** A file into an <input type=file>, or dropped on a drop zone that has none. */
   function attach(ref, base64, name, type) {
     const el = find(ref);
@@ -466,6 +512,8 @@
 
   globalThis.JobHuntAgentPage = {
     observe,
+    screenshotRefs,
+    clearScreenshotRefs,
     box,
     clickable,
     focusForTyping,
@@ -477,6 +525,7 @@
     shownChoices,
     noteShown,
     matchOption,
+    scrollOptions,
     attach,
     state,
     scrollPage,

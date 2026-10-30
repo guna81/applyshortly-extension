@@ -143,6 +143,12 @@
       }
       return { field, status: "filled", value: picked, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
     }
+    if (F.isPhoneBox(field)) {
+      // A phone answer counts once the page holds a complete number under the right country.
+      const phone = await F.applyPhone(field, answer.value);
+      if (!phone.ok) return { field, status: "unresolved", reason: phone.reason ?? "Enter your phone number on the page.", suggestion: answer.value };
+      return { field, status: "filled", value: phone.value, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
+    }
     const written = F.apply(field, answer.value, { strict });
     if (written === null) {
       if (field.kind === "text") return { field, status: "unresolved", reason: "This answer doesn't fit the field. Please enter it on the page." };
@@ -558,7 +564,7 @@
         if (field.options?.length) return field.options.some((o) => o.el.checked === true);
         return field.el.checked === true || field.el.getAttribute("aria-checked") === "true";
       case "dropdown":
-        return Boolean(F.dropdownValue(field)) && !F.isInvalid(field);
+        return field.phoneFor ? !F.isEmpty(field) : Boolean(F.dropdownValue(field)) && !F.isInvalid(field);
       case "picker": // Google Forms hides "Add file" once the file is attached
         return ![...field.el.querySelectorAll('[role="button"]')].some(
           (b) => /add file|upload/i.test(b.textContent) && b.getClientRects().length > 0,

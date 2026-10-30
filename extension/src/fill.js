@@ -330,6 +330,10 @@
     }
     for (const el of doc.querySelectorAll('[role="listbox"]')) {
       if (!visible(el) || el.closest("select")) continue;
+      // The popup of a combobox is that control's option list, not a question of its own.
+      if (el.id && doc.querySelector(`[aria-controls~="${CSS.escape(el.id)}"], [aria-owns~="${CSS.escape(el.id)}"]`)) continue;
+      const namer = (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).map((id) => id && doc.getElementById(id)).find((n) => n?.matches?.(CUSTOM_DROPDOWN));
+      if (namer) continue; // named by the dropdown that opens it: its popup, not a question
       fields.push({ kind: "dropdown", el, label: labelOf(el), required: isRequired(el) });
     }
     const dropdowns = fields.filter((f) => f.kind === "dropdown").map((f) => f.el);
@@ -339,7 +343,10 @@
       if (input ? el.disabled : !isEditable(el) || el.matches("input, textarea, select")) continue;
       if (dropdowns.some((d) => d === el || d.contains(el) || el.contains(d))) continue;
       dropdowns.push(el);
-      const label = dropdownLabel(el);
+      let label = dropdownLabel(el);
+      // It only shows a chosen value: no question to ask, unless it is a phone number's selector.
+      if (!label && phoneInputFor(el, "")) label = "Phone country code";
+      if (!label) continue;
       const marked = /\*/.test(el.getAttribute("aria-label") ?? "") || /\*/.test(el.textContent ?? "");
       fields.push({
         kind: "dropdown",
@@ -347,9 +354,11 @@
         layout: checkLayout,
         el,
         label,
+        explicitLabel: explicitDropdownLabel(el),
         required: isRequired(el) || el.hasAttribute("required") || marked,
       });
     }
+    linkPhoneGroups(fields);
     // Uploads with no <input type=file> on the page (Google Forms opens Google's own picker).
     for (const item of doc.querySelectorAll('[role="listitem"]')) {
       const hasPickerButton = [...item.querySelectorAll('[role="button"]')].some((b) => /add file|upload/i.test(b.textContent));
@@ -362,8 +371,32 @@
     return fields.sort((a, b) => (a.el.compareDocumentPosition(b.el) & 4 ? -1 : 1));
   }
 
+  /**
+   * Ties each country / dial-code selector to the phone box beside it. The selector then asks
+   * "Phone country code" (not the country it happens to show), is required when the number is, and
+   * counts as answered only while the number is complete and agrees with it.
+   */
+  function linkPhoneGroups(fields) {
+    for (const f of fields) {
+      if (f.kind !== "dropdown" && f.kind !== "select") continue;
+      if (f.kind === "dropdown" && ripplingField(f.el)) continue;
+      const tel = f.kind === "select" ? phoneInputFor(f.el, f.label) : phoneInputFor(f.el, f.explicitLabel ?? "");
+      const telField = tel && fields.find((x) => x.el === tel && x.kind === "text");
+      if (!telField || telField.phoneCountry) continue;
+      f.phoneFor = telField;
+      f.label = phoneCountryLabel(telField.label);
+      f.required = Boolean(telField.required);
+      telField.phoneCountry = f;
+    }
+  }
+
   /** The question a custom dropdown answers, never the value it currently shows. */
   function dropdownLabel(el) {
+    return explicitDropdownLabel(el) || shownLabel(el);
+  }
+
+  /** The label the page attaches to a custom dropdown ("" when it only shows its value). */
+  function explicitDropdownLabel(el) {
     const doc = el.ownerDocument;
     const rippling = ripplingField(el);
     if (rippling) return rippling.label;
@@ -382,13 +415,46 @@
     const box = el.closest("mat-form-field, .form-group, [class*=form-field i]");
     const inBox = box && [...box.querySelectorAll("mat-label, label")].find((n) => !el.contains(n));
     if (inBox && cleanLabel(inBox.textContent)) return cleanLabel(inBox.textContent);
-    const near = nearbyLabel(el);
-    if (near) return near;
-    const shown = cleanLabel(el.textContent ?? "");
+    return nearbyLabel(el);
+  }
+
+  /**
+   * A dropdown with no label of its own: its placeholder is often the question ("Gender*"), but a
+   * choice it already shows is its value, never a question.
+   */
+  function shownLabel(el) {
+    const shown = cleanLabel(visibleText(el));
     // "Select" is the prompt, not the question: the text above the control is.
     if (!shown || PICK_PLACEHOLDER.test(shown)) return textAbove(el) || shown;
-    // The placeholder is often the question ("Gender*").
-    return shown;
+    const chosen = ownedLists(el).flatMap((l) => [...l.querySelectorAll('[role="option"][aria-selected="true"]')]);
+    return chosen.some((o) => normalise(o.textContent ?? "") === normalise(shown) || normalise(o.getAttribute("data-value") ?? "") === normalise(shown)) ? "" : shown;
+  }
+
+  /**
+   * The text a control shows, once. Hidden copies (aria-hidden, display: none) are skipped and an
+   * element that repeats its previous sibling's text (a visible name plus its screen-reader copy)
+   * counts once; text that repeats within one element is left alone.
+   */
+  function visibleText(node) {
+    if (node.nodeType === 3) return node.nodeValue ?? "";
+    if (node.nodeType !== 1 || node.hidden || node.getAttribute("aria-hidden") === "true") return "";
+    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+    if (style && (style.display === "none" || style.visibility === "hidden")) return "";
+    let out = "";
+    let previous = "";
+    for (const child of node.childNodes) {
+      const text = visibleText(child);
+      if (child.nodeType === 1) {
+        const key = normalise(text);
+        if (key && key === previous) continue;
+        if (key && previous && !/\s$/.test(out)) out += " "; // sibling elements are separate words
+        previous = key;
+      } else if (text.trim()) {
+        previous = "";
+      }
+      out += text;
+    }
+    return out;
   }
 
   /**
@@ -421,7 +487,7 @@
     let box = el.parentElement;
     for (let i = 0; i < 3 && box && box !== el.ownerDocument.body; i++, box = box.parentElement) {
       if (box.querySelectorAll("input, select, textarea, label").length > 1 || box.querySelector('[role="option"], li')) break;
-      const shown = cleanLabel(box.textContent ?? "");
+      const shown = cleanLabel(visibleText(box));
       if (shown) return PICK_PLACEHOLDER.test(shown) ? "" : shown;
     }
     return "";
@@ -437,7 +503,8 @@
     }
     if (!field.custom) return "";
     if (el.matches(".mat-mdc-select-empty, .mat-select-empty") || el.querySelector(".mat-mdc-select-placeholder, .mat-select-placeholder")) return "";
-    const shown = cleanLabel(el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text")?.textContent ?? el.textContent ?? "");
+    const valueText = el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text");
+    const shown = cleanLabel(valueText ? visibleText(valueText) : visibleText(el));
     const same = normalise(shown) === normalise(field.label ?? "");
     return !shown || same || EMPTY_OPTION.test(shown) ? "" : shown;
   }
@@ -532,7 +599,8 @@
       }
       if (options.length) break;
     }
-    const option = options.length ? chooseOption(options, answer, { strict }) : null;
+    let option = options.length ? chooseOption(options, answer, { strict }) : null;
+    if (!option && options.length) option = await scrollToOption(field, before, options, answer, strict, pollMs);
     if (!option) {
       dismiss(el, () => openOptions(field, before).length > 0);
       return null;
@@ -540,6 +608,26 @@
     press(option.el, ["mousedown", "mouseup", "click"]);
     await sleep(pollMs);
     return option.text;
+  }
+
+  /**
+   * A virtualized list renders only the options in view (a country list of 240 shows seven). Scrolls
+   * it from the top, a page at a time, until the answer's option is rendered; null when it never is.
+   */
+  async function scrollToOption(field, before, options, answer, strict, pollMs) {
+    let scroller = options[0].el.parentElement;
+    while (scroller && !(scroller.scrollHeight > scroller.clientHeight + 1)) scroller = scroller.parentElement;
+    if (!scroller) return null;
+    scroller.scrollTop = 0;
+    for (let i = 0; i < 80; i++) {
+      await sleep(pollMs);
+      const found = chooseOption(openOptions(field, before), answer, { strict });
+      if (found) return found;
+      const at = scroller.scrollTop;
+      scroller.scrollTop = at + Math.max(40, scroller.clientHeight * 0.8);
+      if (scroller.scrollTop === at) return null;
+    }
+    return null;
   }
 
   /**
@@ -637,11 +725,189 @@
     return `${rounded} ${rounded === 1 ? "year" : "years"}`;
   }
 
+  // ---------------------------------------------------------------- phone numbers
+
+  // Calling code → the countries using it, the usual one first. Mirrors services/apply/phone.py.
+  const DIAL_COUNTRIES = {
+    "1": ["United States", "Canada"], "7": ["Russia", "Kazakhstan"], "20": ["Egypt"], "27": ["South Africa"],
+    "30": ["Greece"], "31": ["Netherlands"], "32": ["Belgium"], "33": ["France"], "34": ["Spain"],
+    "36": ["Hungary"], "39": ["Italy"], "40": ["Romania"], "41": ["Switzerland"], "43": ["Austria"],
+    "44": ["United Kingdom"], "45": ["Denmark"], "46": ["Sweden"], "47": ["Norway"], "48": ["Poland"],
+    "49": ["Germany"], "51": ["Peru"], "52": ["Mexico"], "54": ["Argentina"], "55": ["Brazil"],
+    "56": ["Chile"], "57": ["Colombia"], "60": ["Malaysia"], "61": ["Australia"], "62": ["Indonesia"],
+    "63": ["Philippines"], "64": ["New Zealand"], "65": ["Singapore"], "66": ["Thailand"], "81": ["Japan"],
+    "82": ["South Korea"], "84": ["Vietnam"], "86": ["China"], "90": ["Turkey"], "91": ["India"],
+    "92": ["Pakistan"], "93": ["Afghanistan"], "94": ["Sri Lanka"], "95": ["Myanmar"], "98": ["Iran"],
+    "212": ["Morocco"], "213": ["Algeria"], "216": ["Tunisia"], "233": ["Ghana"], "234": ["Nigeria"],
+    "254": ["Kenya"], "255": ["Tanzania"], "256": ["Uganda"], "260": ["Zambia"], "263": ["Zimbabwe"],
+    "351": ["Portugal"], "352": ["Luxembourg"], "353": ["Ireland"], "355": ["Albania"], "358": ["Finland"],
+    "359": ["Bulgaria"], "370": ["Lithuania"], "371": ["Latvia"], "372": ["Estonia"], "380": ["Ukraine"],
+    "381": ["Serbia"], "385": ["Croatia"], "386": ["Slovenia"], "420": ["Czech Republic", "Czechia"],
+    "421": ["Slovakia"], "591": ["Bolivia"], "852": ["Hong Kong"], "880": ["Bangladesh"], "886": ["Taiwan"],
+    "961": ["Lebanon"], "962": ["Jordan"], "965": ["Kuwait"], "966": ["Saudi Arabia"], "968": ["Oman"],
+    "971": ["United Arab Emirates", "UAE"], "972": ["Israel"], "973": ["Bahrain"], "974": ["Qatar"], "977": ["Nepal"],
+  };
+  const MIN_NATIONAL_DIGITS = 6; // fewer digits is a number still being typed (or just a dial code)
+  // A box that asks for the candidate's phone number, not "Phone type" or a verification code.
+  const PHONE_BOX = /^(?:(?:your|primary|mobile|cell|contact|work|home|best) )*(?:phone|mobile|telephone|cell(?:phone)?|whatsapp)(?: ?(?:number|no\.?|#))?\W*$|^contact (?:number|no\.?)\W*$/i;
+  // What a country / dial-code selector inside a phone group may be called: nothing, or a bare
+  // "Country", "Phone country code". "Country of residence" is a different question.
+  const PHONE_COUNTRY_LABEL = /^(?:select |choose |your )?(?:(?:phone|mobile|telephone|tel|cell|whatsapp|contact)(?: (?:number|no\.?))? ?)?(?:country|region|flag|dial(?:l?ing)?|calling|international)?(?: ?(?:code|prefix|selector|picker|dropdown))?\W*$/i;
+
+  /** "+91 98765 43210" → {code: "+91", national: "9876543210"}; null when it has no known country code. */
+  function splitInternational(text) {
+    const t = String(text ?? "").trim();
+    if (!/^(?:\+|00)\s*\(?\d/.test(t)) return null;
+    const digits = t.replace(/^(?:\+|00)/, "").replace(/\D/g, "");
+    for (const n of [3, 2, 1]) {
+      const code = digits.slice(0, n);
+      if (DIAL_COUNTRIES[code]) return { code: `+${code}`, national: digits.slice(n) };
+    }
+    return null;
+  }
+
+  /**
+   * How far a phone box is from a usable number: "empty", "prefix" (only a dial code such as "+44"),
+   * "partial" (a few digits) or "complete".
+   */
+  function phoneProgress(value) {
+    const t = String(value ?? "").trim();
+    const digits = t.replace(/\D/g, "");
+    if (!digits) return { state: "empty", code: null, national: "" };
+    const intl = splitInternational(t);
+    const national = intl ? intl.national : t.startsWith("+") && digits.length <= 4 ? "" : digits;
+    const state = !national ? "prefix" : national.length < MIN_NATIONAL_DIGITS ? "partial" : "complete";
+    return { state, code: intl?.code ?? null, national };
+  }
+
+  /** The calling code a country selector shows ("India (+91)", "+44", or just "United Kingdom"). */
+  function dialOf(text) {
+    const t = String(text ?? "");
+    const explicit = /\+\s*(\d{1,4})(?!\d)/.exec(t)?.[1];
+    if (explicit) return DIAL_COUNTRIES[explicit] ? `+${explicit}` : null;
+    const n = ` ${normalise(t)} `;
+    if (n.trim() === "") return null;
+    for (const [code, names] of Object.entries(DIAL_COUNTRIES)) {
+      if (names.some((name) => n.includes(` ${normalise(name)} `))) return `+${code}`;
+    }
+    return null;
+  }
+
+  /** Countries for a "+91"-style answer, to match options that name the country without its code. */
+  function countriesFor(answer) {
+    const code = /^\+\s*(\d{1,4})$/.exec(String(answer ?? "").trim())?.[1];
+    return code ? DIAL_COUNTRIES[code] ?? [] : [];
+  }
+
+  /** Whether a box takes the candidate's phone number. */
+  function isPhoneBox(field) {
+    const el = field.el;
+    if (field.kind !== "text" || !el?.matches) return false;
+    if (el.matches("input[type=tel]")) return true;
+    return el.matches("input:not([type]), input[type=text]") && PHONE_BOX.test(field.label ?? "");
+  }
+
+  /**
+   * The phone box a country / dial-code selector belongs to: the single phone input in a small
+   * group around it, when the selector is not clearly another question ("Country of residence").
+   */
+  function phoneInputFor(control, explicitLabel) {
+    if (control.matches("input[type=tel]") || !PHONE_COUNTRY_LABEL.test(cleanLabel(explicitLabel))) return null;
+    const owned = new Set(ownedLists(control));
+    const outside = (n) => n !== control && !control.contains(n) && ![...owned].some((l) => l.contains(n));
+    for (let node = control.parentElement, depth = 0; node && depth < 4; depth += 1, node = node.parentElement) {
+      const boxes = [...node.querySelectorAll("input")].filter((i) => outside(i) && isPhoneBox({ kind: "text", el: i, label: i.matches("input[type=tel]") ? "" : labelOf(i) }));
+      const others = [...node.querySelectorAll(`${CUSTOM_DROPDOWN}, select`)].filter((n) => outside(n) && !n.matches("input"));
+      if (others.length || boxes.length > 1) return null;
+      if (boxes.length === 1) return boxes[0];
+    }
+    return null;
+  }
+
+  function ownedLists(el) {
+    return ["aria-controls", "aria-owns"]
+      .map((a) => el.getAttribute(a))
+      .filter(Boolean)
+      .flatMap((ids) => ids.split(/\s+/))
+      .map((id) => el.ownerDocument.getElementById(id))
+      .filter(Boolean);
+  }
+
+  /** The question a country selector answers when it sits in a phone group ("Phone country code"). */
+  function phoneCountryLabel(telLabel) {
+    const base = cleanLabel(telLabel).replace(/\s*(?:number|no\.?|#)$/i, "").trim();
+    return `${base || "Phone"} country code`;
+  }
+
+  /**
+   * Whether a phone number box and its country selector (when it has one) agree: the dial code the
+   * number starts with is the one the selector shows.
+   */
+  function countryText(countryField) {
+    if (countryField.kind === "select") {
+      const chosen = countryField.el.options[countryField.el.selectedIndex];
+      return chosen && !isPlaceholderOption(chosen.text) ? cleanLabel(chosen.text) : "";
+    }
+    return dropdownValue(countryField);
+  }
+
+  function phoneAgrees(telField, countryField) {
+    const have = phoneProgress(telField.el.value);
+    if (have.state !== "complete") return false;
+    const shown = countryField ? dialOf(countryText(countryField)) : null;
+    return !have.code || !shown || have.code === shown;
+  }
+
+  /** What to type into a phone box for an answer, given its country selector and current prefix. */
+  function phonePlan(field, answer) {
+    const parsed = splitInternational(answer);
+    const country = field.phoneCountry ?? null;
+    const current = String(field.el.value ?? "").trim();
+    const prefix = splitInternational(current)?.code ?? null;
+    const international = current.startsWith("+");
+    if (!parsed) {
+      if (!country && !international) return { ok: true, text: String(answer).trim() };
+      return { ok: false, reason: "Add your country code to the number" };
+    }
+    const widget = prefix ?? (country ? dialOf(countryText(country)) : null);
+    if (widget && widget !== parsed.code) return { ok: false, needCountry: parsed.code, reason: `Choose ${parsed.code} as the country first` };
+    if (!country && !international) return { ok: true, text: String(answer).trim() };
+    return { ok: true, text: international ? `${parsed.code} ${parsed.national}` : parsed.national };
+  }
+
+  /**
+   * Fills a phone box together with its country selector and reads the result back. {ok, value,
+   * reason}: ok only when the committed value is a complete number that agrees with the selector
+   * and keeps the answer's digits.
+   */
+  async function applyPhone(field, answer) {
+    let plan = phonePlan(field, answer);
+    const country = field.phoneCountry;
+    if (!plan.ok && plan.needCountry && country) {
+      const picked = country.kind === "select" ? apply(country, plan.needCountry) : await pickDropdown(country, plan.needCountry);
+      if (picked === null) return { ok: false, reason: plan.reason };
+      await sleep(150); // the widget re-renders the number box for the new country
+      plan = phonePlan(field, answer);
+    }
+    if (!plan.ok) return { ok: false, reason: plan.reason };
+    if (apply(field, answer) === null) return { ok: false, reason: "This number doesn't fit the field." };
+    await sleep(150);
+    const want = splitInternational(answer)?.national ?? String(answer).replace(/\D/g, "");
+    const got = phoneProgress(field.el.value);
+    const keeps = got.national === want || got.national.endsWith(want) || want.endsWith(got.national);
+    if (got.state !== "complete" || !keeps || (country && !phoneAgrees(field, country))) {
+      return { ok: false, reason: "The site didn't keep the phone number", value: field.el.value };
+    }
+    return { ok: true, value: field.el.value };
+  }
+
   /**
    * "+91 98765 43210" → "+91". Written without a separator ("+919876543210"), the last ten digits
    * are taken as the national number. Null when the number doesn't start with a country code.
    */
   function dialCode(phone) {
+    const known = splitInternational(phone)?.code;
+    if (known) return known;
     const text = String(phone ?? "").trim();
     const spaced = /^\+(\d{1,3})[\s\-().]/.exec(text);
     if (spaced) return `+${spaced[1]}`;
@@ -752,6 +1018,7 @@
       const match = options.find((o) => new RegExp(`^${yesNo}\\b`).test(normalise(o.text)));
       if (match) return match;
     }
+    if (/^\+\s*\d{1,4}$/.test(String(answer).trim())) return chooseDialOption(options, answer);
     if (strict) return null;
     const contained = options.filter((o) => {
       const t = normalise(o.text);
@@ -760,13 +1027,30 @@
     return contained.length === 1 ? contained[0] : null;
   }
 
+  /**
+   * The option for a "+91" answer: the one listing that code as a whole number ("India (+91)", never
+   * "Bolivia (+591)"), else one naming a country that uses it ("India").
+   */
+  function chooseDialOption(options, answer) {
+    const code = String(answer).replace(/\D/g, "");
+    const listed = options.filter((o) => normalise(o.text).split(" ").includes(code) && /\+/.test(o.text));
+    if (listed.length) return listed[0];
+    for (const name of countriesFor(String(answer).trim())) {
+      const hit = options.find((o) => ` ${normalise(o.text)} `.includes(` ${normalise(name)} `));
+      if (hit) return hit;
+    }
+    return null;
+  }
+
   function isEmpty(field) {
     switch (field.kind) {
       case "text":
-        return !field.el.value.trim();
+        // A dial code alone ("+44") or a few digits is a number still to be written.
+        return isPhoneBox(field) ? phoneProgress(field.el.value).state !== "complete" : !field.el.value.trim();
       case "select":
         return !field.el.value || field.el.selectedIndex <= 0 && field.el.options[0]?.value === ""
-          || isPlaceholderOption(field.el.options[field.el.selectedIndex]?.text);
+          || isPlaceholderOption(field.el.options[field.el.selectedIndex]?.text)
+          || (field.phoneFor ? !phoneAgrees(field.phoneFor, field) : false);
       case "radio":
         return field.aria
           ? !field.options.some((o) => o.el.getAttribute(field.pressed ? "aria-pressed" : "aria-checked") === "true")
@@ -774,6 +1058,9 @@
       case "file":
         return !field.el.files?.length;
       case "dropdown":
+        // A country selector is answered only by a complete number that agrees with it: the
+        // country a widget starts on says nothing about the candidate's number.
+        if (field.phoneFor) return !countryText(field) || !phoneAgrees(field.phoneFor, field);
         if (field.el.closest('[data-testid="phone_number-code"]') &&
             !field.el.ownerDocument.querySelector('[data-input="phone_number"]')?.value?.trim()) return true;
         return !dropdownValue(field);
@@ -805,6 +1092,10 @@
         const prefix = /^\+(\d{1,3})\b/.exec(code?.value ?? "")?.[1];
         const digits = String(value).replace(/\D/g, "");
         if (prefix && dialCode(value) === `+${prefix}`) value = digits.slice(prefix.length);
+      } else if (isPhoneBox(field)) {
+        const plan = phonePlan(field, answer);
+        if (!plan.ok) return null;
+        value = plan.text;
       }
       if (field.el.type === "number") {
         const n = /-?\d+(\.\d+)?/.exec(answer)?.[0];
@@ -905,6 +1196,14 @@
     collectFields,
     profileAnswer,
     chooseOption,
+    isPhoneBox,
+    phoneProgress,
+    phoneAgrees,
+    applyPhone,
+    splitInternational,
+    dialOf,
+    countryText,
+    visibleText,
     isEmpty,
     isInvalid,
     invalidReason,

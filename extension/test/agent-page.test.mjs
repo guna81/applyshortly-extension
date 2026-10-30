@@ -233,3 +233,15 @@ test("Ashby yes/no observations retain the question, requirement and selected No
   radios = observe().elements.filter((e) => e.role === "radio");
   assert.equal(radios.find((e) => e.name === "No").checked, true);
 });
+
+test("screenshot ref labels use merged refs, do not intercept input, and are removed", () => {
+  const { doc, A, observe } = page('<label for="n">Full name</label><input id="n">');
+  const ref = byName(observe(), "Full name").ref;
+  doc.querySelector("#n").getBoundingClientRect = () => ({ left: 10, top: 30, bottom: 50, width: 100, height: 20 });
+  A.screenshotRefs([{ local: ref, ref: `2.${ref}` }]);
+  const layer = doc.querySelector("[data-applyshortly-screenshot-refs]");
+  assert.equal(layer.textContent, `2.${ref}`);
+  assert.equal(layer.style.pointerEvents, "none");
+  A.clearScreenshotRefs();
+  assert.equal(doc.querySelector("[data-applyshortly-screenshot-refs]"), null);
+});

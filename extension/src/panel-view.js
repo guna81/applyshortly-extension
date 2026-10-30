@@ -361,6 +361,11 @@
       const p = el("div", { class: entering ? "p enter" : "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
       p.addEventListener("keydown", (e) => { if (e.key === "Escape") setMinimized(true); });
       p.append(header(title, subtitle));
+      if (ctl.agent) {
+        const engine = ctl.agent.agent_engine;
+        const label = engine === "browser" ? "Browser agent" : engine === "classic" ? "Classic" : "Not reported yet";
+        p.append(el("div", { class: "sub", role: "status", "aria-label": "Form agent engine", style: "padding:0 16px 10px" }, `Engine: ${label}`));
+      }
 
       if (view.busy) {
         p.append(el("div", { class: "busy", role: "status" }, el("span", { class: "spin" }), view.busy));

@@ -65,6 +65,49 @@ test("observeTab merges frames with prefixed refs, and an open modal hides the r
   assert.deepEqual(embedded.observation.elements.map((e) => e.name), ["Close", "Next"]);
 });
 
+test("Agent stops an action batch on failure and returns to observation", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "n", role: "textbox", name: "Name" }]) });
+  const bodies = [];
+  const agent = new Agent({
+    tabId: 3, driver, files: async () => null, notify: async () => {}, report: async () => {},
+    step: async (body) => {
+      bodies.push(structuredClone(body));
+      return bodies.length === 1
+        ? { session_id: "s", status: "continue", actions: [
+          { type: "click", ref: "stale" }, { type: "type", ref: "0.n", text: "must not run" },
+        ] }
+        : { session_id: "s", status: "failed", actions: [] };
+    },
+  });
+  await agent.run();
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[1].results, [{ index: 0, ok: false, detail: "That element is no longer on the page." }]);
+  assert.equal(driver.calls.some(([name]) => name === "insertText"), false);
+});
+
+test("requested ref overlays are removed from every frame even if capture fails", async () => {
+  const driver = new FakeDriver({
+    top: () => frameObs([{ ref: "a", role: "textbox", name: "Name" }]),
+    child: () => frameObs([{ ref: "b", role: "textbox", name: "Email" }]),
+  });
+  const original = driver.call.bind(driver);
+  driver.call = async (frame, name, ...args) => {
+    if (name === "screenshotRefs" || name === "clearScreenshotRefs") {
+      driver.calls.push([name, frame.frameId, args[0]]);
+      return;
+    }
+    return original(frame, name, ...args);
+  };
+  driver.screenshot = async () => { throw new Error("capture unavailable"); };
+  const { observation } = await observeTab(driver, { screenshot: true, annotate: true });
+  assert.equal(observation.screenshot, undefined);
+  assert.deepEqual(driver.calls.map(([name, frame]) => [name, frame]), [
+    ["screenshotRefs", "top"], ["screenshotRefs", "child"],
+    ["clearScreenshotRefs", "top"], ["clearScreenshotRefs", "child"],
+  ]);
+  assert.deepEqual(driver.calls[0][2], [{ ref: "0.a", local: "a" }]);
+});
+
 test("execute: trusted clicks offset into frames, typing, typeahead picks, uploads and refusals", async () => {
   const driver = new FakeDriver({ top: () => frameObs([]) });
   const refs = new Map([

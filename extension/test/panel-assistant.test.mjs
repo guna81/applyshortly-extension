@@ -868,7 +868,8 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
   await until(() => bubbles().filter((t) => /more than one step/.test(t)), "the handoff line");
   assert.ok(!buttons().includes("Fill with the agent"));
 
-  page.message({ type: "agentUpdate", status: "running", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "browser", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
+  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Engine: Browser agent"), "session engine badge");
   await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
   assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
   assert.equal(shadow().querySelector(".composer-input").disabled, true);
@@ -1107,3 +1108,14 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   assert.equal(page.sent.filter((m) => m.event?.event === "submitted").length, 1);
   page.win.close();
 });
+
+for (const [engine, label] of [["classic", "Classic"], [undefined, "Not reported yet"]]) {
+  test(`agent panel shows ${label} from session metadata`, async () => {
+    const page = panelPage(() => ({}), { form: STEP_FORM });
+    page.start();
+    await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
+    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: engine, log: [] });
+    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === `Engine: ${label}`), "engine label");
+    page.win.close();
+  });
+}

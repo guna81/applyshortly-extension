@@ -507,6 +507,26 @@
             "title": "Actions",
             "type": "array"
           },
+          "agent_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "classic",
+                  "browser"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Engine"
+          },
+          "annotate_screenshot": {
+            "default": false,
+            "title": "Annotate Screenshot",
+            "type": "boolean"
+          },
           "failure_code": {
             "anyOf": [
               {

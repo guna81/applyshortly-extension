@@ -9,6 +9,8 @@ const MAX_OBSERVED = 400; // the API's limit on elements per observation
 const TEXT_LIMIT = 4000;
 const TYPEAHEAD_WAIT_MS = 700;
 const DROPDOWN_WAIT_MS = 350;
+const OPTION_SCROLL_WAIT_MS = 120;
+const MAX_OPTION_PAGES = 80;
 const ACTION_PAUSE_MS = 120;
 const CAPTCHA_HANDOFF = "There's a CAPTCHA on this page. Please solve it yourself.";
 const LOAD_WAIT_MS = 10_000;
@@ -29,7 +31,7 @@ export function explain(error) {
 }
 
 /** Observe every frame and merge into one observation; refs become "frame.local". */
-export async function observeTab(driver, { screenshot = false } = {}) {
+export async function observeTab(driver, { screenshot = false, annotate = false } = {}) {
   const frames = await driver.frames();
   const refs = new Map();
   const merged = { url: "", title: "", dialog: null, blockers: [], errors: [], text: "", elements: [], more_below: false };
@@ -62,7 +64,19 @@ export async function observeTab(driver, { screenshot = false } = {}) {
   merged.errors = merged.errors.slice(0, 20);
   merged.text = texts.join(" | ").slice(0, TEXT_LIMIT);
   if (screenshot) {
-    try { merged.screenshot = await driver.screenshot(); } catch { /* the planner works without it */ }
+    try {
+      for (const frame of frames) {
+        const items = [...refs].filter(([, target]) => target.frame === frame)
+          .map(([ref, target]) => ({ ref, local: target.local }));
+        if (annotate) await driver.call(frame, "screenshotRefs", items);
+      }
+      merged.screenshot = await driver.screenshot();
+    } catch { /* the planner works without it */ }
+    finally {
+      for (const frame of frames) {
+        try { await driver.call(frame, "clearScreenshotRefs"); } catch { /* detached */ }
+      }
+    }
   }
   return { observation: merged, refs, frames };
 }
@@ -108,6 +122,14 @@ async function choose(driver, target, frames, answer) {
       await driver.insertText(answer);
       await sleep(TYPEAHEAD_WAIT_MS);
       match = await driver.call(target.frame, "matchOption", target.local, answer);
+    }
+  }
+  if (!match.ok && (await driver.call(target.frame, "scrollOptions", target.local, true))) {
+    // A virtualized list renders only the options in view: page through it.
+    for (let i = 0; i < MAX_OPTION_PAGES; i++) {
+      await sleep(OPTION_SCROLL_WAIT_MS);
+      match = await driver.call(target.frame, "matchOption", target.local, answer);
+      if (match.ok || !(await driver.call(target.frame, "scrollOptions", target.local, false))) break;
     }
   }
   if (!match.ok) {
@@ -261,6 +283,7 @@ export class Agent {
     let results = [];
     let extra = {};
     let wantScreenshot = false;
+    let annotateScreenshot = false;
     let captchaCleared = false;
     try {
       await this.driver.attach();
@@ -273,7 +296,9 @@ export class Agent {
           if (input.kind === "stop") break;
         }
         await settle(this.driver);
-        const { observation, refs, frames } = await observeTab(this.driver, { screenshot: wantScreenshot });
+        const { observation, refs, frames } = await observeTab(this.driver, {
+          screenshot: wantScreenshot, annotate: annotateScreenshot,
+        });
         if (this.stopped) break;
         this.url = observation.url;
         // A CAPTCHA is never ours to solve or to plan around: hand the form to the user right away,
@@ -282,7 +307,7 @@ export class Agent {
         if (!observation.blockers.includes("captcha")) captchaCleared = false;
         else if (!captchaCleared) {
           this.say("There's a CAPTCHA on this page. Solve it yourself; I haven't touched it.");
-          this.last = { question: { kind: "blocker", text: CAPTCHA_HANDOFF }, filled: this.last?.filled, unresolved: this.last?.unresolved };
+          this.last = { agent_engine: this.last?.agent_engine, question: { kind: "blocker", text: CAPTCHA_HANDOFF }, filled: this.last?.filled, unresolved: this.last?.unresolved };
           this.status = "waiting";
           this.emit();
           const input = await this.waitForUser();
@@ -305,7 +330,8 @@ export class Agent {
         results = [];
         extra = {};
         wantScreenshot = Boolean(res.want_screenshot);
-        this.last = { question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code };
+        annotateScreenshot = Boolean(res.annotate_screenshot);
+        this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code };
         if (res.message && res.status !== "continue") this.say(res.message);
         for (const [index, action] of (res.actions ?? []).entries()) {
           if (this.stopped) break;
@@ -316,6 +342,7 @@ export class Agent {
           } catch (error) {
             this.say(`Couldn't: ${action.label || action.type} (${error.message})`);
             results.push({ index, ok: false, detail: String(error.message).slice(0, 290) });
+            break; // later actions assume this one succeeded; re-observe before continuing
           }
           await sleep(ACTION_PAUSE_MS);
         }

@@ -200,12 +200,15 @@
     ].filter(Boolean).join(" ");
   }
 
+  const PAGE_ACTION = /\b(?:links?|urls?|web ?sites?|pages?|tabs?|buttons?|click|open|navigate|sign[- ]?in|log[- ]?in|captcha|upload|attach)\b/i;
+
   /** The chat line for the agent waiting on the user: its question, or what to do on the page. */
   function agentAsk(question) {
     if (!question) return null;
     if (question.kind === "question") {
       const choices = (question.choices ?? []).slice(0, MAX_CHOICES);
-      const draft = !choices.length && draftable({ kind: "text", label: question.text });
+      // A request to open a page, link or button is for the user to act on, never an answer to draft.
+      const draft = !choices.length && !PAGE_ACTION.test(question.text ?? "") && draftable({ kind: "text", label: question.text });
       return {
         text: "",
         question: { label: question.text, note: draft ? "Type your answer, or I can draft one." : undefined },
@@ -303,8 +306,17 @@
     return [...options.filter(hit), ...options.filter((o) => !hit(o))];
   }
 
+  /** A phone number (or its country code) is asked as the number, never as the selector's text. */
+  function phoneLabel(row) {
+    if (row.field.phoneFor) return "Which country code does your phone number use";
+    if (row.field.phoneCountry || row.field.el?.type === "tel") return "What phone number should we use";
+    return null;
+  }
+
   function nextPrompt(results) {
-    const open = openQuestions(results);
+    const all0 = openQuestions(results);
+    // A number and its country selector both open: ask for the number once, with its country code.
+    const open = all0.filter((r) => !(r.field.phoneFor && all0.some((o) => o.field === r.field.phoneFor)));
     if (open.length) {
       const first = open[0];
       const all = likelyFirst((first.field.options ?? []).map((o) => o.text).filter(Boolean), first.suggestion);
@@ -315,7 +327,7 @@
       return {
         text: `${open.length === 1 ? "One question needs" : `${open.length} questions need`} your answer${required ? " before you can submit" : ""}.`,
         question: {
-          label: `${bare(first)}?`,
+          label: `${phoneLabel(first) ?? bare(first)}?`,
           step: first.field.required ? "Required" : undefined,
           note: draft ? "Type your answer, or I can draft one." : all.length > MAX_CHOICES ? "Pick one, or type yours." : undefined,
         },

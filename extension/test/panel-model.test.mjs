@@ -112,6 +112,7 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.equal(open.question.note, "Type your answer, or I can draft one.");
   assert.deepEqual(plain(open.choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Years of experience?" }).choices), [P.ON_PAGE_REPLY]);
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Can you open the application form, or give me the direct link?" }).choices), [P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "blocker", text: "Solve the CAPTCHA on the page." })),
     { text: "Solve the CAPTCHA on the page. Tap Continue when it's done.", choices: [P.CONTINUE_REPLY] });
   assert.equal(P.agentAsk(null), null);
