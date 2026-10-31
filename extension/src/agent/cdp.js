@@ -33,6 +33,13 @@ export class TabDriver {
     this.sessions = new Map(); // OOPIF sessionId → targetInfo
     this.worlds = new Map(); // "session:frame" → executionContextId
     this.attached = false;
+    this.candidateTabs = new Map();
+    this.axRefs = new Map();
+    this.lastInteractionAt = 0;
+    this.onTabChanged = null;
+    this.handleCreated = (tab) => {
+      if (tab.openerTabId === this.tabId && Date.now() - this.lastInteractionAt < 5000 && tab.id) this.candidateTabs.set(tab.id, tab);
+    };
     this.onDetached = null; // set by the agent: the user closed the debugging bar, or the tab went away
     this.handleEvent = this.handleEvent.bind(this);
     this.handleDetach = this.handleDetach.bind(this);
@@ -41,6 +48,7 @@ export class TabDriver {
   async attach() {
     await this.api.debugger.attach({ tabId: this.tabId }, PROTOCOL);
     this.attached = true;
+    this.api.tabs?.onCreated?.addListener(this.handleCreated);
     this.api.debugger.onEvent.addListener(this.handleEvent);
     this.api.debugger.onDetach.addListener(this.handleDetach);
     await this.send("Page.enable");
@@ -51,6 +59,7 @@ export class TabDriver {
   async detach() {
     if (!this.attached) return;
     this.attached = false;
+    this.api.tabs?.onCreated?.removeListener(this.handleCreated);
     this.api.debugger.onEvent.removeListener(this.handleEvent);
     this.api.debugger.onDetach.removeListener(this.handleDetach);
     await this.api.debugger.detach({ tabId: this.tabId }).catch(() => {});
@@ -66,6 +75,7 @@ export class TabDriver {
     } else if (method === "Target.detachedFromTarget") {
       this.sessions.delete(params.sessionId);
     } else if (method === "Page.frameNavigated" || method === "Page.loadEventFired") {
+      this.axRefs.clear();
       this.worlds.clear(); // contexts are per document
     }
   }
@@ -75,6 +85,7 @@ export class TabDriver {
     this.attached = false;
     this.api.debugger.onEvent.removeListener(this.handleEvent);
     this.api.debugger.onDetach.removeListener(this.handleDetach);
+    this.api.tabs?.onCreated?.removeListener(this.handleCreated);
     this.onDetached?.(reason);
   }
 
@@ -142,6 +153,34 @@ export class TabDriver {
     }
   }
 
+  async accessible(frame, observed, query = "") {
+    const { nodes } = await this.send("Accessibility.getFullAXTree", { frameId: frame.frameId }, frame.sessionId);
+    const candidates = nodes.filter((n) => !n.ignored && n.backendDOMNodeId && (!query || (n.name?.value || "").toLowerCase().includes(query.toLowerCase())) &&
+      /^(textbox|textField|searchbox|combobox|listbox|option|button|link|radio|checkbox|popUpButton)$/.test(n.role?.value));
+    const elements = [];
+    let failed = false;
+    for (const node of candidates.slice(0, 400)) {
+      if (observed.includes(this.axRefs.get(node.backendDOMNodeId))) continue;
+      let objectId;
+      try {
+        const { object } = await this.send("DOM.resolveNode", { backendNodeId: node.backendDOMNodeId, executionContextId: await this.world(frame) }, frame.sessionId);
+        objectId = object.objectId;
+        const result = await this.send("Runtime.callFunctionOn", {
+          objectId,
+          functionDeclaration: "function(role, name, observed) { return globalThis.JobHuntAgentPage.describeAccessible(this, role, name, observed); }",
+          arguments: [{ value: node.role.value }, { value: node.name?.value || "" }, { value: observed }],
+          returnByValue: true,
+        }, frame.sessionId);
+        if (result.result?.value) {
+          elements.push(result.result.value);
+          this.axRefs.set(node.backendDOMNodeId, result.result.value.ref);
+        }
+      } catch { failed = true; }
+      finally { if (objectId) await this.send("Runtime.releaseObject", { objectId }, frame.sessionId).catch(() => {}); }
+    }
+    return { elements, incomplete: failed || candidates.length > 400 };
+  }
+
   /** Where a frame's viewport sits in the tab's viewport (sum of iframe content-box offsets). */
   async offset(frame, frames) {
     let x = 0;
@@ -174,7 +213,39 @@ export class TabDriver {
     return Boolean(res.result?.value);
   }
 
+  async applicationTabs() {
+    const out = [];
+    for (const id of [...this.candidateTabs.keys()].slice(-10)) {
+      try {
+        const tab = await this.api.tabs.get(id);
+        if (/^https?:/.test(tab.url || "")) out.push({ id, url: tab.url.slice(0, 2000), title: (tab.title || "").slice(0, 300) });
+      } catch { this.candidateTabs.delete(id); }
+    }
+    this.observedTabs = new Map(out.map((t) => [t.id, t.url]));
+    return out;
+  }
+
+  async switchTab(id) {
+    if (!this.candidateTabs.has(id)) throw new Error("That tab was not opened by this application flow.");
+    const tab = await this.api.tabs.get(id);
+    if (!/^https?:/.test(tab.url || "") || this.observedTabs?.get(id) !== tab.url) throw new Error("Application tab changed; inspect again.");
+    const previous = this.tabId;
+    await this.detach();
+    this.tabId = id;
+    this.worlds.clear();
+    this.sessions.clear();
+    try {
+      await this.attach();
+      await this.onTabChanged?.(id, tab.url);
+      this.candidateTabs.delete(id);
+    } catch (error) {
+      this.tabId = previous;
+      throw error;
+    }
+  }
+
   async click(x, y) {
+    this.lastInteractionAt = Date.now();
     const at = { x: Math.round(x), y: Math.round(y) };
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at });
     await this.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...at });

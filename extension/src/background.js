@@ -187,7 +187,8 @@ async function context(appId, tabId, url, page) {
   }
   // No AI drafting in Autopilot's window: nobody is there to check what it writes.
   const unattended = tabId !== undefined && (await autopilotWindow())?.tabId === tabId;
-  return { profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
+  const capabilities = unattended ? null : await b.agentCapabilities().catch(() => null);
+  return { controllerVersion: capabilities?.controller_version ?? 1, agentEngine: capabilities?.agent_engine, profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
 }
 
 /** What the popup shows: connection, and which application (if any) the tab's page is. */
@@ -513,9 +514,17 @@ async function agentReport(appId, event, res, url) {
 
 /** Starts the agent in a tab: from the popup (finds the application by URL) or the page's panel. */
 async function agentStart(tabId, url, appId, autoSubmit = false) {
+  for (const previous of new Set(agents.values())) {
+    if (previous.controllerVersion === 2 && previous.status === "ready" && !previous.stopped) {
+      previous.stop("Started another application.");
+      await previous.runPromise;
+    }
+  }
   const busy = [...agents.values()].find((a) => a.tabId !== tabId && !a.stopped && !["ready", "failed"].includes(a.status));
   if (busy) throw new Error("The agent is already working in another tab. Stop it there first.");
-  agents.get(tabId)?.stop("Restarted.");
+  const previous = agents.get(tabId);
+  previous?.stop("Restarted.");
+  if (previous) await previous.runPromise;
   const owner = await settings();
   const b = await bridge();
   const app = appId != null ? await b.application(appId) : (await b.lookup(url) ?? await b.trackApplication({ url: url.split("#")[0], title: clip((await chrome.tabs.get(tabId)).title, 300) }));
@@ -526,6 +535,8 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
     tabId,
     appId: id,
     driver: new TabDriver(tabId, await pageSources()),
+    startUrl: url,
+    controllerVersion: (await b.agentCapabilities().catch(() => null))?.controller_version ?? 1,
     step: (body) => b.agentStep(body),
     files: agentFiles(p, app),
     notify: async (message) => {
@@ -535,22 +546,28 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
       if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) autoSubmit = false;
       const submit = autoSubmit && message.status === "ready";
       if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
-      return chrome.tabs.sendMessage(tabId, { ...message, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
+      return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
     },
     report: (event, res, pageUrl) => agentReport(id, event, res, pageUrl),
   });
+  agent.driver.onTabChanged = async (nextId, nextUrl) => {
+    agent.tabId = nextId;
+    agents.set(nextId, agent);
+    await setTab(nextId, { appId: id, origin: new URL(nextUrl).origin, tracked: id !== null });
+  };
   agents.set(tabId, agent);
   if (id !== null) await b.report({ application_id: id, event: "opened", url: url.slice(0, 2000) }).catch(() => {});
-  void agent.run();
+  agent.runPromise = agent.run();
   return { started: true, appId: id };
 }
 
 function agentControl(tabId, action, text) {
   const agent = agents.get(tabId);
   if (!agent) throw new Error("The agent isn't running in this tab.");
-  if (action === "reply") {
+  if (action === "reply" || action === "message") {
     if (typeof text !== "string" || !text.trim() || text.length > 4000) throw new Error("Type an answer first.");
-    agent.reply(text.trim());
+    if (action === "message") agent.message(text.trim());
+    else agent.reply(text.trim());
   } else if (["skip", "resume", "pause", "stop"].includes(action)) {
     agent[action]();
   } else {
@@ -562,11 +579,12 @@ function agentControl(tabId, action, text) {
 function agentStatus(tabId) {
   const agent = agents.get(tabId);
   if (!agent) return null;
-  return { type: "agentUpdate", status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.last };
+  return { type: "agentUpdate", controller_version: agent.controllerVersion, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.last };
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  agents.get(tabId)?.stop("The tab was closed.");
+  const agent = agents.get(tabId);
+  if (agent?.tabId === tabId) agent.stop("The tab was closed.");
   agents.delete(tabId);
 });
 

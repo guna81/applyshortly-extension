@@ -96,6 +96,31 @@ Required multi-select questions count as one question and stay open until you se
 Consent still asks for your explicit choice. Auto apply waits for those required answers;
 a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
 
+### AI driver controller
+
+Protocol 2 pauses locally before another planning call when the same page state appears six times within twelve observations, or after sixty planning calls since user input/resume. This catches ineffective actions and short interaction cycles even when dispatch reports success. Resume explicitly after checking the page; each resume starts a new safety window. This is a call limit, not a dollar spending cap.
+
+Choose **Settings → Form agent engine → AI driver** in ApplyShortly for new sessions.
+AI driver is the service default. It uses fresh page observations, screenshots
+and native AI tool calls; Anthropic and Gemini native tools are supported. Personal OpenAI
+keys support structured drafts rather than this native tool loop; sessions on those keys, or with
+no AI, run Rules first instead.
+
+When the server enables controller protocol 2, the extension inspects the page before filling
+and keeps page questions, actions and review in one session. Messages interrupt pending actions
+and receive fresh page context. Page questions stay read-only until you ask it to edit or
+continue. The controller tracks field readback and user edits, bounds failed interaction
+strategies, and can follow an application tab opened by its recent click. It stops for review;
+the agent itself never clicks final Submit. Stop ends browser access.
+
+This upgraded session sends visible page context and transient screenshots to the configured
+AI provider through ApplyShortly. The panel is temporarily hidden during capture. The classic
+assistant description above applies outside this upgraded session.
+
+The server gate defaults off. Reload the updated extension and start a new session after an
+upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
+mechanics, but representative real-model ATS reliability has not been established.
+
 ### Choose how AI drafts are paid for
 
 In extension setup, expand **Advanced: use your own AI key**, choose OpenAI, Anthropic Claude,

@@ -103,6 +103,8 @@
     if (legend && cleanLabel(legend.textContent)) return cleanLabel(legend.textContent);
     const nearby = nearbyLabel(el);
     if (nearby) return nearby;
+    const caption = reactSelectCaption(el);
+    if (caption) return caption;
     // Breezy and similar: the question is a heading inside the list item that holds the box.
     const questionHeading = el.closest('li.question, .question')?.querySelector("h1, h2, h3, h4, h5, h6");
     if (questionHeading && cleanLabel(questionHeading.textContent)) return cleanLabel(questionHeading.textContent);
@@ -138,6 +140,14 @@
       if (parent && parent.querySelectorAll("input, select, textarea").length > 1) break;
     }
     return "";
+  }
+
+  /** React Select with a plain caption <div> before it ("Country", "State / Region"), no <label>. */
+  function reactSelectCaption(el) {
+    if (!el.matches('input[role="combobox"]')) return "";
+    const root = el.closest("div:has(> span[id$='-live-region'])");
+    const text = cleanLabel(root?.previousElementSibling?.textContent);
+    return text && text.length <= 150 && !root.previousElementSibling.querySelector("input, select, textarea") ? text : "";
   }
 
   // Rippling puts custom question captions outside data-testid="field". Its required
@@ -219,7 +229,21 @@
     if (cf7 && /\*/.test(cf7Label?.textContent ?? '')) return true;
     const item = el.closest('[role="listitem"]');
     if (item?.querySelector('[aria-label="Required question"]')) return true;
-    return starredLabelAbove(el);
+    return starredLabelAbove(el) || starredGroupAbove(el);
+  }
+
+  // A group of boxes under one starred heading ("Current Location *" over Country, State and
+  // City): each box carries only its sub-label, so the heading's "*" makes every one required.
+  function starredGroupAbove(el) {
+    let wrapper = el.parentElement;
+    for (let depth = 0; wrapper && depth < 5; depth += 1, wrapper = wrapper.parentElement) {
+      if (wrapper.querySelectorAll("input:not([type=hidden]), textarea, select").length < 2) continue;
+      for (const child of wrapper.children) {
+        if (child.contains(el) || !child.matches("label, legend, [class*=label i]")) continue;
+        if (/\*\s*$/.test(child.textContent ?? "") && !child.querySelector("input, textarea, select")) return true;
+      }
+    }
+    return false;
   }
 
   // A "*" ending the question's own <label>, when that label isn't tied to the box by for/id
@@ -1193,6 +1217,7 @@
     isPlaceholderOption,
     firstSentence,
     labelOf,
+    isRequired,
     collectFields,
     profileAnswer,
     chooseOption,

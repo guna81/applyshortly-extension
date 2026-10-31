@@ -27,6 +27,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   };
   class BridgeError extends Error { constructor(status, message) { super(message); this.status = status; } }
   class JobHuntBridge {
+    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "classic" }); }
     aiSettings() { return { mode: "platform", configured: [] }; }
     selectAI(body) { calls.push({ selectedAI: body }); return { ...body, configured: [] }; }
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }
@@ -71,7 +72,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
   const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -582,4 +583,19 @@ test('sign-out discards pending outcomes so another account cannot receive them'
   h.local.token = 'other-account';
   await h.alarm();
   assert.equal(h.calls.filter((c) => c.report).length, 1);
+});
+
+test('starting another application stops a ready v2 controller before attaching', async () => {
+  const h = harness();
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  const previous = h.agentInstances[0];
+  previous.controllerVersion = 2;
+  previous.status = 'ready';
+  let detached = false;
+  previous.runPromise = Promise.resolve().then(() => { detached = true; });
+  const next = await h.send({ type: 'agentStart', tabId: 12, url: 'https://careers.example.test/another', appId: null });
+  assert.equal(next.ok, true);
+  assert.equal(previous.stopped, true);
+  assert.equal(detached, true);
+  assert.equal(h.agentInstances.length, 2);
 });

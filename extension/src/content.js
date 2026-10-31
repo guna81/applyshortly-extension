@@ -319,6 +319,21 @@
         state = { appId: ctx.app?.id ?? appId, ctx, resume, results: [] };
         if (!quiet) await report("opened");
       }
+      if (!quiet && state.ctx.controllerVersion === 2) { panel.idle(); return true; }
+      if (quiet && state.ctx.controllerVersion === 2) {
+        // Readback only: the controller owns writes, including during completion refresh.
+        state.results = F.collectFields(document).map((field) => {
+          const native = agent?.filled?.find((f) => f.label === field.label);
+          const answered = answeredNow(field);
+          return { field, status: answered ? native ? "filled" : "done" : field.required ? "unresolved" : "optional",
+            value: currentValue(field), source: native?.source ?? "you",
+            needsReview: native?.needs_review ?? false, manual: field.kind === "checkbox" || field.kind === "file",
+            optional: !field.required, reason: answered ? "" : "Not answered on the page" };
+        });
+        outline();
+        panel.idle();
+        return true;
+      }
       const generate = allowGenerate ?? state.ctx.aiDrafts;
       panel.busy(generate ? "Drafting answers with AI… this can take a few seconds" : "Matching your answers to the form…");
       state.results = merge(state.results, await fillAll({ allowGenerate: generate }));
@@ -440,7 +455,7 @@
     chat.lines.push({ role: "user", text: message });
     chat.draft = "";
     if (q?.kind !== "question") {
-      await agentControl("resume");
+      await agentControl(agent.agent_engine === "browser" && message !== P.ON_PAGE_REPLY ? "reply" : "resume", message);
       return panel.idle();
     }
     if (message === P.ON_PAGE_REPLY) {
@@ -496,6 +511,14 @@
   async function askAssistant(text) {
     const message = text.trim();
     if (!message || chat.pending) return;
+    if (agent?.controller_version === 2 && !["failed", "stopped"].includes(agent.status)) {
+      chat.lines.push({ role: "user", text: message });
+      chat.draft = "";
+      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" &&
+        !/^(can|could|do|does|why|what|how|where|is|are|fill|set|change|select|choose|upload|click|continue|open|scroll|update|replace)\b/i.test(message);
+      await agentControl(plainAnswer ? "reply" : "message", message);
+      return panel.idle();
+    }
     if (agent?.status === "waiting") return replyToAgent(message);
     if (agentLive() || !state?.ctx) return; // it's clicking through the form; the box is off meanwhile
     if (P.isNavigateRequest(message)) {
@@ -864,6 +887,7 @@
     panel.setRetry(appId);
     await panel.restore(opts);
     if (!(await run(appId)) || agentLive()) return;
+    if (state?.ctx.controllerVersion === 2 && !opts.unattended) return startAgent(opts);
     // A page that needs clicking through (an Apply pop-up, Next steps, a form in a frame): carry on.
     const reason = handedOff ? null : P.navigationNeeded(pageShape());
     // Autopilot's window has nobody watching: no agent (it spends a run's credits behind a debugging

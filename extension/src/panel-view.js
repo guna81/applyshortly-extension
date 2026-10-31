@@ -107,7 +107,9 @@
       .toast { margin: 0 12px 10px; padding: 8px 10px; border-radius: 8px; background: var(--fg); color: var(--bg);
         font-size: 13px; animation: in .15s ease-out; }
       .chat { display: flex; flex-direction: column; gap: 8px; min-height: 140px; }
-      .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+      .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+      .bubble.assistant { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
+      .bubble.assistant p { margin: 0; }
       .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
       .bubble.assistant { width: fit-content; max-width: 100%; box-sizing: border-box; background: var(--soft); border-top-left-radius: 4px; }
       .turn { display: flex; align-items: flex-start; gap: 8px; }
@@ -250,6 +252,16 @@
         btn("Stop and take over", () => void ctl.agentControl("stop"), "ghost"));
     }
 
+    // Long replies arrive as one block: break on newlines, else after every two sentences.
+    function paragraphs(text) {
+      const blocks = String(text).split(/\n+/).map((p) => p.trim()).filter(Boolean);
+      if (blocks.length > 1 || text.length <= 140) return blocks;
+      const sentences = text.trim().split(/(?<=[.!?])\s+(?=[A-Z])/);
+      const out = [];
+      for (let i = 0; i < sentences.length; i += 2) out.push(sentences.slice(i, i + 2).join(" "));
+      return out;
+    }
+
     function chatView(results) {
       const greeting = ctl.state?.ctx ? [{ role: "assistant", greeting: true, ...P.assistantGreeting(results) }] : [];
       const lines = ctl.chat.lines.length ? ctl.chat.lines : greeting;
@@ -265,7 +277,7 @@
         log.append(el("div", { class: "turn" },
           el("span", { class: "avatar" }, icon(BOT)),
           el("div", { class: "said" },
-            line.text ? el("div", { class: "bubble assistant" }, line.text) : null,
+            line.text ? el("div", { class: "bubble assistant" }, ...paragraphs(line.text).map((t) => el("p", {}, t))) : null,
             line.filled?.length ? el("ul", { class: "filled", "aria-label": "Filled" }, line.filled.map((f) => el("li", { title: f }, icon(CHECK), el("span", {}, f)))) : null,
             q ? el("div", { class: "question" },
               q.step ? el("p", { class: "step" }, q.step) : null,
@@ -300,7 +312,7 @@
     }
 
     function composer() {
-      const busy = agentBusy();
+      const busy = agentBusy() && ctl.agent?.controller_version !== 2;
       const input = el("textarea", {
         class: "composer-input", rows: "1", "aria-label": "Message the agent", disabled: busy,
         placeholder: busy ? "Working on the form… I'll ask here when I need you." : ctl.agent?.status === "waiting" ? "Type your answer…" : "Type your answer, or ask to change one…",
@@ -363,7 +375,7 @@
       p.append(header(title, subtitle));
       if (ctl.agent) {
         const engine = ctl.agent.agent_engine;
-        const label = engine === "browser" ? "Browser agent" : engine === "classic" ? "Classic" : "Not reported yet";
+        const label = engine === "browser" ? "AI driver" : engine === "classic" ? "Rules first" : "Not reported yet";
         p.append(el("div", { class: "sub", role: "status", "aria-label": "Form agent engine", style: "padding:0 16px 10px" }, `Engine: ${label}`));
       }
 

@@ -209,6 +209,64 @@ test("matchOption finds a plain list that appeared after noteShown, when nothing
   assert.equal(doc.querySelector(`[data-applyshortly-ref="${match.ref}"]`).textContent, "Mr.");
 });
 
+test("observe lists disabled dependent fields as disabled, so the planner waits for them", () => {
+  const { observe } = page(`
+    <label for="co">Country</label><input id="co">
+    <label for="st">State / Region</label><input id="st" disabled>
+    <label for="ct">City / Town</label><input id="ct" aria-disabled="true">`);
+  const obs = observe();
+  const country = byName(obs, "Country");
+  const state = byName(obs, "State / Region");
+  const city = byName(obs, "City / Town");
+  assert.equal(country.disabled, false);
+  assert.equal(state.disabled, true);
+  assert.equal(state.role, "textbox");
+  assert.equal(city.disabled, true);
+  // Disabled entries follow the fillable ones, and never duplicate them.
+  assert.ok(obs.elements.indexOf(state) > obs.elements.indexOf(country));
+  assert.equal(obs.elements.filter((e) => e.name === "Country").length, 1);
+  // Once enabled, the field is a normal fillable element again.
+  const { observe: observeEnabled } = page(`<label for="st">State / Region</label><input id="st">`);
+  assert.equal(byName(observeEnabled(), "State / Region").disabled, false);
+});
+
+test("typedSuggestion commits a typeahead pick after typing; a plain answer stays", () => {
+  const { doc, A, observe } = page(`
+    <label for="co">Country</label><input id="co" role="combobox" aria-expanded="true" aria-controls="co-list">
+    <ul id="co-list" role="listbox" hidden><li role="option">India</li><li role="option">Indonesia</li></ul>
+    <label for="nm">Nickname</label><input id="nm">
+    <ul class="suggestions" hidden><li>Indie</li><li>Indigo</li></ul>`);
+  const obs = observe();
+  const country = byName(obs, "Country");
+  assert.equal(country.role, "textbox"); // an editable combobox reads as a text box
+  doc.querySelector("#co-list").hidden = false; // what typing opened
+  const pick = plain(A.typedSuggestion(country.ref, "India", false));
+  assert.equal(pick.ok, true);
+  assert.equal(doc.querySelector(`[data-applyshortly-ref="${pick.ref}"]`).textContent, "India");
+
+  // A plain box with no ARIA: only a list that appeared after noteShown counts.
+  const nickname = byName(obs, "Nickname");
+  assert.equal(plain(A.typedSuggestion(nickname.ref, "Indie", false)).ok, false); // no noteShown yet
+  A.noteShown(false);
+  assert.equal(plain(A.typedSuggestion(nickname.ref, "Indie", false)).ok, false); // nothing appeared
+  doc.querySelector(".suggestions").hidden = false; // the widget answered the typing
+  const again = plain(A.typedSuggestion(nickname.ref, "Indie", false));
+  assert.equal(again.ok, true);
+  assert.equal(doc.querySelector(`[data-applyshortly-ref="${again.ref}"]`).textContent, "Indie");
+});
+
+test("typedSuggestion commits a list that typing narrowed to one match", () => {
+  const { doc, A, observe } = page(`
+    <label for="co">Country</label><input id="co" placeholder="Search...">
+    <ul class="list" hidden><li>India</li></ul>`);
+  const country = byName(observe(), "Country");
+  A.noteShown(false);
+  doc.querySelector(".list").hidden = false; // typing "India" filtered the list to one
+  const pick = plain(A.typedSuggestion(country.ref, "India", false));
+  assert.equal(pick.ok, true);
+  assert.equal(doc.querySelector(`[data-applyshortly-ref="${pick.ref}"]`).textContent, "India");
+});
+
 test("observe: a closed combobox lists the options its listbox already holds, without -None-", () => {
   const { observe, A } = page(`
     <label id="g">Gender</label>
@@ -244,4 +302,31 @@ test("screenshot ref labels use merged refs, do not intercept input, and are rem
   assert.equal(layer.style.pointerEvents, "none");
   A.clearScreenshotRefs();
   assert.equal(doc.querySelector("[data-applyshortly-screenshot-refs]"), null);
+});
+
+test("observation includes location instructions and excludes hidden/panel text", () => {
+  const { observe } = page(`<p>Choose country before city.</p><label>City / Town</label><input placeholder="Search..."><p hidden>Secret instructions</p><jobhunt-autofill-panel><p>Assistant conversation</p></jobhunt-autofill-panel>`);
+  const obs = observe();
+  assert.match(obs.text, /City \/ Town/);
+  assert.match(obs.text, /Choose country before city/);
+  assert.doesNotMatch(obs.text, /Secret instructions|Assistant conversation/);
+});
+
+test("snapshot hiding restores the panel's original visibility", () => {
+  const { doc, A } = page('<jobhunt-autofill-panel style="visibility:visible!important"></jobhunt-autofill-panel>');
+  const panel = doc.querySelector("jobhunt-autofill-panel");
+  A.snapshotState(true);
+  assert.equal(panel.style.visibility, "hidden");
+  A.snapshotState(false);
+  assert.equal(panel.style.visibility, "visible");
+  assert.equal(panel.style.getPropertyPriority("visibility"), "important");
+});
+
+test("focused discovery can inspect a city control beyond the normal observation limit", () => {
+  const { observe } = page(Array.from({ length: 310 }, (_, i) => `<label>Name ${i}<input></label>`).join("") + '<label>City / Town<input></label>');
+  const normal = observe();
+  assert.equal(byName(normal, "City / Town"), undefined);
+  const focused = observe({ extended: true, query: "City" });
+  assert.ok(byName(focused, "City / Town"));
+  assert.ok(focused.coverage.some((t) => /Focused view/.test(t)));
 });

@@ -243,7 +243,15 @@
     if (options.length) return options.find((o) => o.toLowerCase() === message.toLowerCase()) ?? null;
     // Editing instructions belong to the assistant, not verbatim in the current answer.
     if (/^(?:please\s+)?(?:set|change|update|correct|replace|use my|fill (?:these|this|the|my))\b/i.test(message.trim())) return null;
-    return row.field.kind === "text" ? message : null;
+    if (row.field.kind !== "text") return null;
+    // A phone/number/email field only takes a value of that shape; anything else (a question
+    // about the page, say) goes to the assistant instead of being typed into the form.
+    const type = String(row.field.el?.type ?? "").toLowerCase();
+    const text = message.trim();
+    if ((row.field.phoneCountry || type === "tel") && !/^\+?[\d\s().-]{6,20}$/.test(text)) return null;
+    if (type === "number" && !/^-?[\d.,\s]+$/.test(text)) return null;
+    if (type === "email" && !/^\S+@\S+\.\S+$/.test(text)) return null;
+    return message;
   }
 
   /**

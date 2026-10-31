@@ -8,6 +8,13 @@
 
 (() => {
   const F = globalThis.JobHuntFill;
+  const userEdited = new WeakSet();
+  let executing = false;
+  const trackEdit = (event) => {
+    if (!executing && event.isTrusted && event.target?.nodeType === 1) userEdited.add(event.target);
+  };
+  document.addEventListener("input", trackEdit, true);
+  document.addEventListener("change", trackEdit, true);
   const REF = "data-applyshortly-ref";
   const PANEL_TAG = "JOBHUNT-AUTOFILL-PANEL";
   // Visible challenges only (same list as the platform's services/apply/blockers.py).
@@ -229,10 +236,11 @@
     return found;
   }
 
-  function pageText(scope) {
-    const nodes = [...scope.querySelectorAll('h1, h2, h3, legend, [role="heading"], [role="alert"], .error, [class*="error-message" i]')];
+  function pageText(scope, checkLayout) {
+    const nodes = [...scope.querySelectorAll('h1, h2, h3, legend, label, p, [role="heading"], [role="alert"], [aria-live], .error, [class*="error-message" i]')];
     const parts = [];
     for (const n of nodes) {
+      if (!isVisible(n, checkLayout)) continue;
       const t = clean(n.textContent);
       if (t && t.length <= 200 && !parts.includes(t)) parts.push(t);
     }
@@ -251,7 +259,115 @@
    * This frame's view for the planner. isTop: the tab's main frame (URL-based sign-in detection,
    * scroll position). Elements of an open modal only, when one is open.
    */
-  function observe({ checkLayout = true, isTop = true } = {}) {
+  /**
+   * Visible but disabled controls (State unlocks only after Country is chosen). collectFields
+   * skips them, so list them here with disabled: true: the planner should expect them to
+   * enable after another answer, not conclude they are missing.
+   */
+  function disabledElements(root, scope, checkLayout) {
+    const out = [];
+    const SELECTOR = 'input:not([type=hidden]):not([type=radio]):not([type=checkbox]):not([type=file]), textarea, select, [role="combobox"], [aria-haspopup="listbox"]';
+    for (const el of root.querySelectorAll(SELECTOR)) {
+      if ((scope && !contains(scope, el)) || !isVisible(el, checkLayout)) continue;
+      if (!el.disabled && el.getAttribute("aria-disabled") !== "true") continue;
+      const label = clip(clean(F.labelOf(el)), 500);
+      if (!label) continue;
+      out.push(base(el, {
+        role: el.tagName === "SELECT" ? "select" : el.matches('[role="combobox"], [aria-haspopup="listbox"]') ? "combobox" : "textbox",
+        name: label,
+        value: "",
+        required: F.isRequired(el),
+      }));
+    }
+    return out;
+  }
+
+  const hiddenPanels = new Map();
+  function snapshotState(hidden) {
+    if (hidden) {
+      for (const panel of document.querySelectorAll("jobhunt-autofill-panel")) {
+        if (!(panel instanceof HTMLElement)) continue;
+        if (!hiddenPanels.has(panel)) hiddenPanels.set(panel, [panel.style.getPropertyValue("visibility"), panel.style.getPropertyPriority("visibility")]);
+        panel.style.setProperty("visibility", "hidden", "important");
+      }
+    } else {
+      for (const [panel, [value, priority]] of hiddenPanels) {
+        if (value) panel.style.setProperty("visibility", value, priority);
+        else panel.style.removeProperty("visibility");
+      }
+      hiddenPanels.clear();
+    }
+  }
+
+  function contextOf(el) {
+    if (!el) return {};
+    const section = el.closest('fieldset, section, [role="group"], [role="tabpanel"]');
+    const heading = section?.querySelector('legend, h1, h2, h3, [role="heading"]');
+    const r = el.getBoundingClientRect();
+    const parts = [];
+    let node = el.type === "radio" ? el.closest('fieldset, [role="radiogroup"]') || el : el;
+    while (node && node !== document.body && parts.length < 8) {
+      const siblings = node.parentElement ? [...node.parentElement.children].filter((n) => n.tagName === node.tagName) : [node];
+      parts.unshift(`${node.tagName}:${siblings.indexOf(node)}`);
+      node = node.parentElement;
+    }
+    return { href: el.tagName === "A" ? clip(el.href || "", 2000) : null, identity: clip(parts.join("/"), 300), user_edited: userEdited.has(el), section: clip(clean(section?.getAttribute("aria-label") || heading?.textContent), 300), bounds: [r.x, r.y, r.width, r.height] };
+  }
+
+  // AX finds accessible controls that the form mapper does not yet recognize.
+  function describeAccessible(el, role, name, observed) {
+    if (!el || !isVisible(el, true) || observed.includes(el.getAttribute(REF))) return null;
+    const dialog = activeDialog(document, true);
+    if (dialog && !contains(dialog, el)) return null;
+    const roles = { textField: "textbox", searchbox: "textbox", textfield: "textbox", popUpButton: "combobox" };
+    role = roles[role] || role;
+    if (!["textbox", "textarea", "combobox", "listbox", "option", "button", "link", "radio", "checkbox"].includes(role)) return null;
+    return base(el, {
+      ...contextOf(el), role, name: clip(clean(name || F.labelOf(el)), 500),
+      value: clip(String(el.value ?? el.getAttribute("aria-valuetext") ?? ""), 2000),
+      checked: el.checked ?? (el.getAttribute("aria-checked") === "true"),
+      required: Boolean(el.required) || el.getAttribute("aria-required") === "true",
+      invalid: el.getAttribute("aria-invalid") === "true",
+      submit_like: el.type === "submit" || FINAL.test(name || ""),
+    });
+  }
+
+  function prepareKey(ref, key) {
+    const el = find(ref);
+    if (!el) return false;
+    const role = el.getAttribute("role");
+    if (key === "Enter" && !["combobox", "listbox", "option"].includes(role) && el.tagName !== "SELECT") return false;
+    if (clickable(ref)) return false;
+    el.focus?.();
+    return document.activeElement === el || el.getRootNode()?.activeElement === el;
+  }
+
+  function scrollControl(ref, direction) {
+    const el = find(ref);
+    if (!el) return false;
+    let container = el;
+    while (container && container !== document.body) {
+      if (container.scrollHeight > container.clientHeight + 2 && /auto|scroll/.test(getComputedStyle(container).overflowY)) {
+        container.scrollBy({ top: (direction === "up" ? -1 : 1) * Math.max(100, container.clientHeight * .8), behavior: "instant" });
+        return true;
+      }
+      container = container.parentElement;
+    }
+    return scrollPage(direction);
+  }
+
+  function hitTest(x, y, ref) {
+    let el = document.elementFromPoint(x, y);
+    while (el?.shadowRoot?.elementFromPoint) {
+      const nested = el.shadowRoot.elementFromPoint(x, y);
+      if (!nested || nested === el) break;
+      el = nested;
+    }
+    const target = find(ref);
+    return Boolean(target && el && (el === target || target.contains(el)) && !clickable(ref));
+  }
+
+  function observe({ checkLayout = true, isTop = true, extended = false, query = "" } = {}) {
     const doc = document;
     const dialog = activeDialog(doc, checkLayout);
     const scope = dialog ?? doc.body ?? doc.documentElement;
@@ -259,6 +375,7 @@
     const elements = [];
     const push = (items) => {
       for (const item of items) {
+        if (extended && query && !JSON.stringify([item.name, item.group, item.options]).toLowerCase().includes(query.toLowerCase())) continue;
         if (seen.has(item.ref) || elements.length >= MAX_ELEMENTS) continue;
         seen.add(item.ref);
         elements.push(item);
@@ -268,17 +385,30 @@
       const fields = F.collectFields(root, { checkLayout }).filter((f) => f.kind !== "picker" && (!dialog || contains(dialog, f.el)));
       for (const field of fields) push(fieldElements(field));
       push(extraTextElements(root, dialog, checkLayout));
+      push(disabledElements(root, dialog, checkLayout));
     }
     for (const root of roots(doc)) push(buttonElements(root, dialog, checkLayout));
+    if (extended) {
+      for (const item of elements) Object.assign(item, contextOf(find(item.ref)));
+    }
     const win = doc.defaultView;
     const scroller = doc.scrollingElement ?? doc.documentElement;
     return {
+      ...(extended ? {
+        document_id: (globalThis.__applyshortlyDocumentId ??= (crypto.randomUUID?.() || [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, "0")).join(""))),
+        step_label: clip(clean(scope.querySelector('[aria-current="step"], [role="tab"][aria-selected="true"], h1, h2')?.textContent), 300),
+        viewport_width: win.innerWidth || 0, viewport_height: win.innerHeight || 0,
+        coverage: [
+          ...(query ? ["Focused view; inspect the full page before completion."] : elements.length >= MAX_ELEMENTS ? ["Element limit reached; inspect sections separately."] : []),
+          ...([...scope.querySelectorAll('[aria-busy="true"]')].some((el) => isVisible(el, checkLayout)) ? ["Page processing is still in progress."] : []),
+        ],
+      } : {}),
       url: doc.location?.href ?? "",
       title: clip(clean(doc.title), 300),
       dialog: dialog ? clip(clean(dialog.getAttribute("aria-label") || dialog.querySelector("h1, h2, h3, [role=heading]")?.textContent || "Dialog"), 300) : null,
       blockers: blockers(doc, checkLayout, isTop),
       errors: errors(scope, checkLayout),
-      text: pageText(scope),
+      text: pageText(scope, checkLayout),
       elements,
       more_below: Boolean(isTop && scroller && scroller.scrollHeight > (win?.innerHeight ?? 0) + (win?.scrollY ?? 0) + 200),
     };
@@ -435,6 +565,37 @@
   }
 
   /**
+   * The suggestion to commit after typing into a box that turned out to be a pick-one
+   * typeahead (a "Search…" country box): typing alone is dropped by the page, and dependent
+   * fields unlock only when a suggestion is clicked. { ok: false } for a plain text answer,
+   * which stays as typed. noteShown must run before the typing for boxes without ARIA roles.
+   */
+  function typedSuggestion(ref, answer, checkLayout = true) {
+    const el = find(ref);
+    if (!el) return { ok: false };
+    let options;
+    if (el.matches?.('[role="combobox"], [aria-haspopup], [aria-expanded], [aria-controls], [aria-owns]')) {
+      options = visibleOptions(ref, checkLayout);
+    } else {
+      // A plain box: trust only what appeared since noteShown, in response to the typing. One
+      // item is enough here (typing often narrows the list to the single match); chooseOption
+      // still has to match the answer before anything is clicked.
+      if (!shownBefore) return { ok: false };
+      const items = [];
+      for (const leaf of F.shownTexts(document, checkLayout)) {
+        if (shownBefore.has(leaf)) continue;
+        let item = leaf;
+        while (item.parentElement && item.parentElement !== document.body && item.parentElement.childElementCount === 1) item = item.parentElement;
+        if (!items.includes(item)) items.push(item);
+      }
+      options = items.map((item) => ({ ref: refOf(item), text: clip(clean(item.textContent), 200) }));
+    }
+    const chosen = F.chooseOption(options, answer)
+      ?? options.find((o) => o.text.toLowerCase().startsWith(String(answer).toLowerCase().slice(0, 12)));
+    return chosen ? { ok: true, ref: chosen.ref, text: chosen.text } : { ok: false };
+  }
+
+  /**
    * Scrolls a virtualized option list (only the options in view are rendered) one page further,
    * from the top when restart is set. False when there is nothing more to scroll.
    */
@@ -512,6 +673,16 @@
 
   globalThis.JobHuntAgentPage = {
     observe,
+    describeAccessible,
+    hitTest,
+    prepareKey,
+    snapshotState,
+    executionState: (value) => { executing = value; snapshotState(value); },
+    freshState: (ref) => {
+      const el = find(ref);
+      return { document_id: globalThis.__applyshortlyDocumentId, user_edited: Boolean(el && userEdited.has(el)), value: el?.value ?? el?.getAttribute("aria-valuetext") ?? null };
+    },
+    scrollControl,
     screenshotRefs,
     clearScreenshotRefs,
     box,
@@ -525,6 +696,7 @@
     shownChoices,
     noteShown,
     matchOption,
+    typedSuggestion,
     scrollOptions,
     attach,
     state,

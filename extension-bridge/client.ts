@@ -142,6 +142,12 @@ export interface AssistResponse {
 
 /** One interactive element of the page, as the form agent observed it. */
 export interface AgentElement {
+  href?: string | null;
+  identity?: string;
+  section?: string;
+  frame?: string;
+  bounds?: number[] | null;
+  user_edited?: boolean;
   /** The driver's handle, valid only within the observation that carried it. */
   ref: string;
   role: string;
@@ -160,6 +166,14 @@ export interface AgentElement {
 }
 
 export interface AgentObservation {
+  observation_id?: string | null;
+  document_id?: string | null;
+  step_label?: string;
+  coverage?: string[];
+  accessibility?: string;
+  viewport_width?: number;
+  viewport_height?: number;
+  tabs?: { id: number; url: string; title?: string }[];
   url: string;
   title?: string;
   dialog?: string | null;
@@ -173,12 +187,18 @@ export interface AgentObservation {
 }
 
 export interface AgentActionResult {
+  command_id?: string | null;
+  effect?: string | null;
   index: number;
   ok: boolean;
   detail?: string | null;
 }
 
 export interface AgentStepRequest {
+  controller_version?: 1 | 2;
+  request_id?: string | null;
+  user_message?: string | null;
+  inspect_only?: boolean;
   session_id?: string | null;
   application_id?: number | null;
   observation: AgentObservation;
@@ -191,7 +211,12 @@ export interface AgentStepRequest {
 
 /** A vetted step. There is no submit action: the user always sends the form. */
 export interface AgentAction {
-  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait";
+  command_id?: string | null;
+  observation_id?: string | null;
+  x?: number | null;
+  y?: number | null;
+  tab_id?: number | null;
+  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait" | "switch_tab";
   ref?: string | null;
   text?: string | null;
   checked?: boolean | null;
@@ -203,12 +228,15 @@ export interface AgentAction {
 }
 
 export interface AgentStepResponse {
+  controller_version?: 1 | 2;
+  observation_id?: string | null;
   session_id: string;
   agent_engine?: "classic" | "browser" | null;
   status: "continue" | "ask_user" | "ready_for_review" | "failed";
   actions: AgentAction[];
   message: string;
   question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null } | null;
+  focus_query?: string;
   want_screenshot: boolean;
   annotate_screenshot?: boolean;
   filled: { label: string; value: string; source: string; needs_review: boolean }[];
@@ -359,6 +387,10 @@ export class JobHuntBridge {
   }
 
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
+  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "classic" | "browser"}> {
+    return this.request("/api/extension/agent/capabilities");
+  }
+
   agentStep(body: AgentStepRequest): Promise<AgentStepResponse> {
     return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
   }

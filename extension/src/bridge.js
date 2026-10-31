@@ -157,6 +157,10 @@ export class JobHuntBridge {
   }
 
   /** One round trip: vetted actions, or want_screenshot with optional annotate_screenshot. */
+  agentCapabilities() {
+    return this.request("/api/extension/agent/capabilities");
+  }
+
   agentStep(body) {
     return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
   }

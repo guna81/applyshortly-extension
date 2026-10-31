@@ -15,6 +15,18 @@
             ],
             "title": "Checked"
           },
+          "command_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
           "direction": {
             "anyOf": [
               {
@@ -82,6 +94,18 @@
             ],
             "title": "Ms"
           },
+          "observation_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
+          },
           "ref": {
             "anyOf": [
               {
@@ -92,6 +116,17 @@
               }
             ],
             "title": "Ref"
+          },
+          "tab_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tab Id"
           },
           "text": {
             "anyOf": [
@@ -113,10 +148,33 @@
               "upload",
               "press",
               "scroll",
-              "wait"
+              "wait",
+              "switch_tab"
             ],
             "title": "Type",
             "type": "string"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
           }
         },
         "required": [
@@ -128,6 +186,18 @@
       "AgentActionResult": {
         "additionalProperties": false,
         "properties": {
+          "command_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
           "detail": {
             "anyOf": [
               {
@@ -139,6 +209,18 @@
               }
             ],
             "title": "Detail"
+          },
+          "effect": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect"
           },
           "index": {
             "maximum": 50.0,
@@ -158,10 +240,52 @@
         "title": "AgentActionResult",
         "type": "object"
       },
+      "AgentCapabilities": {
+        "properties": {
+          "agent_engine": {
+            "enum": [
+              "classic",
+              "browser"
+            ],
+            "title": "Agent Engine",
+            "type": "string"
+          },
+          "controller_version": {
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Controller Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "controller_version",
+          "agent_engine"
+        ],
+        "title": "AgentCapabilities",
+        "type": "object"
+      },
       "AgentElement": {
         "additionalProperties": false,
         "description": "One interactive element. `ref` is the driver's handle for it (a CDP backend node id with\nits frame) and is only meaningful within the observation that carried it.",
         "properties": {
+          "bounds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bounds"
+          },
           "checked": {
             "anyOf": [
               {
@@ -190,6 +314,12 @@
             ],
             "title": "Error"
           },
+          "frame": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Frame",
+            "type": "string"
+          },
           "group": {
             "anyOf": [
               {
@@ -201,6 +331,24 @@
               }
             ],
             "title": "Group"
+          },
+          "href": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Href"
+          },
+          "identity": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Identity",
+            "type": "string"
           },
           "in_viewport": {
             "default": true,
@@ -255,9 +403,20 @@
             "title": "Role",
             "type": "string"
           },
+          "section": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Section",
+            "type": "string"
+          },
           "submit_like": {
             "default": false,
             "title": "Submit Like",
+            "type": "boolean"
+          },
+          "user_edited": {
+            "default": false,
+            "title": "User Edited",
             "type": "boolean"
           },
           "value": {
@@ -311,6 +470,12 @@
       "AgentObservation": {
         "additionalProperties": false,
         "properties": {
+          "accessibility": {
+            "default": "",
+            "maxLength": 16000,
+            "title": "Accessibility",
+            "type": "string"
+          },
           "blockers": {
             "items": {
               "enum": [
@@ -321,6 +486,15 @@
             },
             "maxItems": 2,
             "title": "Blockers",
+            "type": "array"
+          },
+          "coverage": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Coverage",
             "type": "array"
           },
           "dialog": {
@@ -334,6 +508,18 @@
               }
             ],
             "title": "Dialog"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
           },
           "elements": {
             "items": {
@@ -357,6 +543,18 @@
             "title": "More Below",
             "type": "boolean"
           },
+          "observation_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
+          },
           "screenshot": {
             "anyOf": [
               {
@@ -368,6 +566,20 @@
               }
             ],
             "title": "Screenshot"
+          },
+          "step_label": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Step Label",
+            "type": "string"
+          },
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTab"
+            },
+            "maxItems": 10,
+            "title": "Tabs",
+            "type": "array"
           },
           "text": {
             "default": "",
@@ -385,6 +597,20 @@
             "maxLength": 2000,
             "title": "Url",
             "type": "string"
+          },
+          "viewport_height": {
+            "default": 0,
+            "maximum": 20000.0,
+            "minimum": 0.0,
+            "title": "Viewport Height",
+            "type": "integer"
+          },
+          "viewport_width": {
+            "default": 0,
+            "maximum": 20000.0,
+            "minimum": 0.0,
+            "title": "Viewport Width",
+            "type": "integer"
           }
         },
         "required": [
@@ -441,13 +667,39 @@
             ],
             "title": "Application Id"
           },
+          "controller_version": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Controller Version",
+            "type": "integer"
+          },
           "in_user_tab": {
             "default": true,
             "title": "In User Tab",
             "type": "boolean"
           },
+          "inspect_only": {
+            "default": false,
+            "title": "Inspect Only",
+            "type": "boolean"
+          },
           "observation": {
             "$ref": "#/components/schemas/AgentObservation"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
           },
           "results": {
             "items": {
@@ -478,6 +730,18 @@
             "default": false,
             "title": "Skip Question",
             "type": "boolean"
+          },
+          "user_message": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Message"
           },
           "user_reply": {
             "anyOf": [
@@ -527,6 +791,15 @@
             "title": "Annotate Screenshot",
             "type": "boolean"
           },
+          "controller_version": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Controller Version",
+            "type": "integer"
+          },
           "failure_code": {
             "anyOf": [
               {
@@ -545,10 +818,27 @@
             "title": "Filled",
             "type": "array"
           },
+          "focus_query": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Focus Query",
+            "type": "string"
+          },
           "message": {
             "default": "",
             "title": "Message",
             "type": "string"
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
           },
           "question": {
             "anyOf": [
@@ -597,6 +887,31 @@
           "status"
         ],
         "title": "AgentStepResponse",
+        "type": "object"
+      },
+      "AgentTab": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2000,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url"
+        ],
+        "title": "AgentTab",
         "type": "object"
       },
       "AnswerSuggestionOut": {
@@ -1710,6 +2025,55 @@
           }
         },
         "summary": "Account",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/agent/capabilities": {
+      "get": {
+        "operationId": "extensionAgentCapabilities",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentCapabilities"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capabilities",
         "tags": [
           "extension"
         ]

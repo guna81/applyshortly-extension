@@ -154,6 +154,9 @@ test("directAnswer takes an option or free text for the asked question, never a 
   assert.equal(P.directAnswer({ ...text, status: "filled" }, "Pune"), null);
   assert.equal(P.directAnswer({ field: { kind: "checkbox" }, status: "unresolved" }, "Yes"), null); // consent stays a tap
   assert.equal(P.directAnswer(null, "Pune"), null);
+  const tel = { field: { kind: "text", el: { type: "tel" } }, status: "unresolved" };
+  assert.equal(P.directAnswer(tel, "+91 98765 43210"), "+91 98765 43210");
+  assert.equal(P.directAnswer(tel, "can you see the country and state field?"), null);
   const open = [radio];
   assert.equal(P.nextPrompt(open).target, radio);
 });

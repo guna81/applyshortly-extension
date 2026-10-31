@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
-import { Agent, execute, explain, observeTab, questionChoices } from "../src/agent/loop.js";
+import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices } from "../src/agent/loop.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
 const FRAME = { frameId: "child", isTop: false, parentId: "top", sessionId: "oopif" };
@@ -36,6 +36,7 @@ class FakeDriver {
       case "blur": return true;
       case "selectNative": return { native: false };
       case "noteShown": return true;
+      case "typedSuggestion": return this.suggestion ?? { ok: false };
       case "matchOption": return { ok: true, ref: "opt", text: "Bengaluru, India" };
       case "attach": this.calls.push(["attach-file", args[0], args[2]]); return { ok: true, value: args[2] };
       case "state": return { checked: false };
@@ -130,6 +131,18 @@ test("execute: trusted clicks offset into frames, typing, typeahead picks, uploa
     ["click", 110, 220],
     ["click", 10, 20], ["click", 10, 20], // open the dropdown, then its option
     ["attach-file", "1", "Ada_Resume.pdf"],
+  ]);
+});
+
+test("execute: typing commits a matching typeahead suggestion instead of blurring away", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([]) });
+  driver.suggestion = { ok: true, ref: "opt-9", text: "India" };
+  const refs = new Map([["0.1", { frame: TOP, local: "1" }]]);
+  await execute(driver, refs, [TOP], { type: "type", ref: "0.1", text: "India" }, async () => null);
+  assert.deepEqual(driver.calls, [
+    ["click", 10, 20], // focus the box
+    ["insertText", "India"],
+    ["click", 10, 20], // the suggestion that appeared
   ]);
 });
 
@@ -260,4 +273,113 @@ test("Agent: a CAPTCHA hands the form to the user without asking the platform, t
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].resumed, true);
   assert.equal(agent.status, "ready");
+});
+
+test("takeover discards a pending plan even if resumed before it returns", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }]) });
+  let calls = 0;
+  let agent;
+  agent = new Agent({
+    tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {},
+    step: async (req) => {
+      if (++calls === 1) {
+        agent.pause(); agent.resume();
+        return { session_id: "test", status: "continue", actions: [{ type: "click", ref: "0.1" }] };
+      }
+      assert.equal(req.results[0].ok, false);
+      assert.equal(req.observation.screenshot, "SHOT");
+      return { session_id: "test", status: "ready_for_review", actions: [] };
+    },
+  });
+  await agent.run();
+  assert.equal(calls, 2);
+  assert.equal(driver.calls.some(([name]) => name === "click"), false);
+});
+
+class V2Driver extends FakeDriver {
+  async call(frame, name, ...args) {
+    if (name === "freshState") return { document_id: this.documentId ?? "doc", user_edited: false, value: "" };
+    if (name === "executionState" || name === "snapshotState") return;
+    if (name === "hitTest") return true;
+    return super.call(frame, name, ...args);
+  }
+}
+
+for (const scenario of ["stale", "navigation", "message"]) test(`v2 rejects outdated plans: ${scenario}`, async () => {
+  const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc", viewport_width: 1000, viewport_height: 800 }) });
+  let calls = 0;
+  let agent;
+  agent = new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, controllerVersion: 2,
+    step: async (req) => {
+      if (++calls === 1) {
+        if (scenario === "navigation") driver.documentId = "new-doc";
+        if (scenario === "message") agent.message("Can you see City?");
+        return { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "click", ref: "0.1", command_id: "c", observation_id: scenario === "stale" ? "stale" : req.observation.observation_id }] };
+      }
+      assert.equal(req.results[0].ok, false);
+      if (scenario === "message") {
+        assert.equal(req.user_message, "Can you see City?");
+        assert.equal(req.inspect_only, true);
+        assert.equal(req.observation.screenshot, "SHOT");
+      }
+      return { controller_version: 2, session_id: "s", status: "failed", actions: [] };
+    },
+  });
+  await agent.run();
+  assert.equal(calls, 2);
+  assert.equal(driver.calls.some(([name]) => name === "click"), false);
+});
+
+test("v2 reports truncated observations explicitly", async () => {
+  const driver = new V2Driver({ top: () => frameObs(Array.from({ length: 401 }, (_, i) => ({ ref: String(i), role: "button", name: "Next" })), { document_id: "doc" }) });
+  const { observation } = await observeTab(driver, { extended: true });
+  assert.equal(observation.elements.length, 400);
+  assert.ok(observation.coverage.some((t) => /transport limit/.test(t)));
+});
+
+for (const approve of [false, true]) test(`v2 pauses on an unexpected origin; continue=${approve}`, async () => {
+  const driver = new V2Driver({ top: () => frameObs([], { document_id: "doc" }) });
+  let calls = 0;
+  let agent;
+  agent = new Agent({ tabId: 1, appId: null, driver, files: {}, report: async () => {}, controllerVersion: 2, startUrl: "https://original.example.test/job",
+    notify: (message) => { if (message.status === "waiting") queueMicrotask(() => approve ? agent.resume() : agent.stop()); },
+    step: async () => { calls += 1; return { session_id: "s", controller_version: 2, status: "failed", actions: [] }; },
+  });
+  await agent.run();
+  assert.equal(calls, approve ? 1 : 0);
+});
+
+
+test("progress guard stops unchanged and cycling pages before more paid calls", () => {
+  const guard = new ProgressGuard();
+  const obs = (value) => frameObs([{ role: "textbox", name: "Name", value }]);
+  for (let i = 0; i < 5; i++) assert.equal(guard.check({ ...obs(""), observation_id: String(i), screenshot: String(i) }), null);
+  assert.match(guard.check(obs("")), /without visible progress/);
+  guard.reset();
+  for (let i = 0; i < 10; i++) assert.equal(guard.check(obs(String(i % 2))), null);
+  assert.match(guard.check(obs("0")), /without visible progress/);
+  guard.reset();
+  for (let i = 0; i < 60; i++) assert.equal(guard.check(obs(String(i))), null);
+  assert.match(guard.check(obs("60")), /60-call safety limit/);
+});
+
+test("v2 pauses a stalled run without issuing a sixth planning request", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([], { document_id: "doc" }) });
+  let calls = 0;
+  let paused = false;
+  const agent = new Agent({
+    tabId: 3, controllerVersion: 2, driver, files: async () => null,
+    notify: async (update) => {
+      if (update.status === "paused") { paused = true; agent.stop(); }
+    },
+    report: async () => {},
+    step: async () => {
+      calls += 1;
+      return { controller_version: 2, session_id: "s", status: "continue", actions: [] };
+    },
+  });
+  await agent.run();
+  assert.equal(calls, 5);
+  assert.equal(paused, true);
+  assert.equal(driver.calls.at(-1)[0], "detach");
 });

@@ -869,7 +869,7 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
   assert.ok(!buttons().includes("Fill with the agent"));
 
   page.message({ type: "agentUpdate", status: "running", agent_engine: "browser", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
-  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Engine: Browser agent"), "session engine badge");
+  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Engine: AI driver"), "session engine badge");
   await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
   assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
   assert.equal(shadow().querySelector(".composer-input").disabled, true);
@@ -1109,7 +1109,7 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   page.win.close();
 });
 
-for (const [engine, label] of [["classic", "Classic"], [undefined, "Not reported yet"]]) {
+for (const [engine, label] of [["classic", "Rules first"], [undefined, "Not reported yet"]]) {
   test(`agent panel shows ${label} from session metadata`, async () => {
     const page = panelPage(() => ({}), { form: STEP_FORM });
     page.start();
@@ -1119,3 +1119,39 @@ for (const [engine, label] of [["classic", "Classic"], [undefined, "Not reported
     page.win.close();
   });
 }
+
+test("browser manual handoff sends page questions back to the browser controller", async () => {
+  const page = panelPage(() => { throw new Error("text-only assistant must not receive the question"); }, { form: STEP_FORM });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "browser", appId: 5, log: [], question: { kind: "click", text: "Please inspect the page." } });
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "Can you see the City field?";
+  input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply"), "page question delivered to browser");
+  assert.equal(page.sent.find((m) => m.type === "agentControl" && m.action === "reply").text, "Can you see the City field?");
+});
+
+test("v2 starts the controller before filling and accepts page questions while running", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
+    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    suggest: () => { throw new Error("deterministic filler must not run"); },
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
+  assert.equal(page.win.document.getElementById("name").value, "");
+  page.message({ type: "agentUpdate", status: "running", controller_version: 2, agent_engine: "browser", appId: 5, log: [] });
+  const input = page.shadow().querySelector(".composer-input");
+  assert.equal(input.disabled, false);
+  input.value = "Can you see City?";
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "question queued in controller");
+  assert.equal(page.sent.filter((m) => m.type === "assist").length, 0);
+  page.win.document.getElementById("name").value = "Verified name";
+  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "browser", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
+  await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /been through/.test(b.textContent)), "readback refresh");
+  assert.equal(page.win.document.getElementById("name").value, "Verified name");
+  assert.equal(page.sent.filter((m) => m.type === "suggest").length, 0);
+});

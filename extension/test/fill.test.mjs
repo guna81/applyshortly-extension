@@ -73,6 +73,17 @@ test("Rippling upload reads its field caption and required flag, and nested radi
   assert.equal(fields.filter((f) => f.kind === "radio").length, 1);
 });
 
+test("React Select typeaheads take their label from the caption div before them", () => {
+  const { doc, F } = page(`
+    <label for="loc">Current Location *</label>
+    <div id="loc"><div><div>Country</div><div><span id="react-select-a-live-region"></span>
+      <input id="react-select-a-input" type="text" role="combobox" value=""></div></div>
+    <div><div>State / Region</div><div><span id="react-select-b-live-region"></span>
+      <input id="react-select-b-input" type="text" role="combobox" disabled value=""></div></div></div>`);
+  const labels = plain(F.collectFields(doc, { checkLayout: false }).map((f) => f.label));
+  assert.deepEqual(labels, ["Country"]);
+});
+
 test("Rippling split phone control fills a country code before the national number", () => {
   const { doc, F } = page(`<div data-testid="field"><div data-testid="phone_number-code"><input role="combobox" aria-label="Search" value="+44 GB"></div></div>
     <label>Phone number<input data-input="phone_number"></label>`);
@@ -853,4 +864,13 @@ test("a label ending in * marks the box in its wrapper as required", () => {
   );
   const fields = F.collectFields(doc, { checkLayout: false });
   assert.deepEqual([...fields.map((f) => f.required)], [true, false]);
+});
+
+test("a starred group heading makes each sub-field required", () => {
+  const { doc, F } = page(`<div><div class="field-label">Current Location *</div>
+    <div><span>Country</span><input type="text" placeholder="Search..."></div>
+    <div><span>State</span><input type="text" placeholder="Search..."></div></div>
+    <div><label>Nickname <input type="text"></label><label>Pet <input type="text"></label></div>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => f.required)), [true, true, false, false]);
 });
