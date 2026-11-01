@@ -1155,3 +1155,35 @@ test("v2 starts the controller before filling and accepts page questions while r
   assert.equal(page.win.document.getElementById("name").value, "Verified name");
   assert.equal(page.sent.filter((m) => m.type === "suggest").length, 0);
 });
+
+test("the panel stays above and inside a site's modal dialog, and returns when it closes", async () => {
+  const page = panelPage(() => ({}));
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "panel");
+  const doc = page.win.document;
+  const host = doc.querySelector("jobhunt-autofill-panel");
+  // A manual popover in the browser's top layer, styled so page CSS for [popover] can't move it.
+  assert.equal(host.getAttribute("popover"), "manual");
+  assert.equal(host.style.getPropertyPriority("position"), "important");
+  assert.equal(host.parentNode, doc.documentElement);
+  // jsdom has no top layer: a dialog with `open` stands in for showModal().
+  const modal = doc.createElement("dialog");
+  const matches = modal.matches.bind(modal);
+  modal.matches = (sel) => (sel === ":modal" ? modal.hasAttribute("open") : matches(sel));
+  doc.body.append(modal);
+  modal.setAttribute("open", "");
+  await until(() => host.parentNode === modal, "panel inside the modal");
+  // A focus trap marking the panel inert is undone.
+  host.inert = true;
+  host.setAttribute("inert", "");
+  await tick(20);
+  assert.equal(host.inert, false);
+  modal.removeAttribute("open");
+  await until(() => host.parentNode === doc.documentElement, "panel back on the page");
+  // A modal removed while open takes the panel with it; it comes back.
+  modal.setAttribute("open", "");
+  await until(() => host.parentNode === modal, "panel inside the modal again");
+  modal.remove();
+  await until(() => host.isConnected && host.parentNode === doc.documentElement, "panel restored after removal");
+  page.win.close();
+});

@@ -184,6 +184,8 @@ export interface AgentObservation {
   more_below?: boolean;
   /** Base64 JPEG, only when the previous response asked for one. */
   screenshot?: string | null;
+  /** Screenshot pixels per CSS pixel (below 1 when the capture was downscaled). */
+  screenshot_scale?: number;
 }
 
 export interface AgentActionResult {
@@ -216,8 +218,11 @@ export interface AgentAction {
   x?: number | null;
   y?: number | null;
   tab_id?: number | null;
-  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait" | "switch_tab";
+  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait" | "switch_tab" | "hover" | "drag" | "wait_for";
   ref?: string | null;
+  /** drag: the element to drop on. */
+  to_ref?: string | null;
+  /** The text to type, the option to select, or (wait_for) the text to wait for. */
   text?: string | null;
   checked?: boolean | null;
   file?: "resume" | "cover_letter" | null;

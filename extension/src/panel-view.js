@@ -39,6 +39,7 @@
 
     const css = `
       :host { all: initial; }
+      :host::backdrop { display: none !important; }
       .wrap {
         --bg: #ffffff; --fg: #18181b; --muted: #6b7280; --line: #e5e7eb; --soft: #f4f4f6; --hover: #ececf1;
         --accent: #078651; --accent-soft: #ecfdf5; --accent-fg: #ffffff; --good: #15803d; --good-soft: #dcfce7;
@@ -170,11 +171,85 @@
 
     const btn = (label, onclick, cls = "", attrs = {}) => el("button", { class: `b ${cls}`, type: "button", onclick, ...attrs }, label);
 
+    // A site's own modals (LinkedIn's Easy Apply, a native <dialog>, popovers) sit in the browser's
+    // top layer, above any z-index, and a modal <dialog> makes everything outside it inert. So the
+    // panel is a manual popover (top layer), lives inside an open modal dialog (the only place a
+    // modal leaves clickable), and is raised again whenever the site puts something above it.
+    const HOST_STYLE = {
+      position: "fixed", inset: "auto 0 0 auto", width: "0", height: "0", margin: "0", padding: "0",
+      border: "0", background: "transparent", overflow: "visible", display: "block", "z-index": "2147483647",
+    };
+    let watching = false;
+    let raiseQueued = false;
+    let modalTimer = 0;
+
+    function topModal() {
+      let top = null;
+      for (const d of document.querySelectorAll("dialog")) {
+        try { if (d.matches(":modal")) top = d; } catch { /* no :modal support */ }
+      }
+      return top;
+    }
+
+    function raise() {
+      if (!host?.parentNode) return; // closed by the user
+      const home = topModal() ?? document.documentElement;
+      // Moving the host and re-entering the top layer both drop focus: keep the user's typing.
+      const focused = root.activeElement;
+      const caret = typeof focused?.selectionStart === "number" ? focused.selectionStart : null;
+      if (host.parentNode !== home) home.append(host);
+      if (host.inert) host.inert = false;
+      try {
+        if (host.matches(":popover-open")) host.hidePopover();
+        host.showPopover();
+      } catch { /* no Popover API: the z-index still applies */ }
+      if (focused && root.activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+        if (caret != null) focused.setSelectionRange?.(caret, caret);
+      }
+      clearInterval(modalTimer);
+      // A modal removed from the page without closing takes the panel with it: bring it back.
+      if (home !== document.documentElement) {
+        modalTimer = setInterval(() => {
+          if (host.parentNode === home && host.isConnected && topModal() === home) return;
+          if (host.parentNode === home) document.documentElement.append(host);
+          raise();
+        }, 500);
+      }
+    }
+
+    function queueRaise() {
+      if (raiseQueued) return;
+      raiseQueued = true;
+      queueMicrotask(() => { raiseQueued = false; raise(); });
+    }
+
+    function watch() {
+      if (watching) return;
+      watching = true;
+      const ours = (node) => node === host || node?.hasAttribute?.("data-applyshortly-screenshot-refs");
+      // Popovers announce themselves with a toggle event, which doesn't bubble: listen in capture.
+      document.addEventListener("toggle", (e) => {
+        if (!ours(e.target) && /** @type {any} */ (e).newState === "open") queueRaise();
+      }, true);
+      // A dialog opened with showModal() or closed again flips its `open` attribute; a site that
+      // marks the panel inert (focus traps do) gets it undone.
+      new MutationObserver((records) => {
+        if (records.some((r) => (r.target === host && host.inert) || (!ours(r.target) && r.target instanceof HTMLDialogElement))) queueRaise();
+      }).observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["open", "inert"] });
+    }
+
     function ensure() {
       if (host?.isConnected) return;
-      host = document.createElement("jobhunt-autofill-panel");
-      root = host.attachShadow({ mode: "closed" });
+      if (!host) {
+        host = document.createElement("jobhunt-autofill-panel");
+        root = host.attachShadow({ mode: "closed" });
+        host.setAttribute("popover", "manual");
+        for (const [prop, value] of Object.entries(HOST_STYLE)) host.style.setProperty(prop, value, "important");
+      }
       document.documentElement.append(host);
+      watch();
+      raise();
     }
 
     function focusField(field) {
@@ -232,7 +307,10 @@
       if (!ctl.agent) return null;
       const steps = ctl.agent.log ?? [];
       if (agentBusy()) {
-        return el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), ctl.agent.status === "paused" ? "Paused." : steps.at(-1) ?? "Working…");
+        const paused = ctl.agent.status === "paused";
+        // An automatic pause (stalled page, call limit) explains itself in its last log line.
+        const why = paused && /Paused to avoid/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
+        return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), paused ? why : steps.at(-1) ?? "Working…");
       }
       if (agentLive() || !steps.length) return null;
       const log = el("ul", { class: "alog" });
@@ -263,7 +341,8 @@
     }
 
     function chatView(results) {
-      const greeting = ctl.state?.ctx ? [{ role: "assistant", greeting: true, ...P.assistantGreeting(results) }] : [];
+      const hello = ctl.state?.ctx ? P.assistantGreeting(results) : null;
+      const greeting = hello ? [{ role: "assistant", greeting: true, ...hello }] : [];
       const lines = ctl.chat.lines.length ? ctl.chat.lines : greeting;
       const log = el("div", { class: "chat", "aria-live": "polite" });
       lines.forEach((line, i) => {
@@ -322,7 +401,7 @@
       input.addEventListener("input", () => { ctl.chat.draft = input.value; grow(); });
       input.addEventListener("keydown", (e) => {
         e.stopPropagation(); // keep the job site's own shortcuts out of the chat box
-        if (e.key === "Escape") setMinimized(true);
+        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); } // not the site's modal too
         else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ctl.askAssistant(input.value); }
       });
       queueMicrotask(grow);
@@ -339,6 +418,9 @@
     function mount(wrap) {
       if (!root.contains(styleEl)) root.replaceChildren(styleEl);
       const old = root.querySelector(".wrap");
+      // The agent reports several times per step, mostly with nothing new to show: keeping the
+      // identical panel avoids restarting its spinner and animations (a visible flicker).
+      if (old && old.outerHTML === wrap.outerHTML) return;
       if (old) old.replaceWith(wrap);
       else root.append(wrap);
     }
@@ -371,7 +453,11 @@
       // Slide in only when the panel appears, not on every re-render (agent updates, typing).
       const entering = !root.querySelector(".p");
       const p = el("div", { class: entering ? "p enter" : "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
-      p.addEventListener("keydown", (e) => { if (e.key === "Escape") setMinimized(true); });
+      p.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault(); // inside a site's modal dialog, Escape would close the application too
+        setMinimized(true);
+      });
       p.append(header(title, subtitle));
       if (ctl.agent) {
         const engine = ctl.agent.agent_engine;

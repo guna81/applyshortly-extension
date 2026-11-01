@@ -514,14 +514,20 @@ async function agentReport(appId, event, res, url) {
 
 /** Starts the agent in a tab: from the popup (finds the application by URL) or the page's panel. */
 async function agentStart(tabId, url, appId, autoSubmit = false) {
+  // One job at a time. A run elsewhere that is only waiting on the user (a question, a pause, a
+  // filled form left for review) ends when the user starts a new one; it is not doing anything.
   for (const previous of new Set(agents.values())) {
-    if (previous.controllerVersion === 2 && previous.status === "ready" && !previous.stopped) {
-      previous.stop("Started another application.");
+    if (previous.tabId === tabId || previous.stopped) continue;
+    if (["waiting", "paused"].includes(previous.status) || (previous.controllerVersion === 2 && previous.status === "ready")) {
+      previous.stop("You started the agent on another application, so it stopped here. The form is yours to finish.");
       await previous.runPromise;
     }
   }
   const busy = [...agents.values()].find((a) => a.tabId !== tabId && !a.stopped && !["ready", "failed"].includes(a.status));
-  if (busy) throw new Error("The agent is already working in another tab. Stop it there first.");
+  if (busy) {
+    const title = clip((await chrome.tabs.get(busy.tabId).catch(() => null))?.title ?? "", 80);
+    throw new Error(`The agent is still filling ${title ? `"${title}"` : "a form"} in another tab. Let it finish or stop it there, then try again.`);
+  }
   const previous = agents.get(tabId);
   previous?.stop("Restarted.");
   if (previous) await previous.runPromise;

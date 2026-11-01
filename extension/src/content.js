@@ -455,7 +455,10 @@
     chat.lines.push({ role: "user", text: message });
     chat.draft = "";
     if (q?.kind !== "question") {
-      await agentControl(agent.agent_engine === "browser" && message !== P.ON_PAGE_REPLY ? "reply" : "resume", message);
+      // The Continue chip on a CAPTCHA/sign-in/click prompt is "done on the page", not an answer:
+      // sent as a reply the platform never sees `resumed`, so a solved CAPTCHA keeps blocking.
+      const done = message === P.ON_PAGE_REPLY || message === P.CONTINUE_REPLY;
+      await agentControl(agent.agent_engine === "browser" && !done ? "reply" : "resume", message);
       return panel.idle();
     }
     if (message === P.ON_PAGE_REPLY) {
@@ -527,13 +530,14 @@
       return handOff("asked");
     }
     // The question the chat asked last; a plain answer to it is filled here, for free.
-    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant") ?? greeting()).target;
+    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant") ?? greeting())?.target;
     // A draft request drafts the question just asked, required or optional.
     const target = P.isDraftRequest(message) ? asked ?? P.promptTarget(state.results) : P.LOCAL_REPLIES.includes(message) ? P.promptTarget(state.results) : null;
     const answer = target ? null : P.directAnswer(asked, message);
     if (target || answer != null) {
       const turn = chat;
-      if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...greeting() });
+      const hello = turn.lines.length ? null : greeting();
+      if (hello) turn.lines.push({ role: "assistant", greeting: true, ...hello });
       turn.lines.push({ role: "user", text: message });
       turn.draft = "";
       turn.pending = true;
@@ -554,7 +558,8 @@
       return;
     }
     const turn = chat;
-    if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...greeting() });
+    const hello = turn.lines.length ? null : greeting();
+    if (hello) turn.lines.push({ role: "assistant", greeting: true, ...hello });
     turn.lines.push({ role: "user", text: message });
     turn.draft = "";
     turn.pending = true;
@@ -569,7 +574,7 @@
       turn.lines.push({ role: "assistant", ...withNext(reply) });
     } catch (err) {
       turn.lines.pop();
-      if (turn.lines.length === 1) turn.lines = [];
+      if (turn.lines.length === 1 && turn.lines[0].greeting) turn.lines = [];
       turn.draft = message;
       panel.toast(`Assistant unavailable: ${err.message}`);
     } finally {

@@ -159,14 +159,18 @@ test("actions: clickable refuses the final submit; native selects, dates and upl
   assert.equal(A.focusForTyping(ref("Name")).mode, "keys");
 
   const b64 = Buffer.from("%PDF-1.4").toString("base64");
-  assert.deepEqual(plain(A.attach(ref("Resume"), b64, "Ada_Resume.pdf", "application/pdf")), { ok: true, value: "Ada_Resume.pdf" });
+  assert.deepEqual(plain(await A.attach(ref("Resume"), b64, "Ada_Resume.pdf", "application/pdf")), { ok: true, value: "Ada_Resume.pdf" });
   assert.deepEqual(plain(A.state(ref("Resume"))), { value: "Ada_Resume.pdf" });
   // A drop zone with no file input gets the file as a drop.
   const drop = doc.getElementById("drop");
   drop.setAttribute("data-applyshortly-ref", "drop");
+  // A zone that ignores the drop shows nothing: reported, never claimed as attached.
+  const ignored = await A.attach("drop", b64, "Ada_Resume.pdf", "application/pdf");
+  assert.equal(ignored.ok, false);
+  assert.match(ignored.detail, /didn't take the file/);
   let dropped = null;
-  drop.addEventListener("drop", (e) => { dropped = e.dataTransfer.files[0].name; });
-  assert.equal(A.attach("drop", b64, "Ada_Resume.pdf", "application/pdf").ok, true);
+  drop.addEventListener("drop", (e) => { dropped = e.dataTransfer.files[0].name; drop.append(` ${dropped}`); });
+  assert.equal((await A.attach("drop", b64, "Ada_Resume.pdf", "application/pdf")).ok, true);
   assert.equal(dropped, "Ada_Resume.pdf");
 });
 
@@ -298,8 +302,10 @@ test("screenshot ref labels use merged refs, do not intercept input, and are rem
   doc.querySelector("#n").getBoundingClientRect = () => ({ left: 10, top: 30, bottom: 50, width: 100, height: 20 });
   A.screenshotRefs([{ local: ref, ref: `2.${ref}` }]);
   const layer = doc.querySelector("[data-applyshortly-screenshot-refs]");
-  assert.equal(layer.textContent, `2.${ref}`);
+  assert.deepEqual([...layer.querySelectorAll("span")].map((s) => s.textContent), [`2.${ref}`]);
   assert.equal(layer.style.pointerEvents, "none");
+  // A manual popover, so the labels also show over a site modal in the browser's top layer.
+  assert.equal(layer.getAttribute("popover"), "manual");
   A.clearScreenshotRefs();
   assert.equal(doc.querySelector("[data-applyshortly-screenshot-refs]"), null);
 });
@@ -329,4 +335,27 @@ test("focused discovery can inspect a city control beyond the normal observation
   const focused = observe({ extended: true, query: "City" });
   assert.ok(byName(focused, "City / Town"));
   assert.ok(focused.coverage.some((t) => /Focused view/.test(t)));
+});
+
+test("Escape is pressed only into an open list, never into the application dialog", () => {
+  const { A, doc, observe } = page(`
+    <div role="dialog" aria-label="Apply to Acme">
+      <label for="c">Country</label><input id="c" role="combobox" aria-expanded="false" aria-controls="list">
+      <ul id="list" role="listbox" hidden><li role="option">India</li></ul>
+      <label for="n">Name</label><input id="n">
+    </div>`);
+  const obs = observe();
+  const country = byName(obs, "Country").ref;
+  assert.equal(A.pickerOpen(country, false), false);
+  assert.equal(A.prepareKey(country, "Escape"), false);
+  doc.getElementById("c").setAttribute("aria-expanded", "true");
+  assert.equal(A.pickerOpen(country, false), true);
+  assert.equal(A.prepareKey(country, "Escape"), true);
+});
+
+test("hasText finds visible text for wait_for, never the panel's own text", () => {
+  const { A, doc } = page(`<p>Uploading…</p><jobhunt-autofill-panel>Upload complete</jobhunt-autofill-panel>`);
+  assert.equal(A.hasText("upload complete", false), false);
+  doc.querySelector("p").textContent = "Upload complete";
+  assert.equal(A.hasText("Upload complete", false), true);
 });

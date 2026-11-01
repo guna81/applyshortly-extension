@@ -6,14 +6,21 @@
 // ready_for_review: the user reviews the form and submits it themselves.
 
 const MAX_OBSERVED = 400; // the API's limit on elements per observation
-const TEXT_LIMIT = 4000;
+const TEXT_LIMIT = 12000;
 const TYPEAHEAD_WAIT_MS = 700;
+const KEY_TYPING_LIMIT = 200; // longer text is never a masked input; insertText stays
 const DROPDOWN_WAIT_MS = 350;
 const OPTION_SCROLL_WAIT_MS = 120;
 const MAX_OPTION_PAGES = 80;
 const ACTION_PAUSE_MS = 120;
 const CAPTCHA_HANDOFF = "There's a CAPTCHA on this page. Please solve it yourself.";
 const LOAD_WAIT_MS = 10_000;
+const WAIT_FOR_POLL_MS = 250;
+// A state seen this often among the recent ones is a loop (one state, or two alternating, as
+// when a pop-up keeps closing and reopening): pause before spending more.
+const REPEAT_LIMIT = 3;
+const RECENT_STATES = 10;
+const CALL_LIMIT = 40;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -29,10 +36,10 @@ export class ProgressGuard {
         e.disabled, e.expanded, e.bounds]),
     });
     this.states.push(state);
-    this.states = this.states.slice(-12);
-    if (this.calls >= 60) return "The agent reached its 60-call safety limit.";
-    if (this.states.filter((previous) => previous === state).length >= 6) {
-      return "The page is repeating without visible progress.";
+    this.states = this.states.slice(-RECENT_STATES);
+    if (this.calls >= CALL_LIMIT) return `The agent reached its ${CALL_LIMIT}-call safety limit.`;
+    if (this.states.filter((previous) => previous === state).length >= REPEAT_LIMIT) {
+      return "The page keeps coming back to the same state without progress.";
     }
     this.calls += 1;
     return null;
@@ -53,6 +60,12 @@ export function explain(error) {
 }
 
 /** Observe every frame and merge into one observation; refs become "frame.local". */
+/** Presses Escape only when the field's own list is open: otherwise it closes the dialog. */
+async function closePicker(driver, target) {
+  const open = await driver.call(target.frame, "pickerOpen", target.local).catch(() => false);
+  if (open) await driver.press("Escape").catch(() => {});
+}
+
 export async function observeTab(driver, { screenshot = false, annotate = false, extended = false, query = "" } = {}) {
   const frames = await driver.frames();
   const refs = new Map();
@@ -106,20 +119,25 @@ export async function observeTab(driver, { screenshot = false, annotate = false,
   merged.errors = merged.errors.slice(0, 20);
   merged.text = texts.join(" | ").slice(0, TEXT_LIMIT);
   if (screenshot) {
+    // Nothing on the page changes for a screenshot: the panel stays where it is (the model is
+    // told it is ApplyShortly's own), and ref labels are drawn into the image, not the page.
+    // Only a driver without an image canvas falls back to labels on the page.
+    const inImage = annotate && extended && driver.canDrawLabels;
+    const onPage = annotate && !inImage;
     try {
-      for (const frame of frames) {
-        if (extended) await driver.call(frame, "snapshotState", true);
-        const items = [...refs].filter(([, target]) => target.frame === frame)
-          .map(([ref, target]) => ({ ref, local: target.local }));
-        if (annotate) await driver.call(frame, "screenshotRefs", items);
+      if (onPage) {
+        for (const frame of frames) {
+          const items = [...refs].filter(([, target]) => target.frame === frame)
+            .map(([ref, target]) => ({ ref, local: target.local }));
+          await driver.call(frame, "screenshotRefs", items);
+        }
       }
-      merged.screenshot = await driver.screenshot();
+      const labels = inImage ? merged.elements.filter((e) => e.bounds && e.in_viewport !== false).map((e) => ({ ref: e.ref, bounds: e.bounds })) : [];
+      merged.screenshot = await driver.screenshot(labels);
+      if (extended && driver.shotScale) merged.screenshot_scale = Math.min(4, Math.max(0.05, driver.shotScale));
     } catch { /* the planner works without it */ }
     finally {
-      for (const frame of frames) {
-        if (extended) await driver.call(frame, "snapshotState", false).catch(() => {});
-        try { await driver.call(frame, "clearScreenshotRefs"); } catch { /* detached */ }
-      }
+      if (onPage) for (const frame of frames) await driver.call(frame, "clearScreenshotRefs").catch(() => {});
     }
   }
   return { observation: merged, refs, frames };
@@ -146,6 +164,14 @@ async function waitForResult(probe, ready, timeout = 2500) {
   return result;
 }
 
+/** Whether a field shows what was typed (a mask may add spaces, dashes or separators). */
+export function holdsTyped(value, text) {
+  const digits = (t) => String(t ?? "").replace(/\D/g, "");
+  const words = (t) => String(t ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (/^[\d\s+()\-.,]+$/.test(text) && digits(text).length >= 3) return digits(value).endsWith(digits(text).replace(/^0+/, "")) || digits(value).includes(digits(text));
+  return words(value).includes(words(text));
+}
+
 async function typeInto(driver, target, frames, text, adaptive = false) {
   await clickRef(driver, target, frames);
   const focus = await driver.call(target.frame, "focusForTyping", target.local);
@@ -156,6 +182,15 @@ async function typeInto(driver, target, frames, text, adaptive = false) {
   } else {
     await driver.call(target.frame, "noteShown");
     await driver.insertText(text);
+    if (text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
+      const now = await driver.call(target.frame, "state", target.local);
+      if (typeof now?.value === "string" && !holdsTyped(now.value, text)) {
+        // A masked input dropped the inserted string: clear it and type key by key instead.
+        await driver.call(target.frame, "focusForTyping", target.local);
+        await driver.press("Backspace");
+        await driver.typeKeys(text);
+      }
+    }
     // A "Search…" box that is really a pick-one typeahead: the page drops text that was never
     // picked from its list, and dependent fields (State after Country) unlock only on a pick.
     if (!adaptive) await sleep(TYPEAHEAD_WAIT_MS);
@@ -203,7 +238,7 @@ async function choose(driver, target, frames, answer, adaptive = false) {
     }
   }
   if (!match.ok) {
-    await driver.press("Escape").catch(() => {});
+    await closePicker(driver, target);
     const shown = match.options?.length ? ` Options shown: ${match.options.join(", ")}` : " No options appeared.";
     throw new Error(`No option matches "${answer}".${shown}`.slice(0, 290));
   }
@@ -217,6 +252,12 @@ async function choose(driver, target, frames, answer, adaptive = false) {
  * after opening it for a moment. [] for free-text questions or when nothing could be read.
  * The platform names the field by its ref; radio groups as "g<n>:<ref of one option>".
  */
+/** The role of the field a question is about (checkbox, file, textbox…), or null when it names none. */
+export function questionRole(observation, question) {
+  const ref = String(question?.ref ?? "").replace(/^g\d+:/, "");
+  return (ref && observation.elements.find((e) => e.ref === ref)?.role) || null;
+}
+
 export async function questionChoices(driver, refs, frames, observation, question) {
   const ref = String(question?.ref ?? "").replace(/^g\d+:/, "");
   const el = ref && observation.elements.find((e) => e.ref === ref);
@@ -235,7 +276,7 @@ export async function questionChoices(driver, refs, frames, observation, questio
   } catch {
     return [];
   } finally {
-    await driver.press("Escape").catch(() => {});
+    await closePicker(driver, target);
   }
 }
 
@@ -295,6 +336,34 @@ export async function execute(driver, refs, frames, action, files) {
     case "wait":
       await sleep(Math.min(action.ms ?? 1000, 5000));
       return null;
+    case "hover": {
+      const box = await driver.call(target.frame, "box", target.local);
+      if (!box || (!box.width && !box.height)) throw new Error("That element isn't visible.");
+      const offset = await driver.offset(target.frame, frames);
+      await driver.hover(box.x + offset.x, box.y + offset.y);
+      return null;
+    }
+    case "drag": {
+      const drop = refs.get(action.to_ref);
+      if (!drop) throw new Error("The drop target is no longer on the page.");
+      const from = await driver.call(target.frame, "box", target.local);
+      const to = await driver.call(drop.frame, "box", drop.local);
+      if (!from || !to) throw new Error("That element is gone from the page.");
+      const a = await driver.offset(target.frame, frames);
+      const b = await driver.offset(drop.frame, frames);
+      await driver.drag({ x: from.x + a.x, y: from.y + a.y }, { x: to.x + b.x, y: to.y + b.y });
+      return null;
+    }
+    case "wait_for": {
+      const deadline = Date.now() + Math.min(action.ms ?? 5000, 10_000);
+      do {
+        for (const frame of frames) {
+          if (await driver.call(frame, "hasText", action.text ?? "").catch(() => false)) return null;
+        }
+        await sleep(WAIT_FOR_POLL_MS);
+      } while (Date.now() < deadline);
+      throw new Error(`"${String(action.text ?? "").slice(0, 80)}" did not appear.`);
+    }
     default:
       throw new Error(`Unknown action ${action.type}`);
   }
@@ -303,7 +372,7 @@ export async function execute(driver, refs, frames, action, files) {
 /** Waits for navigation to finish and the DOM to go quiet in the top frame. */
 export async function settle(driver) {
   const deadline = Date.now() + LOAD_WAIT_MS;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !driver.dialog) {
     try {
       const frames = await driver.frames();
       const top = frames.find((f) => f.isTop);
@@ -387,6 +456,27 @@ export class Agent {
     this.emit({ message: reason });
   }
 
+  /**
+   * A JavaScript dialog froze the page. It is the user's to answer (never accepted here, a
+   * "Leave site?" one least of all); the run carries on by itself once it closes, with no AI call.
+   * False when the user stopped the agent instead.
+   */
+  async dialogHandoff() {
+    const dialog = this.driver.dialog;
+    const text = `The page opened a browser dialog${dialog?.message ? `: "${String(dialog.message).slice(0, 200)}"` : ""}. Answer it yourself; I'll carry on when it closes.`;
+    this.say(text);
+    this.last = { ...this.last, question: { kind: "blocker", text } };
+    this.status = "waiting";
+    this.emit();
+    const input = await Promise.race([this.driver.dialogClosed().then(() => ({ kind: "closed" })), this.waitForUser()]);
+    this.waiting = null;
+    if (input.kind === "stop" || this.stopped) return false;
+    this.status = "running";
+    this.last = { ...this.last, question: null };
+    this.say("Continuing…");
+    return true;
+  }
+
   async run() {
     let sessionId = null;
     let results = [];
@@ -407,9 +497,22 @@ export class Agent {
           if (input.kind === "stop") break;
         }
         await settle(this.driver);
-        const { observation, refs, frames } = await observeTab(this.driver, {
-          screenshot: wantScreenshot, annotate: annotateScreenshot, extended: this.controllerVersion === 2, query: focusQuery,
-        });
+        let observed = null;
+        if (!this.driver.dialog) {
+          try {
+            observed = await observeTab(this.driver, {
+              screenshot: wantScreenshot, annotate: annotateScreenshot, extended: this.controllerVersion === 2, query: focusQuery,
+            });
+          } catch (error) {
+            if (!(error instanceof Error && error.name === "DialogOpenError")) throw error;
+          }
+        }
+        if (this.driver.dialog || !observed) {
+          if (!(await this.dialogHandoff())) break;
+          wantScreenshot = true;
+          continue;
+        }
+        const { observation, refs, frames } = observed;
         if (this.stopped) break;
         if (this.paused) continue;
         this.url = observation.url;
@@ -550,7 +653,7 @@ export class Agent {
         if (res.status === "ask_user") {
           if (res.question?.kind === "question") {
             const choices = await questionChoices(this.driver, refs, frames, observation, res.question);
-            this.last.question = { ...res.question, choices };
+            this.last.question = { ...res.question, choices, role: questionRole(observation, res.question) };
           }
           this.status = "waiting";
           this.emit();

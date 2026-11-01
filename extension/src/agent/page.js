@@ -37,7 +37,7 @@
   const FINAL = /\b(submit|send)\b|\bsend (my )?application\b|\bfinish\b|\bcomplete (my )?application\b|\b(envoyer|soumettre|valider|enviar|submeter|absenden|abschicken|einreichen|invia|inviare|verzenden|versturen|indienen)\b/i;
   const EXTRA_TEXT = 'input[type=date], input[type=month], input[type=time], input[type=datetime-local], input[type=week], [contenteditable="true"], [contenteditable=""]';
   const MAX_ELEMENTS = 300;
-  const MAX_TEXT = 1500;
+  const MAX_TEXT = 6000;
 
   const clean = (s) => F.cleanLabel(s ?? "");
   const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -242,7 +242,7 @@
     for (const n of nodes) {
       if (!isVisible(n, checkLayout)) continue;
       const t = clean(n.textContent);
-      if (t && t.length <= 200 && !parts.includes(t)) parts.push(t);
+      if (t && t.length <= 500 && !parts.includes(t)) parts.push(t);
     }
     return clip(parts.join(" | "), MAX_TEXT);
   }
@@ -299,6 +299,25 @@
     }
   }
 
+  // While an action runs the panel stays visible but lets the pointer through, so a click on a
+  // control under it lands on the page and the panel does not flash on every action.
+  const passedPanels = new Map();
+  function passThrough(on) {
+    if (on) {
+      for (const panel of document.querySelectorAll("jobhunt-autofill-panel")) {
+        if (!(panel instanceof HTMLElement) || passedPanels.has(panel)) continue;
+        passedPanels.set(panel, [panel.style.getPropertyValue("pointer-events"), panel.style.getPropertyPriority("pointer-events")]);
+        panel.style.setProperty("pointer-events", "none", "important");
+      }
+    } else {
+      for (const [panel, [value, priority]] of passedPanels) {
+        if (value) panel.style.setProperty("pointer-events", value, priority);
+        else panel.style.removeProperty("pointer-events");
+      }
+      passedPanels.clear();
+    }
+  }
+
   function contextOf(el) {
     if (!el) return {};
     const section = el.closest('fieldset, section, [role="group"], [role="tabpanel"]');
@@ -335,6 +354,8 @@
   function prepareKey(ref, key) {
     const el = find(ref);
     if (!el) return false;
+    // Escape with no list open reaches the page: most dialogs close on it, the application too.
+    if (key === "Escape" && !pickerOpen(ref)) return false;
     const role = el.getAttribute("role");
     if (key === "Enter" && !["combobox", "listbox", "option"].includes(role) && el.tagName !== "SELECT") return false;
     if (clickable(ref)) return false;
@@ -421,7 +442,14 @@
     clearScreenshotRefs();
     const layer = document.createElement("div");
     layer.setAttribute("data-applyshortly-screenshot-refs", "");
-    layer.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647";
+    // A manual popover joins the browser's top layer, so the labels show over a site's modal
+    // (LinkedIn's Easy Apply) as well as over any z-index.
+    layer.setAttribute("popover", "manual");
+    layer.style.cssText = "position:fixed;inset:0;width:auto;height:auto;margin:0;padding:0;border:0;" +
+      "background:transparent;overflow:visible;display:block;pointer-events:none;z-index:2147483647";
+    const backdrop = document.createElement("style");
+    backdrop.textContent = "[data-applyshortly-screenshot-refs]::backdrop{display:none!important}";
+    layer.appendChild(backdrop);
     for (const { local, ref } of items) {
       const el = find(local);
       if (!el) continue;
@@ -434,17 +462,29 @@
       layer.appendChild(tag);
     }
     document.documentElement.appendChild(layer);
+    try { layer.showPopover?.(); } catch { /* no Popover API: the z-index still applies */ }
   }
 
   function clearScreenshotRefs() {
     document.querySelectorAll("[data-applyshortly-screenshot-refs]").forEach((el) => el.remove());
   }
 
-  /** Scrolls the element into view and returns its box (this frame's viewport), or null. */
+  /**
+   * Scrolls only when the element is not fully in view: a field already on screen stays put, so
+   * filling a form doesn't jump the page back and forth between fields.
+   */
+  function revealIfHidden(el, options) {
+    const r = el.getBoundingClientRect?.();
+    const win = el.ownerDocument?.defaultView;
+    if (r && win && (r.width || r.height) && r.top >= 0 && r.left >= 0 && r.bottom <= win.innerHeight && r.right <= win.innerWidth) return;
+    el.scrollIntoView?.(options);
+  }
+
+  /** Scrolls the element into view if needed and returns its box (this frame's viewport), or null. */
   function box(ref) {
     const el = find(ref);
     if (!el) return null;
-    el.scrollIntoView?.({ block: "center", inline: "center" });
+    revealIfHidden(el, { block: "center", inline: "center" });
     const target = el.matches?.("input[type=radio], input[type=checkbox]") && !isVisible(el, true)
       ? (el.closest("label") ?? el.ownerDocument.querySelector(`label[for="${CSS.escape(el.id)}"]`) ?? el)
       : el;
@@ -466,8 +506,8 @@
   function focusForTyping(ref) {
     const el = find(ref);
     if (!el) return { ok: false, detail: "That field is gone from the page." };
-    el.scrollIntoView?.({ block: "center" });
-    el.focus?.();
+    revealIfHidden(el, { block: "center" });
+    el.focus?.({ preventScroll: true });
     if (el.isContentEditable) {
       const range = el.ownerDocument.createRange();
       range.selectNodeContents(el);
@@ -613,8 +653,31 @@
     return scroller.scrollTop !== at;
   }
 
+  /**
+   * Whether the field's own list is showing: Escape then closes that list. With nothing open,
+   * Escape goes to the page, and dialogs (an Apply pop-up with the whole form) close on it.
+   */
+  function pickerOpen(ref, checkLayout = true) {
+    const el = find(ref);
+    if (!el) return false;
+    const opener = el.closest?.('[aria-expanded]') ?? el;
+    if (opener.getAttribute?.("aria-expanded") === "true" || el.getAttribute?.("aria-expanded") === "true") return true;
+    if (ownedLists(el).some((list) => isVisible(list, checkLayout))) return true;
+    return visibleOptions(ref, checkLayout).length > 0;
+  }
+
+  /** Whether `text` shows anywhere visible in this frame (wait_for). */
+  function hasText(text, checkLayout = true) {
+    const wanted = clean(text).toLowerCase();
+    if (!wanted) return false;
+    return roots(document).some((root) => [...root.querySelectorAll("*")].some((n) =>
+      n.tagName !== PANEL_TAG && !["SCRIPT", "STYLE"].includes(n.tagName) &&
+      [...n.childNodes].some((c) => c.nodeType === 3 && clean(c.textContent).toLowerCase().includes(wanted)) &&
+      isVisible(n, checkLayout)));
+  }
+
   /** A file into an <input type=file>, or dropped on a drop zone that has none. */
-  function attach(ref, base64, name, type) {
+  async function attach(ref, base64, name, type) {
     const el = find(ref);
     if (!el) return { ok: false, detail: "That upload is gone from the page." };
     const win = el.ownerDocument.defaultView;
@@ -630,7 +693,17 @@
     for (const kind of ["dragenter", "dragover", "drop"]) {
       el.dispatchEvent(new win.DragEvent(kind, { bubbles: true, cancelable: true, dataTransfer: dt }));
     }
-    return { ok: true, value: name };
+    // A drop zone that ignores synthetic drops shows nothing: report it rather than "attached".
+    // Only the zone itself and its immediate container: another field's upload never counts.
+    const around = el.parentElement ?? el;
+    const stem = name.replace(/\.[^.]+$/, "").toLowerCase();
+    for (let waited = 0; waited <= 1500; waited += 150) {
+      const taken = [...el.querySelectorAll("input[type=file]")].some((i) => i.files?.length) ||
+        clean(around.textContent).toLowerCase().includes(stem);
+      if (taken) return { ok: true, value: name };
+      await new Promise((resolve) => win.setTimeout(resolve, 150));
+    }
+    return { ok: false, detail: "The drop area didn't take the file. Attach it yourself, then continue." };
   }
 
   /** What a field holds now, to report whether an action stuck. */
@@ -677,7 +750,7 @@
     hitTest,
     prepareKey,
     snapshotState,
-    executionState: (value) => { executing = value; snapshotState(value); },
+    executionState: (value) => { executing = value; passThrough(value); },
     freshState: (ref) => {
       const el = find(ref);
       return { document_id: globalThis.__applyshortlyDocumentId, user_edited: Boolean(el && userEdited.has(el)), value: el?.value ?? el?.getAttribute("aria-valuetext") ?? null };
@@ -699,6 +772,8 @@
     typedSuggestion,
     scrollOptions,
     attach,
+    pickerOpen,
+    hasText,
     state,
     scrollPage,
     settle,

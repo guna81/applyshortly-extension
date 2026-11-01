@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
-import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices } from "../src/agent/loop.js";
+import { ProgressGuard, Agent, execute, explain, holdsTyped, observeTab, questionChoices } from "../src/agent/loop.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
 const FRAME = { frameId: "child", isTop: false, parentId: "top", sessionId: "oopif" };
@@ -41,6 +41,8 @@ class FakeDriver {
       case "attach": this.calls.push(["attach-file", args[0], args[2]]); return { ok: true, value: args[2] };
       case "state": return { checked: false };
       case "shownChoices": return this.shown ?? [];
+      case "pickerOpen": return this.pickerOpen ?? true;
+      case "hasText": return (this.texts ?? []).includes(args[0]);
       default: throw new Error(`unexpected ${name}`);
     }
   }
@@ -109,6 +111,20 @@ test("requested ref overlays are removed from every frame even if capture fails"
   assert.deepEqual(driver.calls[0][2], [{ ref: "0.a", local: "a" }]);
 });
 
+test("a protocol 2 screenshot changes nothing on the page: labels go into the image", async () => {
+  const driver = new FakeDriver({
+    top: () => frameObs([{ ref: "a", role: "textbox", name: "Name", bounds: [10, 20, 100, 30], in_viewport: true }]),
+  });
+  driver.canDrawLabels = true;
+  let labels = null;
+  driver.screenshot = async (given) => { labels = given; return "SHOT"; };
+  const { observation } = await observeTab(driver, { screenshot: true, annotate: true, extended: true });
+  assert.equal(observation.screenshot, "SHOT");
+  assert.deepEqual(labels, [{ ref: "0.a", bounds: [10, 20, 100, 30] }]);
+  const pageCalls = driver.calls.map(([name]) => name);
+  for (const name of ["screenshotRefs", "clearScreenshotRefs", "snapshotState"]) assert.equal(pageCalls.includes(name), false, name);
+});
+
 test("execute: trusted clicks offset into frames, typing, typeahead picks, uploads and refusals", async () => {
   const driver = new FakeDriver({ top: () => frameObs([]) });
   const refs = new Map([
@@ -144,6 +160,37 @@ test("execute: typing commits a matching typeahead suggestion instead of blurrin
     ["insertText", "India"],
     ["click", 10, 20], // the suggestion that appeared
   ]);
+});
+
+test("execute: a masked input that drops inserted text is cleared and typed key by key", async () => {
+  class MaskedDriver extends FakeDriver {
+    async typeKeys(text) { this.calls.push(["typeKeys", text]); this.value = "+91 63818-68258"; }
+    async call(frame, name, ...args) { return name === "state" ? { value: this.value } : super.call(frame, name, ...args); }
+  }
+  const driver = new MaskedDriver({ top: () => frameObs([]) });
+  driver.value = "+91 "; // react-international-phone ignores the inserted string
+  const refs = new Map([["0.1", { frame: TOP, local: "1" }]]);
+  await execute(driver, refs, [TOP], { type: "type", ref: "0.1", text: "+91 6381868258" }, async () => null);
+  assert.deepEqual(driver.calls, [
+    ["click", 10, 20],
+    ["insertText", "+91 6381868258"],
+    ["press", "Backspace"], // the box's text was selected again before clearing
+    ["typeKeys", "+91 6381868258"],
+  ]);
+  // A field that kept the inserted text is left alone.
+  const kept = new MaskedDriver({ top: () => frameObs([]) });
+  kept.value = "Ada";
+  await execute(kept, refs, [TOP], { type: "type", ref: "0.1", text: "Ada" }, async () => null);
+  assert.equal(kept.calls.some(([n]) => n === "typeKeys"), false);
+});
+
+test("holdsTyped reads through masks, separators and case", () => {
+  assert.equal(holdsTyped("+91 63818-68258", "+91 6381868258"), true);
+  assert.equal(holdsTyped("₹19,00,000", "1900000"), true);
+  assert.equal(holdsTyped("+91 ", "+91 6381868258"), false);
+  assert.equal(holdsTyped("+90 000 000 03", "+91 9000000003"), false);
+  assert.equal(holdsTyped("Bengaluru ", "bengaluru"), true);
+  assert.equal(holdsTyped("", "Ada"), false);
 });
 
 test("Agent: acts, asks the user, and stops at review without submitting", async () => {
@@ -353,17 +400,18 @@ for (const approve of [false, true]) test(`v2 pauses on an unexpected origin; co
 test("progress guard stops unchanged and cycling pages before more paid calls", () => {
   const guard = new ProgressGuard();
   const obs = (value) => frameObs([{ role: "textbox", name: "Name", value }]);
-  for (let i = 0; i < 5; i++) assert.equal(guard.check({ ...obs(""), observation_id: String(i), screenshot: String(i) }), null);
-  assert.match(guard.check(obs("")), /without visible progress/);
+  for (let i = 0; i < 2; i++) assert.equal(guard.check({ ...obs(""), observation_id: String(i), screenshot: String(i) }), null);
+  assert.match(guard.check(obs("")), /without progress/);
   guard.reset();
-  for (let i = 0; i < 10; i++) assert.equal(guard.check(obs(String(i % 2))), null);
-  assert.match(guard.check(obs("0")), /without visible progress/);
+  // A pop-up that closes and reopens: two states taking turns.
+  for (let i = 0; i < 4; i++) assert.equal(guard.check(obs(String(i % 2))), null);
+  assert.match(guard.check(obs("0")), /without progress/);
   guard.reset();
-  for (let i = 0; i < 60; i++) assert.equal(guard.check(obs(String(i))), null);
-  assert.match(guard.check(obs("60")), /60-call safety limit/);
+  for (let i = 0; i < 40; i++) assert.equal(guard.check(obs(String(i))), null);
+  assert.match(guard.check(obs("40")), /40-call safety limit/);
 });
 
-test("v2 pauses a stalled run without issuing a sixth planning request", async () => {
+test("v2 pauses a stalled run without issuing a third planning request", async () => {
   const driver = new FakeDriver({ top: () => frameObs([], { document_id: "doc" }) });
   let calls = 0;
   let paused = false;
@@ -379,7 +427,66 @@ test("v2 pauses a stalled run without issuing a sixth planning request", async (
     },
   });
   await agent.run();
-  assert.equal(calls, 5);
+  assert.equal(calls, 2);
   assert.equal(paused, true);
   assert.equal(driver.calls.at(-1)[0], "detach");
+});
+
+test("a dropdown with no match is closed with Escape only when its own list is open", async () => {
+  class NoMatch extends FakeDriver {
+    async call(frame, name, ...args) {
+      if (name === "matchOption") return { ok: false, options: [] };
+      if (name === "focusForTyping") return { ok: true, mode: "direct" };
+      if (name === "scrollOptions") return false;
+      return super.call(frame, name, ...args);
+    }
+  }
+  const driver = new NoMatch({ top: () => frameObs([{ ref: "1", role: "combobox", name: "Country" }], { dialog: "Apply to Acme" }) });
+  const { refs, frames } = await observeTab(driver);
+  driver.pickerOpen = false; // the list never opened: Escape would close the Apply dialog
+  await assert.rejects(execute(driver, refs, frames, { type: "select", ref: "0.1", text: "India" }, async () => null), /No option matches/);
+  assert.equal(driver.calls.some((c) => c[0] === "press"), false);
+  driver.pickerOpen = true;
+  await assert.rejects(execute(driver, refs, frames, { type: "select", ref: "0.1", text: "India" }, async () => null), /No option matches/);
+  assert.deepEqual(driver.calls.filter((c) => c[0] === "press"), [["press", "Escape"]]);
+});
+
+test("hover, drag and wait_for", async () => {
+  class Pointer extends FakeDriver {
+    async hover(x, y) { this.calls.push(["hover", x, y]); }
+    async drag(from, to) { this.calls.push(["drag", from, to]); }
+  }
+  const driver = new Pointer({ top: () => frameObs([{ ref: "1", role: "button", name: "Menu" }, { ref: "2", role: "listbox", name: "Order" }]) });
+  const { refs, frames } = await observeTab(driver);
+  await execute(driver, refs, frames, { type: "hover", ref: "0.1" }, async () => null);
+  await execute(driver, refs, frames, { type: "drag", ref: "0.2", to_ref: "0.1" }, async () => null);
+  assert.deepEqual(driver.calls.map((c) => c[0]), ["hover", "drag"]);
+  driver.texts = ["Upload complete"];
+  assert.equal(await execute(driver, refs, frames, { type: "wait_for", text: "Upload complete", ms: 500 }, async () => null), null);
+  await assert.rejects(execute(driver, refs, frames, { type: "wait_for", text: "Never shown", ms: 300 }, async () => null), /did not appear/);
+});
+
+test("a browser dialog is handed to the user and the run resumes when it closes, without a model call", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Name" }]) });
+  let closeDialog;
+  driver.dialog = { type: "confirm", message: "Leave site?" };
+  driver.dialogClosed = () => new Promise((resolve) => { closeDialog = () => { driver.dialog = null; resolve(); }; });
+  const updates = [];
+  let steps = 0;
+  const agent = new Agent({
+    tabId: 3, driver, files: async () => null, report: async () => {},
+    notify: async (update) => {
+      updates.push(update);
+      if (update.question?.kind === "blocker") setTimeout(() => closeDialog(), 10);
+    },
+    step: async () => {
+      steps += 1;
+      agent.stop();
+      return { session_id: "s", status: "continue", actions: [] };
+    },
+  });
+  await agent.run();
+  const blocker = updates.find((u) => u.question?.kind === "blocker");
+  assert.match(blocker.question.text, /Leave site\?.*Answer it yourself/);
+  assert.equal(steps, 1); // one decision, after the dialog closed; none while it was open
 });

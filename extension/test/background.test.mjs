@@ -398,6 +398,27 @@ test('the agent runs in the tab it was started from, one tab at a time, and take
   assert.deepEqual(h.calls.filter((c) => c.agentReply || c === 'agentStop'), [{ agentReply: '30 days' }, 'agentStop']);
 });
 
+test('starting the agent ends a run in another tab that is only waiting on the user', async () => {
+  for (const status of ['waiting', 'paused']) {
+    const h = harness();
+    await h.send({ type: 'agentStart', appId: null }, h.content);
+    const first = h.agentInstances[0];
+    first.status = status; // a question, or the user paused it, then moved on to another job
+    const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
+    assert.equal((await h.send({ type: 'agentStart', appId: null }, other)).ok, true, status);
+    assert.equal(first.stopped, true, status);
+    assert.equal(h.agentInstances.length, 2, status);
+  }
+  // A run still filling is never cut off; the refusal names its tab.
+  const h = harness();
+  await h.send({ type: 'agentStart', appId: null }, h.content);
+  const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
+  const refused = await h.send({ type: 'agentStart', appId: null }, other);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /still filling "Engineer at Acme" in another tab/);
+  assert.equal(h.agentInstances[0].stopped, false);
+});
+
 test('the agent refuses an application whose last submission is unconfirmed', async () => {
   const h = harness({ blocked: true });
   const result = await h.send({ type: 'agentStart', tabId: 10, url: 'https://example.com/apply', appId: 7 });

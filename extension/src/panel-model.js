@@ -200,7 +200,9 @@
     ].filter(Boolean).join(" ");
   }
 
-  const PAGE_ACTION = /\b(?:links?|urls?|web ?sites?|pages?|tabs?|buttons?|click|open|navigate|sign[- ]?in|log[- ]?in|captcha|upload|attach)\b/i;
+  const PAGE_ACTION = /\b(?:links?|urls?|web ?sites?|pages?|tabs?|buttons?|click|open|navigate|sign[- ]?in|log[- ]?in|captcha|upload|attach|tick|untick|check ?box(?:es)?|consent)\b/i;
+  // A question about one of these is answered by choosing or doing, never by drafted text.
+  const TYPED_ROLES = ["textbox", "textarea", "searchbox"];
 
   /** The chat line for the agent waiting on the user: its question, or what to do on the page. */
   function agentAsk(question) {
@@ -208,7 +210,8 @@
     if (question.kind === "question") {
       const choices = (question.choices ?? []).slice(0, MAX_CHOICES);
       // A request to open a page, link or button is for the user to act on, never an answer to draft.
-      const draft = !choices.length && !PAGE_ACTION.test(question.text ?? "") && draftable({ kind: "text", label: question.text });
+      const typed = !question.role || TYPED_ROLES.includes(question.role);
+      const draft = typed && !choices.length && !PAGE_ACTION.test(question.text ?? "") && draftable({ kind: "text", label: question.text });
       return {
         text: "",
         question: { label: question.text, note: draft ? "Type your answer, or I can draft one." : undefined },
@@ -364,12 +367,16 @@
     return null;
   }
 
-  /** Opening message and quick replies, like the web app's review assistant. */
+  /**
+   * Opening message and quick replies, like the web app's review assistant: the next question,
+   * else a line about this form's answers, else nothing (a page without questions gets no chat
+   * line; the input's placeholder already says it takes changes).
+   */
   function assistantGreeting(results) {
-    return nextPrompt(results) ?? {
-      text: 'Want to change anything? Tell me, e.g. "set notice period to 60 days", and I\'ll update the fields.',
-      choices: [],
-    };
+    const prompt = nextPrompt(results);
+    if (prompt) return prompt;
+    const n = results.filter((r) => r.status === "filled" && canAssist(r)).length;
+    return n ? { text: `${n === 1 ? "The answer is" : `All ${n} answers are`} filled in. Check the form, and tell me here if one should change.`, choices: [] } : null;
   }
 
   /** A line as the AI reads it: its text, then the question card it asks, if any. */

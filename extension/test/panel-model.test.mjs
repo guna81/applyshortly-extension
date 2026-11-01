@@ -118,6 +118,18 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.equal(P.agentAsk(null), null);
 });
 
+test("questions about a checkbox, upload or choice never offer a draft", () => {
+  const consent = "Do you want to tick \"I agree to allow XCaliber Health to store and process my personal data\"?";
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text: consent }).choices), [P.ON_PAGE_REPLY]);
+  const text = "Should we mention anything else about your background for this role?";
+  for (const role of ["checkbox", "radio", "file", "combobox", "select"]) {
+    const ask = P.agentAsk({ kind: "question", text, role });
+    assert.deepEqual(plain(ask.choices), [P.ON_PAGE_REPLY], role);
+    assert.equal(ask.question.note, undefined, role);
+  }
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text, role: "textarea" }).choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
+});
+
 test("a long option list shows the likely answer first and says it can be typed", () => {
   const codes = ["+93", "+355", "+213", "+1-684", "+376", "+244", "+1-264", "+672", "+91", "+44"];
   const results = [{ field: { kind: "dropdown", label: "Mobile phone country code", required: true, options: codes.map((text) => ({ text })) }, status: "unresolved", suggestion: "+91" }];
@@ -135,7 +147,10 @@ test("assistantGreeting asks the first open question with its options as quick r
   assert.equal(g.text, "2 questions need your answer before you can submit.");
   assert.deepEqual(plain(g.question), { label: "Work authorisation?", step: "Required" });
   assert.deepEqual(plain(g.choices), ["Citizen", "Visa"]);
-  assert.match(P.assistantGreeting([]).text, /Want to change anything/);
+  assert.equal(P.assistantGreeting([]), null); // no questions on the page: no chat line
+  const done = [{ field: { kind: "text", label: "City" }, status: "filled" }, { field: { kind: "text", label: "Notice" }, status: "filled" }];
+  assert.equal(P.assistantGreeting(done).text, "All 2 answers are filled in. Check the form, and tell me here if one should change.");
+  assert.doesNotMatch(P.assistantGreeting(done).text, /notice period to 60/);
   const consent = [{ field: { kind: "checkbox", label: "I agree to the terms" }, status: "unresolved" }];
   assert.deepEqual(plain(P.assistantGreeting(consent).choices), [P.AGREE_REPLY, P.SHOW_REPLY]);
   assert.equal(P.promptTarget(consent), consent[0]);

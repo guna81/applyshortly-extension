@@ -98,7 +98,9 @@ a new positive Ashby **Success** receipt confirms the submission in ApplyShortly
 
 ### AI driver controller
 
-Protocol 2 pauses locally before another planning call when the same page state appears six times within twelve observations, or after sixty planning calls since user input/resume. This catches ineffective actions and short interaction cycles even when dispatch reports success. Resume explicitly after checking the page; each resume starts a new safety window. This is a call limit, not a dollar spending cap.
+Protocol 2 pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. The platform also pauses after six decisions without progress and caps AI spend at about $1 per application. Resume explicitly after checking the page; each resume starts a new safety window.
+
+Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. Besides click, type, choose, check, upload, keys, scroll and wait, the agent can hover, drag between two controls, and wait for text to appear. Screenshots are capped at 1280 pixels on the longest side, and taken only when the page layout changed. Taking one changes nothing on the page: the capture is shrunk and labelled inside the extension (never with Chrome's clip option, which briefly resizes the page), and the panel stays in place. A field already on screen is filled without scrolling. Your saved answers for plain fields (text, email, numbers, native dropdowns) are typed in one go without an AI call; the AI handles pickers, phone numbers, uploads and anything that didn't stick.
 
 Choose **Settings → Form agent engine → AI driver** in ApplyShortly for new sessions.
 AI driver is the service default. It uses fresh page observations, screenshots
@@ -106,7 +108,7 @@ and native AI tool calls; Anthropic and Gemini native tools are supported. Perso
 keys support structured drafts rather than this native tool loop; sessions on those keys, or with
 no AI, run Rules first instead.
 
-When the server enables controller protocol 2, the extension inspects the page before filling
+With controller protocol 2 (the server default), the extension inspects the page before filling
 and keeps page questions, actions and review in one session. Messages interrupt pending actions
 and receive fresh page context. Page questions stay read-only until you ask it to edit or
 continue. The controller tracks field readback and user edits, bounds failed interaction
@@ -114,10 +116,10 @@ strategies, and can follow an application tab opened by its recent click. It sto
 the agent itself never clicks final Submit. Stop ends browser access.
 
 This upgraded session sends visible page context and transient screenshots to the configured
-AI provider through ApplyShortly. The panel is temporarily hidden during capture. The classic
+AI provider through ApplyShortly. The panel stays visible (the AI is told it is ApplyShortly's own) and lets clicks through while the agent acts. The classic
 assistant description above applies outside this upgraded session.
 
-The server gate defaults off. Reload the updated extension and start a new session after an
+The server gate defaults on. Reload the updated extension and start a new session after an
 upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
 mechanics, but representative real-model ATS reliability has not been established.
 
