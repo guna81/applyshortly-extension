@@ -66,6 +66,11 @@ apply. No shared token or credential-seeding file is distributed or loaded.
 
 ### The agent panel
 
+In the AI driver, questions inspect the page without editing it. Explicit instructions such
+as "Recover this application", "Proceed with the edits", and "Please remove blank rows"
+allow the agent to make the requested changes. Recovery retains the session's AI spending
+limits; resuming does not reset them.
+
 The floating panel is one chat: the ApplyShortly agent, the same as the review chat on the
 website. There is no separate assistant, agent button or question box. It fills the form, steps
 through it when it has more than one page, drafts answers and asks you what it can't answer. It asks the unanswered questions one at a time, shows the form's options as tappable replies, and
@@ -97,6 +102,8 @@ Consent still asks for your explicit choice. Auto apply waits for those required
 a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
 
 ### AI driver controller
+
+The AI driver and a connected assistant run the same page commands (`extension/src/agent/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the AI driver uses them too and sends each action's `result`; the panel names the driver (Platform AI or Your assistant).
 
 Protocol 2 pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. The platform also pauses after six decisions without progress and caps AI spend at about $1 per application. Resume explicitly after checking the page; each resume starts a new safety window.
 
@@ -349,3 +356,26 @@ on the page, or your confirmation through **I already submitted it**, moves it t
 Duplicate-profile errors do not count as a successful application. Temporary connection errors
 queue outcome metadata locally and retry once a minute, even with Autopilot windows off.
 Signing out discards this queue so it cannot sync to another account.
+
+## External AI assistant control (pilot)
+
+Compatible servers can enable application-only MCP control. Open **Connect ChatGPT or Claude**
+from the popup, connect the browser, and approve the assistant's exact batch locally. Keep the
+control page open. New answers require review; submission needs explicit batch submission
+permission, validation and a cancellable countdown. Stop ends browser control. Login, CAPTCHA,
+and new domains require your intervention. No ApplyShortly AI calls or preparation credits are
+used in this mode; your assistant's plan limits still apply. General browser control and
+screenshots are not exposed. This pilot is disabled by default on the server.
+
+Batch approval requests Chrome access to the exact employer origins; approve new origins
+separately if the application redirects. Check uploaded-resume parsing and entered answers
+before local review. Required checked consent is validated alongside native form validity
+and upload requirements. Submission must produce employer confirmation; an uncertain attempt
+blocks retries.
+
+One local Breezy HR application has completed through MCP, including extension filling,
+resume upload, review, countdown and submission. This is limited live validation, not a claim
+of general ATS or native ChatGPT/Claude connector compatibility. The local HTTP MCP test
+client supplied decisions without platform AI calls. Production release remains separate.
+Idle/disconnect detaches the driver; it does not resume an already filled tab. Inspect that
+tab for an existing submission before starting again.

@@ -1,6 +1,7 @@
 // Background service worker: owns the API key and every request to the platform.
 // Content scripts and the popup talk to it with chrome.runtime messages ({type, ...}).
 
+import { externalBrowser } from "./external-browser.js";
 import { Agent } from "./agent/loop.js";
 import { TabDriver } from "./agent/cdp.js";
 import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./bridge.js";
@@ -123,6 +124,7 @@ async function clearTab(tabId) {
 chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
 async function hello(tabId, url) {
+  if (externalController.ownsTab(tabId)) return { appId: null, mode: "idle" };
   const origin = new URL(url).origin;
   const agent = agents.get(tabId);
   // The agent drives this tab from here: the page's own autofill stays out of its way.
@@ -153,6 +155,7 @@ async function claimAutoApply(appId, url) {
 
 /** Popup → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
 async function start(tabId, url, allowUntracked, autoSubmit = false) {
+  await externalController.stop();
   const origin = new URL(url).origin;
   const current = await getTab(tabId);
   const existing = autofillIdFromUrl(url) ?? (current?.origin === origin ? current.appId : null);
@@ -250,6 +253,7 @@ async function pairingPoll() {
 }
 
 async function clearConnection() {
+  await externalController.stop();
   await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue"]);
   await chrome.storage.session.clear();
   profileCache = null;
@@ -386,6 +390,7 @@ async function autopilotWindow() {
 
 /** One poll: watches the window that is open, or opens one for the next job that is due. */
 async function autopilotPoll() {
+  if (externalController.status().connected) return false;
   if (autopilotPolling) return false;
   autopilotPolling = true;
   try {
@@ -514,6 +519,7 @@ async function agentReport(appId, event, res, url) {
 
 /** Starts the agent in a tab: from the popup (finds the application by URL) or the page's panel. */
 async function agentStart(tabId, url, appId, autoSubmit = false) {
+  await externalController.stop();
   // One job at a time. A run elsewhere that is only waiting on the user (a question, a pause, a
   // filled form left for review) ends when the user starts a new one; it is not doing anything.
   for (const previous of new Set(agents.values())) {
@@ -537,12 +543,14 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
   const id = app?.id ?? null;
   const p = await profile();
   await setTab(tabId, { appId: id, origin: new URL(url).origin, tracked: id !== null });
+  const capabilities = await b.agentCapabilities().catch(() => null);
   const agent = new Agent({
     tabId,
     appId: id,
     driver: new TabDriver(tabId, await pageSources()),
     startUrl: url,
-    controllerVersion: (await b.agentCapabilities().catch(() => null))?.controller_version ?? 1,
+    controllerVersion: capabilities?.controller_version ?? 1,
+    verifiedCommands: capabilities?.verified_commands === true,
     step: (body) => b.agentStep(body),
     files: agentFiles(p, app),
     notify: async (message) => {
@@ -597,7 +605,61 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 /** A content script on a web page, as opposed to an extension page (which can also be a tab). */
 const fromPage = (sender) => Boolean(sender.tab) && /^https?:/.test(sender.url ?? "");
 
+const externalController = externalBrowser({
+  settings,
+  store: { get: (key) => chrome.storage.local.get(key), set: (value) => chrome.storage.local.set(value) },
+  hasAccess: (origins) => chrome.permissions.contains({ origins }),
+  report: async (application_id, event, url) => (await bridge()).report({ application_id, event, url }),
+  sources: async () => (await Promise.all(AGENT_PAGE_SCRIPTS.map(async (path) =>
+    (await fetch(chrome.runtime.getURL(path))).text()))).join("\n"),
+  resume: async () => {
+    const p = await profile();
+    return p.resume_url ? (await bridge()).resume(p.resume_url) : null;
+  },
+});
+
+// The assistant's steps are shown in the page's own ApplyShortly panel, not in a new window.
+// Pushed to the tab it works in whenever they change (and once more when it lets go).
+let pushedKey = "";
+let pushedTab = null;
+async function pushAssistantSteps() {
+  const status = externalController.status();
+  const tabId = externalController.workingTab();
+  const active = Boolean(status.connected && tabId != null);
+  const target = active ? tabId : pushedTab;
+  if (target == null) return;
+  const steps = status.activity.slice(-14).map(({ id, text, state }) => ({ id, text, state }));
+  const notes = externalController.notes();
+  const key = JSON.stringify([target, active, status.paused, steps, notes]);
+  if (key === pushedKey) return;
+  pushedKey = key;
+  pushedTab = active ? tabId : null;
+  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes }, { frameId: 0 }).catch(() => {});
+}
+if (typeof setInterval === "function") setInterval(() => { void pushAssistantSteps(); }, 1000);
+
 const handlers = {
+  assistantControl: async (msg, sender) => {
+    // Only the tab the assistant is working in may pause or stop it.
+    if (!sender.tab || !externalController.ownsTab(sender.tab.id)) throw new Error("This tab isn't being driven by an assistant.");
+    if (msg.action === "pause") return externalController.pauseForUser();
+    if (msg.action === "continue") return externalController.continueAfterUser();
+    if (msg.action === "stop") { await externalController.stop(); return true; }
+    if (msg.action === "note") { await externalController.sendNote(msg.text); void pushAssistantSteps(); return true; }
+    throw new Error("Unknown assistant action.");
+  },
+  externalBrowser: async (msg) => {
+    if (msg.action === "connect") return externalController.connect();
+    if (msg.action === "autoApprove") return externalController.setAutoApprove(msg.on === true);
+    if (msg.action === "approveNavigation") return externalController.approveNavigation();
+    if (msg.action === "reviewAnswers") return externalController.reviewAnswers();
+    if (msg.action === "status") return externalController.status();
+    if (msg.action === "decision") return externalController.decision(msg.batchId, msg.approve === true);
+    if (msg.action === "pause") return externalController.pauseForUser();
+    if (msg.action === "continue") return externalController.continueAfterUser();
+    if (msg.action === "stop") { await externalController.stop(); return true; }
+    throw new Error("Unknown browser action.");
+  },
   browserSignIn: async (msg) => browserSignIn(await platformOrigin(), msg.interactive !== false),
   aiSettings: async () => (await bridge()).aiSettings(),
   selectAI: async (msg) => (await bridge()).selectAI({ mode: msg.mode, provider: msg.provider }),
@@ -707,20 +769,22 @@ function pageJob(page) {
   return job.title ? job : null;
 }
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl"]);
 
 async function dispatch(msg, sender) {
   await storageReady;
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/options.html", "src/popup.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/options.html", "src/popup.html", "src/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
       const current = await getTab(sender.tab.id);
       const appId = msg.type === "report" ? msg.event?.application_id : (msg.appId ?? null);
-      if (appId !== (current?.appId ?? null) || (current && current.origin !== new URL(sender.url).origin)) throw new Error("Application context changed. Start autofill again.");
+      // A null id claims nothing (the handlers resolve the application from the page URL), so a stale
+      // tab record, e.g. an earlier job in this tab, must not block it. Only a concrete id has to match.
+      if (appId != null && (appId !== (current?.appId ?? null) || (current && current.origin !== new URL(sender.url).origin))) throw new Error("Application context changed. Start autofill again.");
     }
   }
   if (msg.type === "assist" && (!Array.isArray(msg.messages) || !msg.messages.length || !Array.isArray(msg.fields) || !msg.fields.length)) throw new Error("Nothing to send.");
@@ -743,3 +807,8 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   await ensureAutopilotAlarm();
   if (reason === "install" && !(await settings()).token) await chrome.runtime.openOptionsPage();
 });
+
+// The browser reconnects by itself once the user has connected it (a browser start, an
+// extension reload or a service-worker restart); Stop turns that off.
+chrome.runtime.onStartup?.addListener(() => { void externalController.resumeIfWanted(); });
+void externalController.resumeIfWanted().catch(() => {});

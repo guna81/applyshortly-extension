@@ -647,6 +647,80 @@ test("react-select style: the input stays empty and the choice shows beside it",
   assert.equal(F.dropdownValue(title), "", "a placeholder is not a value");
 });
 
+test("react-select with a hidden required input and a menu beside it still reads its chosen value", () => {
+  const { doc, F } = page(`
+    <label for="city">Location (City)</label>
+    <div class="select-shell">
+      <div class="select__control"><div class="select__value-container">
+        <div class="select__single-value">Trichy, Tamil Nadu, India</div>
+        <div class="select__input-container"><input id="city" role="combobox" aria-haspopup="listbox"></div>
+      </div></div>
+      <input tabindex="-1" required style="opacity:0" value="x">
+      <ul class="select__menu"><li>Trichy, Tamil Nadu, India</li></ul>
+      <span aria-live="polite">option Trichy, Tamil Nadu, India, selected.</span>
+    </div>
+    <label for="c2">Place</label>
+    <div class="select-shell">
+      <div class="select__control"><div class="select__value-container">
+        <div class="select__input-container"><input id="c2" role="combobox" aria-haspopup="listbox"></div>
+      </div></div>
+      <input tabindex="-1" required style="opacity:0">
+      <ul class="select__menu"><li>Chennai</li></ul>
+      <span aria-live="polite">option Chennai, selected.</span>
+    </div>`);
+  const all = F.collectFields(doc, { checkLayout: false });
+  const city = all.find((f) => f.el.id === "city");
+  const place = all.find((f) => f.el.id === "c2");
+  assert.equal(F.dropdownValue(city), "Trichy, Tamil Nadu, India");
+  assert.equal(F.dropdownValue(place), "Chennai", "the live-region note is used when no value element exists");
+});
+
+test("chooseOption ranks whole-word and prefix matches before giving up on substrings", () => {
+  const { F } = page("");
+  const opts = [{ text: "British Indian Ocean Territory" }, { text: "India (+91)" }, { text: "Indiana" }, { text: "Indonesia" }];
+  assert.equal(F.chooseOption(opts, "India")?.text, "India (+91)");
+  assert.equal(F.chooseOption([{ text: "Indiana" }, { text: "Indianapolis" }], "India"), null);
+});
+
+test("a react-select that the form treats as free text still shows its pick through widgetPick", () => {
+  const { doc, F } = page(`
+    <label for="city">Location (City)</label>
+    <div class="select-shell"><div class="select__control"><div class="select__value-container select__value-container--has-value">
+      <div class="select__single-value">Trichy, Tamil Nadu, India</div>
+      <div class="select__input-container"><input id="city" class="select__input" type="text" role="combobox" aria-haspopup="true" aria-autocomplete="list"></div>
+    </div></div></div>
+    <label for="plain">Nickname</label><input id="plain" type="text" value="Gee">
+    <label for="empty">Place</label>
+    <div class="select-shell"><div class="select__control"><div class="select__value-container">
+      <div class="select__placeholder">Select...</div>
+      <div class="select__input-container"><input id="empty" class="select__input" type="text" role="combobox" aria-haspopup="true" aria-autocomplete="list"></div>
+    </div></div></div>`);
+  const field = F.collectFields(doc, { checkLayout: false }).find((f) => f.el.id === "city");
+  assert.equal(field.kind, "text", "the form classifies it as a typeahead");
+  assert.equal(F.widgetPick(doc.getElementById("city")), "Trichy, Tamil Nadu, India");
+  assert.equal(F.widgetPick(doc.getElementById("plain")), "");
+  assert.equal(F.widgetPick(doc.getElementById("empty")), "", "a placeholder is not a pick");
+});
+
+test("an exact option text wins even when a longer listing comes first (dial-code lists)", () => {
+  const { F } = page("");
+  const opts = [{ text: "British Indian Ocean Territory +246" }, { text: "India +91" }, { text: "Indonesia +62" }];
+  assert.equal(F.chooseOption(opts, "India")?.text, "India +91");
+  assert.equal(F.chooseOption(opts, "India +91")?.text, "India +91");
+});
+
+test("widgetOnly ignores search text typed into a combobox that was never picked", () => {
+  const { doc, F } = page(`
+    <label for="q">Reference calls</label>
+    <div class="select__control"><div class="select__value-container">
+      <div class="select__input-container"><input id="q" role="combobox" aria-haspopup="listbox" value="Yes"></div>
+    </div></div>
+    <div class="select__menu">No options</div>`);
+  const field = F.collectFields(doc, { checkLayout: false }).find((f) => f.el.id === "q");
+  assert.equal(F.dropdownValue(field), "Yes", "typed text is the value for widgets that show their pick in the input");
+  assert.equal(F.dropdownValue(field, { widgetOnly: true }), "", "but it is not proof that an option was picked");
+});
+
 test("strict chooseOption (AI drafts) never ticks an option a sentence merely contains", () => {
   const { F } = page("");
   const auth = ["I am legally authorized", "I am not legally authorized"].map((text) => ({ text }));

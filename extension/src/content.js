@@ -515,6 +515,11 @@
     const message = text.trim();
     if (!message || chat.pending) return;
     if (agent?.controller_version === 2 && !["failed", "stopped"].includes(agent.status)) {
+      // The chips on the agent's own question are the panel's: "Draft it for me" drafts the answer
+      // and "I'll fill it on the page" skips it. Sent as replies they would be taken as the answer.
+      if (agent.status === "waiting" && agent.question?.kind === "question" && (P.isDraftRequest(message) || message === P.ON_PAGE_REPLY)) {
+        return replyToAgent(message);
+      }
       chat.lines.push({ role: "user", text: message });
       chat.draft = "";
       const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" &&
@@ -911,6 +916,12 @@
       const previous = agent;
       agent = msg;
       void agentChanged(previous, msg);
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg?.type === "assistantUpdate") {
+      // The connected assistant is filling this page: show its steps in this panel.
+      panel.assistant({ active: msg.active === true, paused: msg.paused === true, steps: Array.isArray(msg.steps) ? msg.steps : [], notes: Array.isArray(msg.notes) ? msg.notes : [] });
       sendResponse({ ok: true });
       return;
     }

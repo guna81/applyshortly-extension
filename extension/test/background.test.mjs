@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
+import { externalBrowser } from "../src/external-browser.js";
 import { autoApplyUrl } from '../src/bridge.js';
 import { webcrypto } from 'node:crypto';
 
@@ -71,8 +72,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -619,4 +620,12 @@ test('starting another application stops a ready v2 controller before attaching'
   assert.equal(previous.stopped, true);
   assert.equal(detached, true);
   assert.equal(h.agentInstances.length, 2);
+});
+
+test('employer pages cannot connect, approve or control the external browser', async () => {
+  const h = harness();
+  for (const action of ['connect', 'decision', 'reviewAnswers', 'stop']) {
+    const result = await h.send({ type: 'externalBrowser', action }, h.content);
+    assert.equal(result.ok, false);
+  }
 });

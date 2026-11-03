@@ -505,8 +505,9 @@
    * What a select-like <input> holds: its value, or (react-select and similar, where the input
    * stays empty for searching) the choice shown beside it in the same control.
    */
-  function inputDropdownValue(el) {
-    const own = el.value?.trim();
+  function inputDropdownValue(el, { widgetOnly = false } = {}) {
+    // widgetOnly: ignore the input's own text, which may be search text that was typed, not a pick.
+    const own = widgetOnly ? "" : el.value?.trim();
     if (own) return PICK_PLACEHOLDER.test(own) ? "" : own;
     let box = el.parentElement;
     for (let i = 0; i < 3 && box && box !== el.ownerDocument.body; i++, box = box.parentElement) {
@@ -514,17 +515,52 @@
       const shown = cleanLabel(visibleText(box));
       if (shown) return PICK_PLACEHOLDER.test(shown) ? "" : shown;
     }
+    // react-select keeps a hidden "required" input and an open-menu list beside the control, which
+    // stops the climb above. Look for its single-value element, or its "option X, selected." note,
+    // in the nearest wrapper that holds only this one combobox.
+    box = el.parentElement;
+    for (let i = 0; i < 6 && box && box !== el.ownerDocument.body; i++, box = box.parentElement) {
+      if (box.querySelectorAll('input[role="combobox"], select').length > 1) break;
+      const single = box.querySelector('[class*="single-value" i], [class*="singleValue" i]');
+      const picked = single ? cleanLabel(single.textContent) : "";
+      if (picked) return PICK_PLACEHOLDER.test(picked) ? "" : picked;
+      const note = box.querySelector("[aria-live]")?.textContent?.match(/^\s*option\s+(.+?),\s*selected\.?\s*$/i);
+      if (note) return cleanLabel(note[1]);
+    }
     return "";
   }
 
-  function dropdownValue(field) {
+  /**
+   * What a search-style combobox (react-select) displays as its pick, even though its input stays
+   * empty and the form treats it as free text. "" for anything else or when nothing is picked.
+   */
+  function widgetPick(el) {
+    return el.matches?.("input") && el.matches('[role="combobox"]') ? inputDropdownValue(el, { widgetOnly: true }) : "";
+  }
+
+  /**
+   * The choice a div-style combobox shows when its text sits in an aria-hidden wrapper (Airtable):
+   * the page names the control "<question> <choice>" with aria-labelledby, so the ids after the
+   * first are the choice (nothing else counts: a custom dropdown's own text may be its prompt).
+   */
+  function namedChoice(el) {
+    if (el.getAttribute("role") !== "combobox" || el.matches("input, textarea, select")) return "";
+    const doc = el.ownerDocument;
+    const ids = (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean).slice(1);
+    const named = cleanLabel(ids.map((id) => doc.getElementById(id)?.textContent ?? "").join(" "));
+    return !named || PICK_PLACEHOLDER.test(named) || EMPTY_OPTION.test(named) ? "" : named;
+  }
+
+  function dropdownValue(field, options = {}) {
     const el = field.el;
-    if (el.matches("input")) return inputDropdownValue(el);
+    if (el.matches("input")) return inputDropdownValue(el, options);
     const selected = el.querySelector('[role="option"][aria-selected="true"]');
     if (selected) {
       const text = selected.textContent.trim();
       return /^choose$/i.test(text) ? "" : (selected.getAttribute("data-value") ?? text);
     }
+    const named = namedChoice(el);
+    if (named) return named;
     if (!field.custom) return "";
     if (el.matches(".mat-mdc-select-empty, .mat-select-empty") || el.querySelector(".mat-mdc-select-placeholder, .mat-select-placeholder")) return "";
     const valueText = el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text");
@@ -1044,6 +1080,14 @@
     }
     if (/^\+\s*\d{1,4}$/.test(String(answer).trim())) return chooseDialOption(options, answer);
     if (strict) return null;
+    // Tiered, so "India" finds "India (+91)" over "British Indian Ocean Territory": the answer as
+    // whole words in the option, then as its start; only a genuine tie in a tier gives up.
+    const words = ` ${a} `;
+    const tiers = [
+      options.filter((o) => ` ${normalise(o.text)} `.includes(words)),
+      options.filter((o) => normalise(o.text).startsWith(a)),
+    ];
+    for (const tier of tiers) if (tier.length === 1) return tier[0];
     const contained = options.filter((o) => {
       const t = normalise(o.text);
       return t && (a.includes(t) || t.includes(a));
@@ -1225,6 +1269,7 @@
     phoneProgress,
     phoneAgrees,
     applyPhone,
+    phonePlan,
     splitInternational,
     dialOf,
     countryText,
@@ -1234,6 +1279,7 @@
     invalidReason,
     numericVariants,
     dropdownValue,
+    widgetPick,
     pickDropdown,
     readDropdownOptions,
     shownTexts,

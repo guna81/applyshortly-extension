@@ -80,6 +80,16 @@ export class JobHuntBridge {
     return res.status === 204 ? null : res.json();
   }
 
+  browserRelayUrl() {
+    const url = new URL(`${this.baseUrl}/api/extension/browser/relay`);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.href;
+  }
+
+  registerBrowser(name) {
+    return this.request("/api/extension/browser/devices", { method: "POST", body: JSON.stringify({ name }) });
+  }
+
   account() { return this.request("/api/extension/account"); }
 
   aiSettings() { return this.request("/api/extension/ai"); }

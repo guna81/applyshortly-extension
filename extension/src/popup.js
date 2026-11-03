@@ -1,3 +1,4 @@
+import { activityList, attention } from "./external-activity.js";
 /** The page's own elements, mostly form controls. @type {(id: string) => any} */
 const $ = (id) => document.getElementById(id);
 const P = globalThis.JobHuntPanel;
@@ -154,3 +155,30 @@ $("aiDrafts").addEventListener("change", async (e) => {
 });
 
 await render(await status());
+
+const controlUrl = chrome.runtime.getURL("src/external-browser.html");
+const openControl = (e) => { e?.preventDefault(); void chrome.tabs.create({ url: controlUrl }); window.close(); };
+
+/** The connected assistant's live steps. Quiet link when nothing is connected. */
+async function renderAssistant() {
+  const box = $("assist");
+  let data = null;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "externalBrowser", action: "status" });
+    data = res?.ok ? res.data : null;
+  } catch { data = null; }
+  if (!data?.connected) {
+    box.replaceChildren(el("a", { href: controlUrl, onclick: openControl }, "Connect ChatGPT, Claude or Codex"));
+    return;
+  }
+  const waiting = attention(data);
+  box.replaceChildren(
+    el("div", { class: "row-head" },
+      el("b", {}, "Assistant activity"),
+      waiting ? el("span", { class: "badge" }, "Needs you") : el("span", { class: "muted" }, "Connected")),
+    activityList(data.activity ?? [], 6),
+    el("a", { href: controlUrl, onclick: openControl }, waiting ? "Review and approve" : "Open full view"),
+  );
+}
+await renderAssistant();
+setInterval(renderAssistant, 1500);

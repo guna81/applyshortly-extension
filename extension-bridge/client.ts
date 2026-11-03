@@ -194,6 +194,8 @@ export interface AgentActionResult {
   index: number;
   ok: boolean;
   detail?: string | null;
+  /** What the page showed after a verified command (committed/verified, fill_form fields, options, review). Under 10 KB. */
+  result?: Record<string, unknown> | null;
 }
 
 export interface AgentStepRequest {
@@ -209,6 +211,15 @@ export interface AgentStepRequest {
   skip_question?: boolean;
   resumed?: boolean;
   in_user_tab?: boolean;
+  /** This extension runs fill_form / options / review and reports each action's `result`. */
+  verified_commands?: boolean;
+}
+
+/** One entry of a fill_form: typed or chosen (`text`), or checked. */
+export interface AgentFieldWrite {
+  ref: string;
+  text?: string | null;
+  checked?: boolean | null;
 }
 
 /** A vetted step. There is no submit action: the user always sends the form. */
@@ -218,8 +229,10 @@ export interface AgentAction {
   x?: number | null;
   y?: number | null;
   tab_id?: number | null;
-  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait" | "switch_tab" | "hover" | "drag" | "wait_for";
+  type: "click" | "type" | "select" | "check" | "upload" | "press" | "scroll" | "wait" | "switch_tab" | "hover" | "drag" | "wait_for" | "fill_form" | "options" | "review";
   ref?: string | null;
+  /** fill_form: 1-25 writes, run one after another and stopped at the first that does not stick. */
+  fields?: AgentFieldWrite[] | null;
   /** drag: the element to drop on. */
   to_ref?: string | null;
   /** The text to type, the option to select, or (wait_for) the text to wait for. */
@@ -322,6 +335,16 @@ export class JobHuntBridge {
     return (res.status === 204 ? undefined : await res.json()) as T;
   }
 
+  browserRelayUrl(): string {
+    const url = new URL(`${this.baseUrl}/api/extension/browser/relay`);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.href;
+  }
+
+  registerBrowser(name: string): Promise<{ device_id: string }> {
+    return this.request("/api/extension/browser/devices", { method: "POST", body: JSON.stringify({ name }) });
+  }
+
   account(): Promise<ExtensionAccount> { return this.request("/api/extension/account"); }
 
   aiSettings(): Promise<ExtensionAccount["ai"]> { return this.request("/api/extension/ai"); }
@@ -392,7 +415,7 @@ export class JobHuntBridge {
   }
 
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
-  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "classic" | "browser"}> {
+  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "classic" | "browser"; verified_commands?: boolean}> {
     return this.request("/api/extension/agent/capabilities");
   }
 

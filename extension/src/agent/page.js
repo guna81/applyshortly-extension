@@ -35,7 +35,7 @@
   // English, then French, Spanish/Portuguese, German, Italian and Dutch words that only send a
   // form. "Apply" words (postuler, bewerben) stay out: on a job page they open the form.
   const FINAL = /\b(submit|send)\b|\bsend (my )?application\b|\bfinish\b|\bcomplete (my )?application\b|\b(envoyer|soumettre|valider|enviar|submeter|absenden|abschicken|einreichen|invia|inviare|verzenden|versturen|indienen)\b/i;
-  const EXTRA_TEXT = 'input[type=date], input[type=month], input[type=time], input[type=datetime-local], input[type=week], [contenteditable="true"], [contenteditable=""]';
+  const EXTRA_TEXT = 'input[type=date], input[type=month], input[type=time], input[type=datetime-local], input[type=week], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"]';
   const MAX_ELEMENTS = 300;
   const MAX_TEXT = 6000;
 
@@ -135,7 +135,10 @@
     const group = phone ? { group: clip(clean(phone), 500) } : {};
     if (field.kind === "text") {
       const role = el.tagName === "TEXTAREA" ? "textarea" : "textbox";
-      return [base(el, { role, name: label, input_type: el.type || "text", value: clip(el.value ?? "", 2000), required, ...group, ...invalidInfo(field) })];
+      // A search-style combobox (react-select) keeps its input empty and shows the pick beside it.
+      const picked = el.value ? "" : F.widgetPick(el);
+      return [base(el, { role, name: label, input_type: el.type || "text", value: clip(el.value || picked || "", 2000), required,
+        ...(el.matches('[role="combobox"]') ? { popup: true } : {}), ...group, ...invalidInfo(field) })];
     }
     if (field.kind === "select") {
       const chosen = el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
@@ -333,6 +336,17 @@
     return { href: el.tagName === "A" ? clip(el.href || "", 2000) : null, identity: clip(parts.join("/"), 300), user_edited: userEdited.has(el), section: clip(clean(section?.getAttribute("aria-label") || heading?.textContent), 300), bounds: [r.x, r.y, r.width, r.height] };
   }
 
+  /**
+   * What a div-style dropdown (role=combobox on a non-input) shows as its choice: the text inside it,
+   * never a "Select…" prompt. Such a control has no `value`, so without this it reads as empty
+   * however often the pick took (Airtable's dropdowns).
+   */
+  function shownChoice(el) {
+    if (el.getAttribute("role") !== "combobox" || el.matches("input, textarea, select")) return "";
+    const text = clean(el.textContent);
+    return /^[\s-]*(select|choose|please select|pick|find an option)\b/i.test(text) ? "" : text;
+  }
+
   // AX finds accessible controls that the form mapper does not yet recognize.
   function describeAccessible(el, role, name, observed) {
     if (!el || !isVisible(el, true) || observed.includes(el.getAttribute(REF))) return null;
@@ -343,7 +357,8 @@
     if (!["textbox", "textarea", "combobox", "listbox", "option", "button", "link", "radio", "checkbox"].includes(role)) return null;
     return base(el, {
       ...contextOf(el), role, name: clip(clean(name || F.labelOf(el)), 500),
-      value: clip(String(el.value ?? el.getAttribute("aria-valuetext") ?? ""), 2000),
+      // A rich-text box (a div with contenteditable) has no `value`: it holds its text.
+      value: clip(el.isContentEditable ? clean(el.textContent) : String(el.value ?? el.getAttribute("aria-valuetext") ?? shownChoice(el)), 2000),
       checked: el.checked ?? (el.getAttribute("aria-checked") === "true"),
       required: Boolean(el.required) || el.getAttribute("aria-required") === "true",
       invalid: el.getAttribute("aria-invalid") === "true",
@@ -522,6 +537,22 @@
     return { ok: true, mode: "keys" };
   }
 
+  /** The text typed into a field (search text in a typeahead), as the input holds it. */
+  function typedText(ref) {
+    const el = find(ref);
+    return el && "value" in el ? String(el.value ?? "") : "";
+  }
+
+  /** Clicks the control itself through the DOM, for a custom checkbox the pointer click missed. */
+  function activate(ref) {
+    const el = find(ref);
+    if (!el) return false;
+    // Only checkboxes and radios: this never presses a button.
+    if (!el.matches?.('input[type=checkbox], input[type=radio], [role=checkbox], [role=radio]')) return false;
+    el.click();
+    return true;
+  }
+
   function setDirect(ref, value) {
     const el = find(ref);
     if (!el) return { ok: false, detail: "That field is gone from the page." };
@@ -690,18 +721,35 @@
     }
     const dt = new win.DataTransfer();
     dt.items.add(file);
+    const stem = name.replace(/\.[^.]+$/, "").toLowerCase();
+    // The file's name shown anywhere on the page: in the zone's container, or in a dialog the site
+    // opens for the drop (Airtable shows the file there, with an "Attach file" button, outside the zone).
+    const doc = el.ownerDocument;
+    const mentions = () => {
+      const lower = (text) => String(text ?? "").toLowerCase();
+      let count = lower(doc.body?.textContent).split(stem).length - 1;
+      for (const n of doc.querySelectorAll("[aria-label]")) count += lower(n.getAttribute("aria-label")).includes(stem) ? 1 : 0;
+      return count;
+    };
+    const before = mentions();
+    const around = el.parentElement ?? el;
+    const shownBefore = clean(around.textContent).toLowerCase().includes(stem);
     for (const kind of ["dragenter", "dragover", "drop"]) {
       el.dispatchEvent(new win.DragEvent(kind, { bubbles: true, cancelable: true, dataTransfer: dt }));
     }
     // A drop zone that ignores synthetic drops shows nothing: report it rather than "attached".
-    // Only the zone itself and its immediate container: another field's upload never counts.
-    const around = el.parentElement ?? el;
-    const stem = name.replace(/\.[^.]+$/, "").toLowerCase();
-    for (let waited = 0; waited <= 1500; waited += 150) {
+    // The name must show up more often after the drop than before it: a name already on the page
+    // proves nothing by itself.
+    for (let waited = 0; waited <= 3000; waited += 150) {
       const taken = [...el.querySelectorAll("input[type=file]")].some((i) => i.files?.length) ||
-        clean(around.textContent).toLowerCase().includes(stem);
+        (!shownBefore && clean(around.textContent).toLowerCase().includes(stem)) || mentions() > before;
       if (taken) return { ok: true, value: name };
       await new Promise((resolve) => win.setTimeout(resolve, 150));
+    }
+    // The site's upload dialog was left open by an earlier drop and already lists this file: it is
+    // staged there, waiting for the dialog's own confirm button.
+    if (before && [...doc.querySelectorAll('[role="dialog"]')].some((d) => (d.textContent + " " + [...d.querySelectorAll("[aria-label]")].map((n) => n.getAttribute("aria-label")).join(" ")).toLowerCase().includes(stem))) {
+      return { ok: true, value: name };
     }
     return { ok: false, detail: "The drop area didn't take the file. Attach it yourself, then continue." };
   }
@@ -716,6 +764,64 @@
     if (el.tagName === "SELECT") return { value: clean(el.options[el.selectedIndex]?.text) };
     if (el.isContentEditable) return { value: clean(el.textContent) };
     return { value: el.value ?? clean(el.textContent), invalid: el.getAttribute("aria-invalid") === "true" };
+  }
+
+  /**
+   * What a control shows as its answer right now, the same value an observation reports for it:
+   * the input's text, a native select's chosen option, or (react-select, intl-tel-input and other
+   * custom widgets, whose input stays empty) the choice displayed in the widget.
+   */
+  function committedValue(ref, widgetOnly = false) {
+    // widgetOnly: report only what the widget displays as chosen, never the input's own text
+    // (which can be search text that was typed and never picked).
+    const el = find(ref);
+    if (!el) return null;
+    const root = el.getRootNode?.() ?? document;
+    const field = F.collectFields(root.nodeType === 9 || root.host ? root : document, { checkLayout: false })
+      .find((f) => f.el === el || f.options?.some?.((o) => o.el === el));
+    // A rich-text box (contenteditable) has no `value`: what it holds is its text.
+    const rich = el.isContentEditable || el.hasAttribute?.("contenteditable");
+    if (!field) return widgetOnly ? shownChoice(el) : rich ? clean(el.textContent) : el.value ?? el.getAttribute("aria-valuetext") ?? (shownChoice(el) || null);
+    if (field.kind === "select") return field.phoneFor ? F.countryText(field) : F.isEmpty(field) ? "" : clean(el.options[el.selectedIndex]?.text);
+    if (field.kind === "dropdown") return clip(field.phoneFor ? F.countryText(field) : F.dropdownValue(field, { widgetOnly }), 2000);
+    if (field.kind === "text" && el.matches?.('input[role="combobox"]')) {
+      const picked = F.widgetPick(el);
+      return widgetOnly ? picked : el.value || picked;
+    }
+    return widgetOnly ? "" : rich ? clean(el.textContent) : el.value ?? "";
+  }
+
+  /**
+   * For a phone box that has a country selector (intl-tel-input and friends): what to type, or
+   * which country to pick first. null when the box has no selector, so plain typing applies.
+   */
+  function phoneTypePlan(ref, answer) {
+    const el = find(ref);
+    if (!el) return null;
+    const field = F.collectFields(document, { checkLayout: false }).find((f) => f.el === el);
+    if (!field?.phoneCountry) return null;
+    const plan = F.phonePlan(field, answer);
+    return { ...plan, countryRef: refOf(field.phoneCountry.el) };
+  }
+
+  /**
+   * A control the site re-rendered keeps no ref on its new node. Finds the one control with the
+   * same role and name and gives it the old ref, so a held observation stays usable.
+   */
+  function rebind(ref, name, role) {
+    if (find(ref)) return true;
+    const matches = [];
+    for (const root of roots(document)) {
+      for (const field of F.collectFields(root, { checkLayout: false })) {
+        for (const item of fieldElements(field)) {
+          if (item.name === name && item.role === role) matches.push(item.ref);
+        }
+      }
+    }
+    if (matches.length !== 1) return false;
+    const el = find(matches[0]);
+    el?.setAttribute(REF, String(ref));
+    return Boolean(el);
   }
 
   function scrollPage(direction) {
@@ -753,7 +859,7 @@
     executionState: (value) => { executing = value; passThrough(value); },
     freshState: (ref) => {
       const el = find(ref);
-      return { document_id: globalThis.__applyshortlyDocumentId, user_edited: Boolean(el && userEdited.has(el)), value: el?.value ?? el?.getAttribute("aria-valuetext") ?? null };
+      return { document_id: globalThis.__applyshortlyDocumentId, user_edited: Boolean(el && userEdited.has(el)), present: Boolean(el), value: el?.value ? el.value : (el && committedValue(ref)) || (el?.getAttribute("aria-valuetext") ?? el?.value ?? null) };
     },
     scrollControl,
     screenshotRefs,
@@ -765,6 +871,11 @@
     normaliseDate,
     blur,
     selectNative,
+    committedValue,
+    typedText,
+    activate,
+    phoneTypePlan,
+    rebind,
     visibleOptions,
     shownChoices,
     noteShown,

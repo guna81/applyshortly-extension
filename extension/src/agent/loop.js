@@ -5,6 +5,8 @@
 // final submit button (page.js clickable()), and it stops whenever the platform says
 // ready_for_review: the user reviews the form and submits it themselves.
 
+import { CommandRunner } from "./commands.js";
+
 const MAX_OBSERVED = 400; // the API's limit on elements per observation
 const TEXT_LIMIT = 12000;
 const TYPEAHEAD_WAIT_MS = 700;
@@ -24,11 +26,24 @@ const CALL_LIMIT = 40;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Only explicit commands unlock edits. Polite prefixes and recovery commands are commands
+// too; questions and negations must retain the inspection-only path.
+export function isEditingInstruction(message) {
+  const text = String(message).trim().replace(/^please\s+/i, "");
+  if (/^(do not|don't|never)\b/i.test(text)) return false;
+  return /^(fill|set|change|select|choose|upload|attach|click|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
+}
+
 // Ignore transient IDs and screenshot bytes when detecting stalled planning.
 export class ProgressGuard {
   constructor() { this.reset(); }
-  reset() { this.states = []; this.calls = 0; }
+  reset() { this.states = []; this.calls = 0; this.failures = []; this.reading = false; }
+  /** The step just taken only looked (a screenshot, review, options): the same page after it is no stall. */
+  noteReading(reading) { this.reading = Boolean(reading); }
+  /** Labels of the actions that failed in the latest step ([] when all stuck). A stall with failures is a field the agent cannot fill. */
+  noteFailures(labels) { this.failures = labels.slice(0, 3); }
   check(observation) {
+    if (this.reading) { this.reading = false; this.calls += 1; return this.calls >= CALL_LIMIT ? `The agent reached its ${CALL_LIMIT}-call safety limit.` : null; }
     const state = JSON.stringify({
       url: observation.url, dialog: observation.dialog, text: observation.text,
       errors: observation.errors, blockers: observation.blockers,
@@ -210,7 +225,7 @@ async function choose(driver, target, frames, answer, adaptive = false) {
   const native = await driver.call(target.frame, "selectNative", target.local, answer);
   if (native?.native) {
     if (!native.ok) throw new Error(native.detail);
-    return native.value;
+    return { matched: native.value, committed: native.value, verified: true };
   }
   await driver.call(target.frame, "noteShown");
   await clickRef(driver, target, frames);
@@ -229,6 +244,11 @@ async function choose(driver, target, frames, answer, adaptive = false) {
         : await driver.call(target.frame, "matchOption", target.local, answer);
     }
   }
+  if (!match.ok && !match.options?.length) {
+    // The first try often races the menu opening: make sure it is open, then wait for options.
+    if (!(await driver.call(target.frame, "pickerOpen", target.local).catch(() => false))) await clickRef(driver, target, frames);
+    match = await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer), (r) => r?.ok || r?.options?.length, 3000);
+  }
   if (!match.ok && (await driver.call(target.frame, "scrollOptions", target.local, true))) {
     // A virtualized list renders only the options in view: page through it.
     for (let i = 0; i < MAX_OPTION_PAGES; i++) {
@@ -238,12 +258,67 @@ async function choose(driver, target, frames, answer, adaptive = false) {
     }
   }
   if (!match.ok) {
+    // Role-less typeaheads (older react-select): the filtered list's first entry is highlighted,
+    // so ArrowDown + Enter commits it; keep it only if the widget then shows the answer.
+    const keyed = await commitByKeys(driver, target, answer);
+    if (keyed.verified) return { matched: answer, ...keyed };
     await closePicker(driver, target);
     const shown = match.options?.length ? ` Options shown: ${match.options.join(", ")}` : " No options appeared.";
-    throw new Error(`No option matches "${answer}".${shown}`.slice(0, 290));
+    const left = keyed.undone === false && keyed.committed ? ` The field now shows "${keyed.committed}": fix it by hand.` : "";
+    throw new Error(`No option matches "${answer}".${shown}${left}`.slice(0, 290));
   }
   await clickRef(driver, { ...target, local: match.ref }, frames);
-  return match.text;
+  const readback = await readCommitted(driver, target, [match.text, answer]);
+  return { matched: match.text, ...readback };
+}
+
+const squash = (text) => String(text ?? "").toLowerCase().replace(/[^\p{L}\p{N}+]+/gu, " ").trim();
+
+/** Does what the widget shows correspond to the option we picked or the answer we asked for? */
+function showsChoice(committed, ...wanted) {
+  const shown = squash(committed);
+  return Boolean(shown) && wanted.some((w) => {
+    const want = squash(w);
+    return want && (shown === want || shown.includes(want) || want.includes(shown));
+  });
+}
+
+/** Reads the widget's value after a pick, giving React a moment to re-render. */
+async function readCommitted(driver, target, wanted, widgetOnly = false) {
+  let committed = null;
+  for (let i = 0; i < 4; i++) {
+    await sleep(i === 0 ? 150 : 250);
+    committed = await driver.call(target.frame, "committedValue", target.local, widgetOnly).catch(() => null);
+    if (showsChoice(committed, ...wanted)) break;
+  }
+  return { committed: committed ?? "", verified: showsChoice(committed, ...wanted) };
+}
+
+async function commitByKeys(driver, target, answer) {
+  // ArrowDown + Enter takes the first entry of whatever list is open. That is the answer only when
+  // the typed search text has narrowed the list to it: with no such text the first entry is
+  // arbitrary (the first of an unfiltered menu), so nothing is pressed.
+  const typed = await driver.call(target.frame, "typedText", target.local).catch(() => "");
+  if (!showsChoice(typed, answer)) return { committed: "", verified: false };
+  const before = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
+  try {
+    // Enter on a plain input could submit the form: only press it on a focused combobox/listbox.
+    if (!(await driver.call(target.frame, "prepareKey", target.local, "Enter"))) return { committed: "", verified: false };
+    await driver.press("ArrowDown");
+    await driver.press("Enter");
+  } catch {
+    return { committed: "", verified: false };
+  }
+  // Strict: the typed search text sitting in the input must not count as a pick.
+  const result = await readCommitted(driver, target, [answer], true);
+  if (!result.verified && squash(result.committed) && squash(result.committed) !== squash(before)) {
+    // A wrong entry took the Enter: take it back (Backspace clears a single-value widget), and
+    // say so rather than leave an answer nobody chose.
+    await driver.press("Backspace").catch(() => {});
+    const now = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
+    return { committed: now ?? "", verified: false, undone: !squash(now) || squash(now) === squash(before) };
+  }
+  return result;
 }
 
 /**
@@ -306,15 +381,61 @@ export async function execute(driver, refs, frames, action, files) {
       }
       await clickRef(driver, target, frames);
       return null;
-    case "type":
-      await typeInto(driver, target, frames, action.text ?? "", Boolean(action.command_id));
-      return null;
-    case "select":
-      return choose(driver, target, frames, action.text ?? "", Boolean(action.command_id));
+    case "type": {
+      let text = action.text ?? "";
+      // A phone box with a country selector: pick the country from the "+91 …" prefix first,
+      // then type only the national number the widget expects.
+      const plan = /^\s*\+/.test(text) ? await driver.call(target.frame, "phoneTypePlan", target.local, text).catch(() => null) : null;
+      let country = null;
+      if (plan) {
+        let current = plan;
+        if (!current.ok && current.needCountry) {
+          country = await choose(driver, { ...target, local: current.countryRef }, frames, current.needCountry, Boolean(action.command_id));
+          current = await driver.call(target.frame, "phoneTypePlan", target.local, text);
+        }
+        if (!current?.ok) throw new Error(current?.reason ?? "Choose the phone country first.");
+        text = current.text;
+      }
+      await typeInto(driver, target, frames, text, Boolean(action.command_id));
+      if (!plan) {
+        // Read the field back so an input the page dropped or cleared is reported, not assumed.
+        // Only for assistant commands (command_id); a password is never echoed.
+        if (!action.command_id || target.inputType === "password" || !text) return null;
+        const shown = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
+        if (shown == null) return null;
+        const loose = ["date", "datetime-local", "month", "time", "week", "number", "range", "color"].includes(target.inputType);
+        return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : holdsTyped(shown, text) };
+      }
+      const committed = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
+      return { matched: text, committed: committed ?? "", verified: String(committed ?? "").replace(/\D/g, "").endsWith(text.replace(/\D/g, "")),
+        ...(country ? { country: country.committed } : {}) };
+    }
+    case "select": {
+      const first = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id));
+      if (first.verified) return first;
+      // The first pick often lands late or races the menu opening: look once more, then try once
+      // more. Choosing the same option again is harmless if the first had already taken.
+      try {
+        const second = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id));
+        return second.verified || !first.committed ? second : first;
+      } catch { return first; }
+    }
     case "check": {
-      const now = await driver.call(target.frame, "state", target.local);
-      if (Boolean(now?.checked) !== Boolean(action.checked)) await clickRef(driver, target, frames);
-      return null;
+      const want = Boolean(action.checked);
+      const read = async () => Boolean((await driver.call(target.frame, "state", target.local).catch(() => null))?.checked);
+      if ((await read()) === want) return { checked: want, committed: String(want), verified: true };
+      await clickRef(driver, target, frames);
+      let got = false;
+      for (let i = 0; i < 3 && (got = await read()) !== want; i++) await sleep(150);
+      if (got !== want) {
+        // The pointer click landed on something else (a custom checkbox drawn over the input):
+        // activate the input itself, once, and read again.
+        if (await driver.call(target.frame, "activate", target.local).catch(() => false)) {
+          await sleep(150);
+          got = await read();
+        }
+      }
+      return { checked: got, committed: String(got), verified: got === want };
     }
     case "upload": {
       const file = await files(action.file);
@@ -382,14 +503,30 @@ export async function settle(driver) {
   }
 }
 
+/** Page actions of protocol 2 run with the page told to let the agent's clicks through the panel. */
+async function executing(driver, frames, run) {
+  for (const frame of frames) await driver.call(frame, "executionState", true);
+  try { return await run(); } finally {
+    for (const frame of frames) await driver.call(frame, "executionState", false).catch(() => {});
+  }
+}
+
+/** A command's outcome as the platform accepts it: small, plain JSON. */
+function boundedResult(result) {
+  const text = JSON.stringify(result);
+  return text.length <= 8000 ? result : { truncated: true, ok: result.ok, type: result.type, committed: result.committed, verified: result.verified };
+}
+
 /**
  * One agent run in one tab. Control methods come from the panel: reply(text), skip(),
  * resume() after a CAPTCHA/sign-in or a click the user had to make, pause(), stop().
  */
 export class Agent {
-  constructor({ tabId, appId, driver, step, files, notify, report, controllerVersion = 1, startUrl = null }) {
+  constructor({ tabId, appId, driver, step, files, notify, report, controllerVersion = 1, startUrl = null, verifiedCommands = false }) {
     this.trustedOrigins = new Set(startUrl ? [new URL(startUrl).origin] : []);
     this.controllerVersion = controllerVersion;
+    // The platform understands fill_form / options / review and the per-action `result` (committed, verified).
+    this.verifiedCommands = verifiedCommands && controllerVersion === 2;
     /** @type {Promise<void> | null} */
     this.runPromise = null;
     this.messages = [];
@@ -410,6 +547,14 @@ export class Agent {
     this.log = [];
     this.last = null;
     driver.onDetached = () => this.stop("You closed the debugging bar, so the agent stopped.");
+    // The same guarded, verified commands a host assistant gets; this controller never submits.
+    this.runner = new CommandRunner({ driver, policy: {
+      blockers: false, // a CAPTCHA or sign-in is handed to the user before any action runs
+      allowHref: (href, origin) => { if (/^https?:/.test(href)) this.trustedOrigins.add(origin); return true; },
+      isPaused: () => this.paused,
+      files: (kind) => this.files(kind),
+      around: (frames, run) => executing(this.driver, frames, run),
+    } });
   }
 
   emit(extra = {}) {
@@ -439,12 +584,14 @@ export class Agent {
     this.messages.push(text);
     this.controlRevision += 1;
     this.paused = false;
+    this.status = "running";
+    this.emit();
     this.input("message", text);
   }
 
   reply(text) { this.progressGuard.reset(); this.input("reply", text); }
-  skip() { this.input("skip"); }
-  resume() { this.progressGuard.reset(); this.paused = false; this.input("resume"); }
+  skip() { this.progressGuard.reset(); this.input("skip"); }
+  resume() { this.progressGuard.reset(); this.paused = false; this.status = "running"; this.emit(); this.input("resume"); }
   pause() { this.controlRevision += 1; this.paused = true; this.status = "paused"; this.emit(); }
 
   stop(reason = "Stopped. The form is yours to finish.") {
@@ -552,10 +699,36 @@ export class Agent {
         if (this.messages.length) {
           extra = { user_message: this.messages.splice(0).join("\n").slice(0, 4000), inspect_only: true };
           // Explicit editing/continuation instructions may mutate; page questions remain read-only.
-          extra.inspect_only = !/^(fill|set|change|select|choose|upload|attach|click|continue|resume|do |complete|go |open|scroll|replace|update)\b/i.test(extra.user_message);
+          extra.inspect_only = !isEditingInstruction(extra.user_message);
         }
         const stalled = this.controllerVersion === 2 && this.progressGuard.check(observation);
         if (stalled) {
+          if (/without progress/.test(stalled)) {
+            // The page stopped changing: either the same fills keep failing, or the platform keeps answering with
+            // nothing that moves the form. Either way the agent can't get further alone. Ask instead of pausing.
+            const stuck = this.progressGuard.failures;
+            const all = (this.last?.unresolved ?? []).map((u) => String(u?.label ?? u).trim().slice(0, 90));
+            // One field at a time, as the platform asks them: the first, and how many more wait.
+            const open = all.slice(0, 1);
+            const more = all.length > 1 ? ` (and ${all.length - 1} more)` : "";
+            const text = stuck.length
+              ? `I couldn't fill: ${stuck.slice(0, 1).join("")}${stuck.length > 1 ? ` (and ${stuck.length - 1} more)` : ""}. Fill ${stuck.length > 1 ? "them" : "it"} yourself, or type the answer for me, then continue.`
+              : open.length
+                ? `I'm stuck on: ${open[0]}${more}. Fill it on the page yourself, or type the answer for me, then continue.`
+                : "I'm not getting any further on this page. Fill what's left yourself, or type the answer for me, then continue.";
+            this.say(text);
+            this.last = { ...this.last, question: { kind: "blocker", text } };
+            this.status = "waiting";
+            this.emit();
+            const input = await this.waitForUser();
+            if (input.kind === "stop") break;
+            this.progressGuard.reset();
+            this.status = "running";
+            wantScreenshot = true;
+            if (input.kind === "reply") extra = { user_reply: input.text };
+            else if (input.kind !== "message") extra = { resumed: true };
+            continue;
+          }
           this.pause();
           this.say(`${stalled} Paused to avoid spending more tokens. Check the page, then resume when ready.`);
           this.emit({ message: this.log.at(-1) });
@@ -564,6 +737,7 @@ export class Agent {
         const controlRevision = this.controlRevision;
         const res = await this.step({
           ...(this.controllerVersion === 2 ? { controller_version: 2, request_id: crypto.randomUUID() } : {}),
+          ...(this.verifiedCommands ? { verified_commands: true } : {}),
           session_id: sessionId,
           application_id: this.appId,
           observation,
@@ -598,33 +772,30 @@ export class Agent {
               if (this.executedCommands.has(action.command_id)) throw new Error("Duplicate command refused; inspect current page.");
               this.executedCommands.add(action.command_id);
             }
+            let outcome = null;
             if (this.controllerVersion === 2) {
-              const top = frames.find((f) => f.isTop);
-              const fresh = await this.driver.call(top, "freshState", "");
-              if (fresh.document_id !== observation.document_id) throw new Error("Document changed; inspect before acting.");
-            }
-            if (this.controllerVersion === 2 && action.ref) {
-              const target = refs.get(action.ref);
-              const fresh = await this.driver.call(target.frame, "freshState", target.local);
-              if (fresh.document_id !== target.documentId) throw new Error("Document changed; inspect before acting.");
-              if (["type", "select", "check"].includes(action.type) && fresh.user_edited && fresh.value !== target.value) throw new Error("User edited this field; inspect before changing it.");
-            }
-            if (this.controllerVersion === 2 && action.type === "click") {
-              const href = refs.get(action.ref)?.href;
-              if (href && /^https?:/.test(href)) this.trustedOrigins.add(new URL(href).origin);
-            }
-            if (this.controllerVersion === 2 && action.type === "switch_tab") {
-              const tab = observation.tabs?.find((t) => t.id === action.tab_id);
-              if (tab) this.trustedOrigins.add(new URL(tab.url).origin);
-            }
-            if (this.controllerVersion === 2) for (const frame of frames) await this.driver.call(frame, "executionState", true);
-            try {
+              this.runner.observed = observed;
+              if (action.type === "switch_tab") {
+                const tab = observation.tabs?.find((t) => t.id === action.tab_id);
+                if (tab) this.trustedOrigins.add(new URL(tab.url).origin);
+              }
+              if (["fill_form", "options", "review"].includes(action.type)) {
+                outcome = await this.runner.compound(action.type, { fields: action.fields, ref: action.ref }, { observationId: action.observation_id, commandId: action.command_id });
+              } else {
+                // Same document, same control (not edited by the user, not replaced), not a password.
+                await this.runner.guard(action);
+                outcome = await executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files));
+              }
+            } else {
               await execute(this.driver, refs, frames, action, this.files);
-            } finally {
-              if (this.controllerVersion === 2) for (const frame of frames) await this.driver.call(frame, "executionState", false).catch(() => {});
             }
             this.say(action.label);
-            results.push({ index, ok: true, ...(this.controllerVersion === 2 ? { command_id: action.command_id, effect: "Input dispatched; verify committed result in next observation." } : {}) });
+            const shown = this.verifiedCommands && outcome && typeof outcome === "object"
+              ? ["fill_form", "options", "review"].includes(action.type) ? outcome : CommandRunner.shape(action, outcome) : null;
+            const failed = shown?.verified === false || (action.type === "fill_form" && shown && shown.done < shown.requested_count);
+            results.push({ index, ok: !failed, ...(this.controllerVersion === 2 ? { command_id: action.command_id, effect: "Input dispatched; verify committed result in next observation." } : {}),
+              ...(shown ? { result: boundedResult(shown) } : {}), ...(failed ? { detail: "The page did not show the requested value." } : {}) });
+            if (failed) { this.say(`Didn't stick: ${action.label || action.type}`); break; } // later actions assume this one stuck
           } catch (error) {
             this.say(`Couldn't: ${action.label || action.type} (${error.message})`);
             results.push({ index, ...(this.controllerVersion === 2 ? { command_id: action.command_id } : {}), ok: false, detail: String(error.message).slice(0, 290) });
@@ -632,6 +803,11 @@ export class Agent {
           }
           await sleep(ACTION_PAUSE_MS);
         }
+        const looks = (res.actions ?? []).length
+          ? res.actions.every((a) => ["review", "options", "observe", "read_page"].includes(a.type))
+          : Boolean(res.want_screenshot);
+        this.progressGuard.noteReading(looks && results.every((r) => r.ok));
+        this.progressGuard.noteFailures(results.filter((r) => !r.ok).map((r) => String(res.actions?.[r.index]?.label || res.actions?.[r.index]?.type || "a field")));
         if (res.status === "ready_for_review") {
           this.status = "ready";
           this.say("Everything I could fill is done. Review the form and submit it yourself.");

@@ -94,6 +94,19 @@
       .alog { list-style: none; margin: 0; padding: 0; font-size: 13px; }
       .alog li { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
       .alog li:last-child { color: var(--fg); }
+      /* The connected assistant's steps, in the same panel */
+      .xsteps li { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: start; }
+      .xsteps li .ic { text-align: center; font-weight: 700; color: var(--good); }
+      .xsteps li.error, .xsteps li.error .ic { color: var(--bad); }
+      .xsteps li.warn, .xsteps li.warn .ic { color: #b45309; }
+      .xsteps li.running { color: var(--fg); font-weight: 600; }
+      .xsteps .spin { width: 12px; height: 12px; margin-top: 3px; }
+      /* What the user wrote to the connected assistant, and whether it has been read */
+      .notes { margin-top: 10px; }
+      .notes li { color: var(--fg); }
+      .notes small { display: block; color: var(--muted); font-size: 11px; }
+      .notes small.read { color: var(--good); }
+      .note-error { color: var(--bad); font-size: 12px; margin: 6px 2px 0; }
       details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
       .msg { margin: 4px 0 8px; padding: 12px; border-radius: 10px; }
       .msg.bad { background: var(--bad-soft); }
@@ -321,6 +334,68 @@
         el("details", {}, el("summary", {}, "What I did on the page"), log));
     }
 
+    const STEP_ICON = { done: "✓", error: "✕", warn: "!" };
+    function assistantNoteBox() {
+      const input = el("textarea", {
+        class: "note-input", rows: "1", "aria-label": "Message your assistant", maxlength: "500",
+        placeholder: "Message your assistant…",
+      });
+      input.value = view.noteDraft ?? "";
+      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
+      const send = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        view.noteDraft = ""; view.noteError = null; input.value = ""; grow();
+        try { await ctl.send({ type: "assistantControl", action: "note", text }); }
+        catch (error) { view.noteDraft = text; view.noteError = error?.message || "The message was not sent."; }
+        render();
+      };
+      input.addEventListener("input", () => { view.noteDraft = input.value; grow(); });
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation(); // keep the job site's own shortcuts out of the box
+        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); }
+        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
+      });
+      queueMicrotask(grow);
+      return el("div", { class: "composer" },
+        el("div", { class: "box" }, input,
+          btn(icon(SEND), () => void send(), "primary send", { "aria-label": "Send", title: "Send" })),
+        view.noteError ? el("div", { class: "note-error", role: "alert" }, view.noteError)
+          : el("small", { class: "hint" }, "Your assistant reads this with its next step. It can't submit for you."));
+    }
+
+    function assistantSection(a) {
+      const control = (action) => void ctl.send({ type: "assistantControl", action }).catch(() => {});
+      const hero = el("div", { class: "hero" },
+        el("strong", {}, a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form…" : "Your assistant has finished"),
+        el("div", { class: "meta" }, a.paused
+          ? "Edit anything you like. Click Continue and the assistant reads the page again before it goes on."
+          : a.active ? "You still submit. Click Pause for me to type in the form yourself." : "Check the form, then submit it yourself."));
+      const list = el("ul", { class: "alog xsteps", "aria-label": "Assistant steps" });
+      for (const step of (a.steps ?? []).slice(-14)) {
+        list.append(el("li", { class: step.state },
+          step.state === "running" ? el("span", { class: "spin" }) : el("span", { class: "ic" }, STEP_ICON[step.state] ?? ""),
+          el("span", {}, step.text)));
+      }
+      const sent = el("ul", { class: "alog notes", "aria-label": "Your messages" });
+      for (const item of (a.notes ?? []).slice(-6)) {
+        sent.append(el("li", {}, el("span", {}, `You: ${item.text}`),
+          el("small", { class: item.read ? "read" : "" }, item.read ? "✓ Your assistant read this" : "Waiting for your assistant to read this")));
+      }
+      const body = el("div", { class: "body", role: "log" },
+        el("div", { class: "meta", "aria-label": "Form agent driver" }, "Driver: Your assistant (your own AI allowance, no ApplyShortly credits)"),
+        (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step…"),
+        sent.children.length ? sent : null);
+      queueMicrotask(() => { body.scrollTop = body.scrollHeight; });
+      const foot = a.active
+        ? el("div", { class: "f" },
+          a.paused ? btn("Continue", () => control("continue"), "primary") : btn("Pause for me", () => control("pause"), ""),
+          el("span", { class: "grow" }),
+          btn("Stop", () => control("stop"), "ghost"))
+        : null;
+      return [hero, body, ...(a.active ? [assistantNoteBox()] : []), ...(foot ? [foot] : [])];
+    }
+
     function agentControls() {
       return el("div", { class: "f" },
         ctl.agent.status === "paused"
@@ -428,7 +503,15 @@
     function render() {
       ensure();
       // Re-rendering replaces the panel; keep the chat box focused while the user is typing.
-      const typing = root.activeElement?.classList?.contains("composer-input") ? root.activeElement.selectionStart : null;
+      const focused = root.activeElement;
+      const typingIn = ["composer-input", "note-input"].find((name) => focused?.classList?.contains(name));
+      const typing = typingIn ? focused.selectionStart : null;
+      const refocus = () => {
+        if (typing === null) return;
+        const input = root.querySelector(`.${typingIn}`);
+        input?.focus({ preventScroll: true });
+        input?.setSelectionRange(typing, typing);
+      };
       const prevScroll = root.querySelector(".body")?.scrollTop ?? 0;
       const app = ctl.state?.ctx?.app;
       const results = ctl.state?.results ?? [];
@@ -445,7 +528,9 @@
           class: root.querySelector(".pill") ? "pill" : "pill enter", type: "button", title: "Open ApplyShortly autofill",
           onclick: () => setMinimized(false),
         }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
-          view.busy ? el("span", { class: "spin" }) : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
+          view.busy || (view.assistant?.active && !view.assistant.paused) ? el("span", { class: "spin" })
+            : view.assistant ? el("span", { class: "badge" }, view.assistant.paused ? "Paused" : "Done")
+              : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
         mount(wrap);
         return;
       }
@@ -459,10 +544,20 @@
         setMinimized(true);
       });
       p.append(header(title, subtitle));
+      if (view.assistant) {
+        p.append(...assistantSection(view.assistant));
+        wrap.append(p);
+        mount(wrap);
+        refocus();
+        return;
+      }
       if (ctl.agent) {
         const engine = ctl.agent.agent_engine;
         const label = engine === "browser" ? "AI driver" : engine === "classic" ? "Rules first" : "Not reported yet";
         p.append(el("div", { class: "sub", role: "status", "aria-label": "Form agent engine", style: "padding:0 16px 10px" }, `Engine: ${label}`));
+        // Who decides each step. The page tools are the same whoever drives; only the decider and its cost differ.
+        if (engine) p.append(el("div", { class: "sub", "aria-label": "Form agent driver", style: "padding:0 16px 10px" },
+          `Driver: ${engine === "browser" ? "Platform AI (uses ApplyShortly AI)" : "Rules first"}`));
       }
 
       if (view.busy) {
@@ -543,11 +638,7 @@
 
       wrap.append(p);
       mount(wrap);
-      if (typing !== null) {
-        const input = root.querySelector(".composer-input");
-        input?.focus({ preventScroll: true });
-        input?.setSelectionRange(typing, typing);
-      }
+      refocus();
     }
 
     let retryAppId = null;
@@ -562,6 +653,17 @@
         render();
       },
       setRetry(appId) { retryAppId = appId; },
+      /**
+       * The connected assistant's progress (the browser controller): its steps, a Pause for me /
+       * Continue button, and the panel opened on the first update.
+       */
+      assistant(update) {
+        const first = !view.assistant;
+        view.assistant = update;
+        if (!update.active) view.noteError = null;
+        if (first) Object.assign(view, { minimized: false, busy: null, error: null });
+        render();
+      },
       /** Shows the agent's latest update. */
       agent(show) {
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });

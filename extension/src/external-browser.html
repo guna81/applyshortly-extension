@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connected AI assistant</title>
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="external-browser.css">
+</head>
+<body class="page assistant">
+  <main>
+    <div class="hero-head">
+      <img class="mark lg" src="../icons/logo.svg" width="48" height="48" alt="" aria-hidden="true">
+      <div class="grow">
+        <div class="eyebrow">ApplyShortly · Browser connection</div>
+        <h1>Connected AI assistant</h1>
+        <p class="muted">Let ChatGPT, Claude or Codex fill the application tabs you approve.</p>
+      </div>
+    </div>
+
+    <section class="card connection" aria-label="Connection and permissions">
+      <div class="conn-card">
+        <span class="status-dot" id="dot"></span>
+        <div class="grow"><b id="state">Not connected</b><small class="muted">Your assistant’s access to this browser</small></div>
+        <button id="connect" class="primary" type="button">Connect browser</button>
+        <button id="stop" type="button">Disconnect</button>
+      </div>
+      <p class="connection-message muted" id="status" role="status" aria-live="polite"></p>
+      <div class="permissions">
+        <h2>Permissions</h2>
+        <label class="trust-row" for="trust">
+          <span><span class="permission-title">Allow trusted filling</span><small class="muted">Let your assistant start fill-only batches on sites you’ve already allowed.</small></span>
+          <input class="switch" type="checkbox" id="trust">
+        </label>
+        <div class="site-access" id="sites-row">
+          <div><span class="permission-title">Application site access</span><small class="muted">Allow all sites once, or approve new sites as you go.</small><small class="site-state" id="sites-state" role="status"></small></div>
+          <button id="sites" type="button">Allow all sites</button>
+        </div>
+      </div>
+      <div class="safety-note"><span class="safety-icon" aria-hidden="true">✓</span><div><b>You stay in control</b><p>New sites and anything that may submit still ask you first. Submission requires reviewed answers, complete fields and a cancellable countdown.</p></div></div>
+      <p class="reconnect-note muted">This browser reconnects automatically until you disconnect.</p>
+    </section>
+
+    <section class="card attn" id="attn" hidden>
+      <h2>Needs your attention</h2>
+      <div id="batches"></div>
+    </section>
+
+    <section class="card activity-card" aria-label="Live activity">
+      <div class="activity-heading"><h2>Live activity</h2><span class="activity-caption muted">Latest browser updates</span></div>
+      <div id="activity"></div>
+    </section>
+    <footer class="usage-note muted">Uses your assistant’s own usage allowance. No ApplyShortly credits needed.</footer>
+  </main>
+  <script type="module" src="external-browser-ui.js"></script>
+</body>
+</html>
