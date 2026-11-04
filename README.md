@@ -14,7 +14,9 @@ Stop retyping the same details. Fill **job applications** from your saved profil
 
 [Quick start](#quick-start) · [Features](#features) · [How it works](#how-it-works) · [FAQ](#faq) · [Contributing](#contributing)
 
-[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [Visit ApplyShortly](https://applyshortly.com)
+[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [Open ApplyShortly Platform](https://applyshortly.com)
+
+**Platform:** [https://applyshortly.com](https://applyshortly.com)
 
 </div>
 
