@@ -1248,6 +1248,28 @@ test("v2: Draft it for me on the agent's question drafts the answer instead of s
   page.win.close();
 });
 
+test("v2: after the agent finishes, 'I agree, tick it' ticks the box on the page instead of going to the agent", async () => {
+  const form = `<label for="name">Full name</label><input id="name" required>
+    <label><input type="checkbox" id="consent" required> I agree to the privacy policy</label>
+    <button type="submit">Submit application</button>`;
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form,
+    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
+  page.win.document.getElementById("name").value = "Profile name";
+  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "browser", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
+  const quick = () => [...page.shadow().querySelectorAll(".quick button")];
+  await until(() => quick().find((b) => b.textContent === "I agree, tick it"), "the tick chip");
+  const consent = page.win.document.getElementById("consent");
+  assert.equal(consent.checked, false);
+  quick().find((b) => b.textContent === "I agree, tick it").click();
+  await until(() => consent.checked, "ticked on the page");
+  assert.equal(page.sent.some((m) => m.type === "agentControl"), false);
+  page.win.close();
+});
+
 test("the panel stays above and inside a site's modal dialog, and returns when it closes", async () => {
   const page = panelPage(() => ({}));
   page.start();

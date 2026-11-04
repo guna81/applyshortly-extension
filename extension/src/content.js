@@ -515,7 +515,11 @@
   async function askAssistant(text) {
     const message = text.trim();
     if (!message || chat.pending) return;
-    if (agent?.controller_version === 2 && !["failed", "stopped"].includes(agent.status)) {
+    // Once the agent has finished ("ready"), the panel's own quick replies (tick it, show me, I've done it)
+    // act on the page directly, as they do without an agent. Sent to the agent they would arrive as a
+    // read-only chat question and nothing would be ticked.
+    const finishedChip = agent?.status === "ready" && P.LOCAL_REPLIES.includes(message);
+    if (agent?.controller_version === 2 && !["failed", "stopped"].includes(agent.status) && !finishedChip) {
       // The chips on the agent's own question are the panel's: "Draft it for me" drafts the answer
       // and "I'll fill it on the page" skips it. Sent as replies they would be taken as the answer.
       if (agent.status === "waiting" && agent.question?.kind === "question" && (P.isDraftRequest(message) || message === P.ON_PAGE_REPLY || message === P.SKIP_REPLY)) {
