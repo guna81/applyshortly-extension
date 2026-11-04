@@ -1,14 +1,81 @@
-# ApplyShortly Autofill
+<div align="center">
 
-An MIT-licensed Chrome extension that fills job applications from your ApplyShortly profile and answer bank, including multi-step forms, pop-ups and embedded forms with its step-by-step form agent. Review the answers and submit on the employer's site, or explicitly choose Auto apply with a cancellable countdown.
+# ApplyShortly
 
-This repository contains the extension, typed API bridge, tests and packaging tools. It requires a compatible ApplyShortly server and an account; the backend and website are maintained separately. Personal AI keys also require a server because they are stored and used there.
+### Open-source Chrome extension for job application autofill, AI-assisted answers and application tracking.
 
-## Install
+Stop retyping the same details. Fill **job applications** from your saved profile and answers, review the form, then submit with confidence.
 
-Install **Apply Shortly Form Assistant** from the [Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd), then open the extension's settings and sign in with your ApplyShortly account. The store version connects to `https://applyshortly.com` and updates automatically.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](#requirements)
+[![Chrome](https://img.shields.io/badge/built%20for-Chrome-4285F4.svg?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd)
+[![No API key](https://img.shields.io/badge/API%20key-not%20required-success.svg)](#requirements)
+[![Self-hosted](https://img.shields.io/badge/self--hosted-server%20compatible-lightgrey.svg)](#safety-and-privacy)
 
-To develop the extension, build it yourself as below.
+[Quick start](#quick-start) · [Features](#features) · [How it works](#how-it-works) · [FAQ](#faq) · [Contributing](#contributing)
+
+[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [Visit ApplyShortly](https://applyshortly.com)
+
+</div>
+
+![ApplyShortly Chrome extension showing an autofilled job application, screening-answer chat, optional AI drafting and a cancellable Auto apply countdown](docs/images/applyshortly-autofill-auto-apply-demo.jpg)
+
+*Fill your application, answer screening questions in chat, then review and submit. Fictional demonstration; no application is sent.*
+
+---
+
+## What is ApplyShortly?
+
+**Apply Shortly Form Assistant** is an MIT-licensed **job application autofill Chrome extension**. It fills contact details, work experience, education, links and screening questions from your ApplyShortly profile and saved answer bank. Use it as a **job application form filler**, an **AI application assistant**, and a way to track supported applications in your account.
+
+Profile and saved-answer fills are free. Optional AI drafts use ApplyShortly credits or your own supported provider key. A compatible ApplyShortly server and an account are required; the backend and website are maintained separately.
+
+> Today: **autofill, multi-step forms, on-page chat and application tracking**. Review answers and submit yourself, or explicitly choose Auto apply with a cancellable countdown. Form support varies by website.
+
+## Features
+
+- **Job application autofill:** reuse contact details, work history, education, links and saved screening answers.
+- **Multi-step form agent:** step through application pages, pop-ups and embedded forms on pages you start it on.
+- **Answer in chat:** respond to remaining questions or ask the assistant to change an answer in plain words.
+- **Optional AI drafts:** draft open-ended answers from your profile and the job, then review and edit them.
+- **Review progress:** see which fields are filled and which still need your input.
+- **User-chosen Auto apply:** check detected required fields and browser validity, then submit after a three-second countdown with Cancel.
+- **Application tracking:** keep attempts and confirmed submissions in your ApplyShortly account for supported applications.
+- **Open source:** inspect the extension, build it yourself and connect it to a compatible server.
+
+## Quick start
+
+1. [Install Apply Shortly Form Assistant](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) from the Chrome Web Store.
+2. Sign in to [ApplyShortly](https://applyshortly.com), save your profile, résumé and application answers, then check your connection in extension settings.
+3. Open a job application and choose **Fill this form**, or press **Alt+Shift+F**.
+4. Answer remaining questions, review the form and attachments, then submit yourself or choose **Submit for me (Auto apply)**.
+
+Then: **save your profile → open an application → autofill → review → submit.**
+
+The store version connects to `https://applyshortly.com` and updates automatically. For a custom server or local development, see [build from source](#build-from-source).
+
+## How it works
+
+1. **Connect your account:** the extension retrieves your saved ApplyShortly profile and answers.
+2. **Fill the application:** it discovers the form fields and inserts matching details. The form agent helps with multi-step pages and embedded forms.
+3. **Complete missing answers:** answer screening questions in the chat panel or request an optional AI draft.
+4. **Review and submit:** check answers, attachments and consent. Submit on the employer's site, or explicitly choose Auto apply with its checks and cancellable countdown.
+5. **Track the outcome:** an attempt needs verification until an employer receipt or your confirmation establishes that it was submitted.
+
+For account setup, AI settings, screenshots and troubleshooting, see the [extension guide](extension/README.md).
+
+## Requirements
+
+- **Chrome 125 or later** and an ApplyShortly account with a saved profile for autofill.
+- **A compatible ApplyShortly server.** The Chrome Web Store package uses the hosted service. Custom builds can connect to another compatible server.
+- **No personal AI API key required.** Profile and saved-answer fills need no AI key; optional AI features can use ApplyShortly credits. Personal provider keys are optional, and provider charges may apply.
+- **For source builds:** Node.js 22+ and Python 3.10+. End users installing from the store do not need these tools or Claude Code.
+
+## Where data lives
+
+Your profile, saved answers and tracked applications live in your connected ApplyShortly account. The extension keeps its connection credential, preferences and short-lived panel state in extension storage. Credentials and platform requests are handled by the background worker.
+
+Optional AI features process relevant application context through the server and configured provider. Personal AI keys are stored encrypted on the ApplyShortly server; using your own key still requires a server.
 
 ## Build from source
 
@@ -38,6 +105,36 @@ environment, local `.env` and localhost defaults as the npm commands. In Chrome'
 **Load unpacked** picker, select `dist/extension/` inside this repository.
 
 For automatic browser sign-in, the server operator must register the installed extension ID in `EXTENSION_IDS`. Unregistered installations can use user-approved code pairing. See the [extension guide](extension/README.md) for setup, manual connection, AI settings, form behavior and limitations.
+
+## Safety and privacy
+
+Review filled answers, AI drafts and attachments before submission. The form agent never clicks final Submit itself. Auto apply requires your explicit choice, including clicking Apply for a job in ApplyShortly through a one-time link, and uses a cancellable countdown. Sign-in, CAPTCHAs, uploads, consent and unsupported controls may require your input.
+
+Form questions and answers are processed for filling and assistant features. The form agent can send visible page context and transient screenshots to the configured AI provider. Filled information is visible to the employer website before submission; submitting sends the application and attachments to that employer or its application service.
+
+Custom builds support compatible self-hosted servers. This public repository contains the extension and API bridge; the platform backend is maintained separately. See the [privacy disclosure](docs/security/extension-privacy-policy.md), [hosted privacy policy](https://applyshortly.com/privacy) and [Chrome permissions guide](extension/README.md#why-it-asks-for-these-permissions).
+
+## FAQ
+
+**Is ApplyShortly autofill free?**
+
+Yes. Profile and saved-answer fills are free with an ApplyShortly account. Optional AI features use credits or a supported personal provider key; provider charges may apply.
+
+**Do I need an AI API key or Claude Code?**
+
+No. Basic autofill uses saved profile details and answers. Optional AI features can use ApplyShortly credits instead of your own provider key. Claude Code is not required.
+
+**Does it submit applications automatically?**
+
+You can submit yourself or explicitly choose Auto apply, which checks detected required fields and browser validity before a three-second cancellable countdown. Clicking Apply for a job in ApplyShortly also chooses Auto apply through a one-time link. See the [usage guide](extension/README.md#use) for details, including optional Autopilot windows.
+
+**Which application forms does it support?**
+
+It discovers fields on employer application pages and can use its form agent for multi-step and embedded forms. Compatibility depends on the page's controls and layout. See [form limitations](extension/README.md#limits); support is not guaranteed for every applicant tracking system (ATS).
+
+**Can I use a self-hosted server?**
+
+Yes. Build with your compatible server's public origin and connect your account. A server is required even when you use a personal AI key. See [build from source](#build-from-source).
 
 ## Development
 
@@ -69,8 +166,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [LICENSE](LI
 - [Extension guide](extension/README.md): installation, account connection, autofill and Auto apply.
 - [API bridge](extension-bridge/README.md): authentication, contract and event semantics.
 - [Publishing](docs/operations/extension-publishing.md): packaging and release checks.
-- [Store copy](docs/operations/extension-store-auto-apply.md): v0.3.1 description and permissions.
+- [Store copy](docs/operations/extension-store-auto-apply.md): versioned listing descriptions and permission disclosures.
 - [Privacy disclosure](docs/security/extension-privacy-policy.md): extension data processing.
 
-Migrated from platform source commit `7b210d72fb4ec12466aa17df0912e25ac83fbfa7`.
-Only extension-owned files and the generated API subset were transferred; Git history remains separate.
+## Contributing
+
+Issues and pull requests are welcome. Useful improvements include form compatibility, accessibility, clearer review steps and documentation. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and API coordination, and [SECURITY.md](SECURITY.md) for reporting vulnerabilities. Use fictional data in examples and screenshots.
+
+If ApplyShortly helps you, star the repository so others can find it.
+
+## License
+
+[MIT](LICENSE). See [BRANDING.md](BRANDING.md) for name and logo guidance.
+
+<sub>Keywords: job application autofill, Chrome extension, job application form filler, AI application assistant, screening questions, multi-step application forms, application tracking, open-source browser extension.</sub>

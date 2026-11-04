@@ -1,14 +1,57 @@
-# Apply Shortly Form Assistant (Chrome extension, Tier B)
+# ApplyShortly Chrome Extension Guide: Job Application Autofill
 
-Fills job application forms in **your own** Chrome, from your ApplyShortly profile and answer bank.
-Use it for forms the server-side browser can't handle: anything behind your login (Google Forms,
-Workday, iCIMS), CAPTCHAs, and unknown layouts. Like Tier A, **it fills and never submits on its
-own**. You review the form and click the site's own submit button, or choose **⚡ Auto apply**
-(below) to have it click that button for you once every required field is answered.
+**Apply Shortly Form Assistant** fills job application forms in your Chrome browser from your ApplyShortly profile and saved answer bank. Reuse contact details, work history, education and screening answers, get optional AI drafts, and review the completed application before submission.
+
+[Install the Chrome extension](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [ApplyShortly website](https://applyshortly.com) · [Source and developer README](../README.md)
+
+The form agent helps with multi-step applications, pop-ups and embedded forms on pages you start it on, including forms behind your own login. Site support varies, and you handle sign-in, CAPTCHAs, consent and any fields it cannot complete. Submit on the employer's site yourself, or explicitly choose **Auto apply** to submit after required-field checks and a cancellable countdown. The form agent itself never clicks final Submit.
+
+## Quick start: autofill a job application
+
+1. Install the extension from the Chrome Web Store and sign in to [ApplyShortly](https://applyshortly.com).
+2. Save your profile, résumé and application answers in ApplyShortly, then open the extension settings to check your connection.
+3. Open a job application in Chrome. Choose **Fill this form** or press **Alt+Shift+F**.
+4. Answer remaining questions in the on-page panel, review the fields and attachments, and complete any manual steps.
+5. Click the employer's Submit button, or explicitly choose **Submit for me (Auto apply)** and use Cancel during the countdown if needed.
+
+Filling from your profile and saved answers is free with an ApplyShortly account. Optional AI features use credits or a supported personal AI provider key; provider charges may apply.
+
+## Guide contents
+
+- [Extension screenshots](#screenshots)
+- [Installation and account connection](#install)
+- [Build and load an unpacked extension](#build-from-source)
+- [Autofill, form agent and Auto apply](#use)
+- [How saved answers are chosen](#how-answers-are-chosen)
+- [Chrome permissions](#why-it-asks-for-these-permissions)
+- [Form compatibility and limitations](#limits)
+- [External AI assistant control pilot](#external-ai-assistant-control-pilot)
 
 Plain JavaScript with no compilation step. The build packages an allowlisted set of runtime files;
 it never reads `.env` or includes local credentials. An ApplyShortly account is required,
 including when using a personal AI key. See `../extension-bridge/README.md` for the API.
+
+## Screenshots
+
+### Job application autofill and Auto apply
+
+![ApplyShortly filling a fictional Northstar Labs application with saved profile details, a relocation answer, AI draft options and an Auto apply countdown with Cancel](../docs/images/applyshortly-autofill-auto-apply-demo.jpg)
+
+*The demo shows saved details filled into the application, a screening answer supplied in chat, optional AI drafting and the cancellable submission countdown. The company and applicant are fictional; no application is sent.*
+
+### Submission confirmation
+
+![ApplyShortly extension beside an ElevenLabs application receipt, showing Submitted and Saved in ApplyShortly](../docs/images/applyshortly-submission-confirmed.jpg)
+
+*The employer page confirms the submission, and the extension shows the application saved in ApplyShortly.*
+
+### Application tracking
+
+![ApplyShortly application tracking panel beside an Ashby success receipt for an MLOps Engineer application at AHL Saaf AI](../docs/images/applyshortly-application-tracking.jpg)
+
+*The panel reflects a confirmed application and provides an Open ApplyShortly button to return to your account.*
+
+These existing captures show individual application outcomes. Form support varies by website; they do not establish compatibility with every employer or ATS. Employer names and logos identify the pages shown and do not imply endorsement.
 
 ## Install
 
