@@ -1,7 +1,7 @@
 // The verified command layer shared by every controller: the platform's AI driver (loop.js) and a
 // host assistant over the relay (external-browser.js). A controller decides what to do; this runs it
 // against the page, checks the page is still what was observed, and reports what the page shows after.
-import { observeTab, execute, questionChoices } from "./loop.js";
+import { observeTab, execute, questionChoices, comboView } from "./loop.js";
 
 export const MUTATING = ["type", "select", "check", "click", "scroll", "upload"];
 export const FIELD_KINDS = ["type", "select", "check"];
@@ -19,6 +19,33 @@ export const FILL_LIMIT = 25;
  * @property {(kind: string) => Promise<any>} [files] resolves the file for an upload
  * @property {(frames: any[], run: () => Promise<any>) => Promise<any>} [around] wraps a page action
  */
+
+const squash = (text) => String(text ?? "").toLowerCase().replace(/[^\p{L}\p{N}+]+/gu, " ").trim();
+const alike = (a, b) => { const x = squash(a), y = squash(b); return Boolean(x) && Boolean(y) && (x === y || x.includes(y) || y.includes(x)); };
+
+/**
+ * Why a field that verified when it was written no longer shows its value ("" when it still does).
+ * Conservative: a dropdown that reads back empty is not judged, since some widgets keep their choice
+ * out of the input; a phone box is also checked against its country selector's dial code.
+ */
+export function driftOf(result, field, el, elements) {
+  if (result.type === "check") {
+    const want = field.checked === true || field.checked === "true";
+    return Boolean(el.checked) !== want ? `it is now ${el.checked ? "checked" : "unchecked"}` : "";
+  }
+  const shown = String(el.value ?? "");
+  const plain = !el.popup && el.role !== "combobox" && el.role !== "select";
+  const was = result.committed != null && result.committed !== "" ? result.committed : result.requested;
+  if (shown && was && !alike(shown, was)) return `it now shows "${shown.slice(0, 60)}"`;
+  if (!shown && plain && was) return "it is now empty";
+  const wanted = String(field.text ?? "").trim();
+  if (el.input_type === "tel" && /^\+\d/.test(wanted) && el.section) {
+    const country = elements.find((e) => e !== el && e.section === el.section && /country/i.test(e.name ?? ""));
+    const code = /\+(\d{1,4})/.exec(String(country?.value ?? ""))?.[1];
+    if (code && !wanted.replace(/\D/g, "").startsWith(code)) return `the country shows +${code}, not the number's code`;
+  }
+  return "";
+}
 
 export class CommandRunner {
   /** @param {{ driver?: any, policy?: CommandPolicy }} [options] */
@@ -48,8 +75,7 @@ export class CommandRunner {
 
   /** Search-style comboboxes (react-select) are reported as textboxes with popup: true; options can still be read. */
   comboView() {
-    const { observation } = this.observed;
-    return { ...observation, elements: observation.elements.map((e) => (e.popup && e.role === "textbox" ? { ...e, role: "combobox" } : e)) };
+    return comboView(this.observed.observation);
   }
 
   /**
@@ -178,8 +204,46 @@ export class CommandRunner {
         break;
       }
     }
+    if (results.length > 1 && results.some((r) => r.ok)) await this.recheck(results, fields, resolve, commandId).catch(() => {});
     this.observed = null; // the reply reads the whole page once, after every field
     return { type: "fill_form", fields: results, done: results.filter((r) => r.ok).length, requested_count: fields.length };
+  }
+
+  /**
+   * A later field can undo an earlier one: a phone box's country list moved to its first entry by the
+   * next dropdown, say. Each write was verified when it was made, so read the page once more at the end.
+   * A field that no longer shows what it did is written once more; one that still differs is reported
+   * as not stuck, with what it shows, so no controller treats it as done.
+   */
+  async recheck(results, fields, resolve, commandId) {
+    const drift = () => {
+      const found = [];
+      for (const [i, r] of results.entries()) {
+        if (!r.ok) continue;
+        const ref = resolve(r.ref);
+        const el = this.observed.observation.elements.find((e) => e.ref === ref);
+        if (!el) continue;
+        const why = driftOf(r, fields[i], el, this.observed.observation.elements);
+        if (why) found.push({ i, why });
+      }
+      return found;
+    };
+    await this.observe();
+    let moved = drift();
+    if (!moved.length) return;
+    for (const { i } of moved) {
+      if (this.policy.isPaused?.()) break;
+      const r = results[i]; const field = fields[i];
+      try {
+        await this.mutate({ type: r.type, ref: resolve(r.ref), text: field.text == null ? undefined : String(field.text), checked: String(field.checked ?? ""),
+          observation_id: this.observed.observation.observation_id }, `${commandId}:fix${i}`, true);
+      } catch { /* reported below */ }
+      await this.observe();
+    }
+    moved = drift();
+    for (const { i, why } of moved) {
+      results[i] = { ...results[i], ok: false, verified: false, detail: `A later field changed this one: ${why}. Write it again on its own.` };
+    }
   }
 
   /** The choices a dropdown offers, read by opening it (retried once: the first open often races). */
@@ -242,7 +306,14 @@ export class CommandRunner {
       const choices = await questionChoices(this.driver, o.refs, o.frames, this.comboView(), { ref: item.ref }).catch(() => []);
       if (choices.length === 1) needsConfirmation.push({ ref: item.ref, name: item.name, only_option: choices[0] });
     }
+    // Once a file is attached the site swaps its file input for the file's name and a Remove button,
+    // so the attachment would vanish from the fields above: report it from the page text.
+    const hasRemove = o.observation.elements.some((e) => e.role === "button" && /^(remove|delete|clear)\b.*\b(file|attachment|resume|cv|document)/i.test(e.name ?? ""));
+    const attached = hasRemove
+      ? [...new Set(String(o.observation.text ?? "").split(" | ").map((s) => s.trim()).filter((s) => s.length < 120 && /\.(pdf|docx?|txt|rtf|odt)$/i.test(s)))].slice(0, 5)
+      : [];
     return { type: "review", field_count: fields.length, fields: fields.slice(0, 120), missing_required: missing,
+      ...(attached.length ? { attached_files: attached } : {}),
       needs_confirmation: needsConfirmation, errors: o.observation.errors.slice(0, 10),
       note: needsConfirmation.length ? "needs_confirmation: the only option states something the user must confirm. Ask them; do not select it yourself." : undefined };
   }

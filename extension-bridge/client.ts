@@ -162,6 +162,7 @@ export interface AgentElement {
   group?: string | null;
   disabled?: boolean;
   in_viewport?: boolean;
+  popup?: boolean;
   submit_like?: boolean;
 }
 
@@ -253,7 +254,7 @@ export interface AgentStepResponse {
   status: "continue" | "ask_user" | "ready_for_review" | "failed";
   actions: AgentAction[];
   message: string;
-  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null } | null;
+  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null; optional?: boolean } | null;
   focus_query?: string;
   want_screenshot: boolean;
   annotate_screenshot?: boolean;

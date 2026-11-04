@@ -2,13 +2,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
-import { ProgressGuard, Agent, execute, explain, holdsTyped, observeTab, questionChoices, isEditingInstruction } from "../src/agent/loop.js";
+import { ProgressGuard, Agent, execute, explain, holdsTyped, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
 
 test("recovery commands allow edits while questions and negations remain read-only", () => {
-  for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now"]) {
+  for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year"]) {
     assert.equal(isEditingInstruction(text), true, text);
   }
-  for (const text of ["Can you see City?", "What would you change?", "Don't change anything", "Please do not edit", "Do not fill this", "Go away"]) {
+  for (const text of ["Can you see City?", "What would you change?", "Don't change anything", "Please do not edit", "Do not fill this", "Go away", "Why did you pick that?", "Check what? Did you use it?"]) {
     assert.equal(isEditingInstruction(text), false, text);
   }
 });
@@ -212,8 +212,17 @@ test("execute: trusted clicks offset into frames, typing, typeahead picks, uploa
     ["click", 10, 20], ["insertText", "Ada"],
     ["click", 110, 220],
     ["click", 10, 20], ["click", 10, 20], // open the dropdown, then its option
+    ["press", "Escape"], // the list still reports open after the pick: closed, so it cannot crowd later reads
     ["attach-file", "1", "Ada_Resume.pdf"],
   ]);
+});
+
+test("execute: a pick that already closed its list is not followed by Escape", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([]) });
+  driver.pickerOpen = false;
+  const refs = new Map([["0.1", { frame: TOP, local: "1" }]]);
+  await execute(driver, refs, [TOP], { type: "select", ref: "0.1", text: "Bengaluru" }, async () => null);
+  assert.equal(driver.calls.some(([name]) => name === "press"), false);
 });
 
 test("execute: typing commits a matching typeahead suggestion instead of blurring away", async () => {
@@ -299,6 +308,30 @@ test("Agent: acts, asks the user, and stops at review without submitting", async
   assert.deepEqual(driver.calls.at(-1), ["detach"]);
 });
 
+test("Agent: a question about a search-style picker carries its choices, not a draft prompt", async () => {
+  // Greenhouse's dropdowns are textboxes the page marks popup; the card must still offer the choices.
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", popup: true, name: "When are you available to start?" }]) });
+  driver.shown = ["Immediately", "Within 1 week", "Within 2 weeks"];
+  const responses = [
+    { session_id: "s1", status: "ask_user", actions: [], question: { kind: "question", text: "When are you available to start?", ref: "0.1" }, message: "Waiting for your answer" },
+    { session_id: "s1", status: "ready_for_review", actions: [], filled: [], unresolved: [], message: "Ready" },
+  ];
+  const updates = [];
+  let agent;
+  agent = new Agent({
+    tabId: 3, appId: 9, driver,
+    step: async () => responses.shift(),
+    files: async () => null,
+    // Answer once the card is up (reading the picker's choices takes a moment).
+    notify: async (m) => { updates.push(m); if (m.status === "waiting" && m.question) setTimeout(() => agent.reply("Immediately"), 5); },
+    report: async () => {},
+  });
+  await agent.run();
+  const asked = updates.find((u) => u.status === "waiting" && u.question?.kind === "question");
+  assert.deepEqual(asked.question.choices, ["Immediately", "Within 1 week", "Within 2 weeks"]);
+  assert.equal(asked.question.role, "combobox");
+});
+
 test("Agent: stop while waiting ends the run and detaches; closing the debug bar stops it too", async () => {
   const driver = new FakeDriver({ top: () => frameObs([]) });
   let agent;
@@ -355,6 +388,20 @@ test("questionChoices: radio groups, listed options, and a dropdown opened once 
   assert.deepEqual(driver.calls.map((c) => c[0]), ["click", "press"]);
   assert.deepEqual(await ask("0.5"), []);
   assert.deepEqual(await ask(null), []);
+});
+
+test("questionChoices: checkboxes listed under one question are its choices; a lone consent box is not", async () => {
+  const range = "What is your desired annual compensation range?";
+  const driver = new FakeDriver({ top: () => frameObs([
+    { ref: "1", role: "checkbox", name: "4,00,000 to 6,00,000 per year", section: range },
+    { ref: "2", role: "checkbox", name: "21,00,000 to 25,00,000 per year", section: range },
+    { ref: "3", role: "checkbox", name: "I agree to the terms", section: "Legal" },
+    { ref: "4", role: "checkbox", name: "Send me alerts", section: "Legal" },
+  ]) });
+  const { observation, refs, frames } = await observeTab(driver);
+  const ask = (ref) => questionChoices(driver, refs, frames, observation, { kind: "question", text: "?", ref });
+  assert.deepEqual(await ask("g0:0.1"), ["4,00,000 to 6,00,000 per year", "21,00,000 to 25,00,000 per year"]);
+  assert.deepEqual(await ask("0.3"), []); // a heading that asks nothing: confirmations, not choices
 });
 
 test("Agent: a CAPTCHA hands the form to the user without asking the platform, then continues once", async () => {
@@ -503,13 +550,14 @@ test("a stall after failed fills asks the user instead of pausing", async () => 
     report: async () => {},
     step: async () => {
       calls += 1;
-      return { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "bogus", label: "Describe a project", command_id: "c" + calls, observation_id: "stale" }] };
+      return { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "bogus", label: "Filled Describe a project", command_id: "c" + calls, observation_id: "stale" }] };
     },
   });
   await agent.run();
   assert.equal(seen.includes("paused"), false);
   assert.equal(seen.includes("waiting"), true);
-  assert.match(agent.log.join("\n"), /couldn't fill: Describe a project/i);
+  // The card names the field ("Describe a project"), not the verb the action's label starts with.
+  assert.match(agent.log.join("\n"), /couldn't fill: Describe a project\./i);
 });
 
 test("ProgressGuard keeps the labels of the latest failed actions", () => {
@@ -617,6 +665,40 @@ test("no option matches and nothing was typed: the first entry of the open menu 
   assert.equal(driver.calls.some((c) => c[0] === "press" && (c[1] === "ArrowDown" || c[1] === "Enter")), false);
 });
 
+test("a list whose first entry is another option is never committed with Enter (a country list does not filter on +91)", async () => {
+  class Afghanistan extends FakeDriver {
+    async call(frame, name, ...args) {
+      if (name === "matchOption") return { ok: false, options: [] };
+      if (name === "scrollOptions") return false;
+      if (name === "prepareKey") return true;
+      if (name === "typedText") return "+91";
+      if (name === "firstOptionMatches") return { known: true, matches: false }; // the first entry is Afghanistan +93
+      if (name === "committedValue") return "";
+      return super.call(frame, name, ...args);
+    }
+  }
+  const driver = new Afghanistan({ top: () => frameObs([{ ref: "1", role: "combobox", name: "Country" }]) });
+  const { refs, frames } = await observeTab(driver);
+  await assert.rejects(execute(driver, refs, frames, { type: "select", ref: "0.1", text: "India (+91)" }, async () => null), /No option matches/);
+  assert.equal(driver.calls.some((c) => c[0] === "press" && (c[1] === "ArrowDown" || c[1] === "Enter")), false);
+});
+
+test("a dial code is never typed into a country list's search box", async () => {
+  class Slow extends FakeDriver {
+    asked = 0;
+    async call(frame, name, ...args) {
+      if (name === "matchOption") return ++this.asked < 3 ? { ok: false, options: [] } : { ok: true, ref: "opt", text: "India +91" }; // the list renders late
+      if (name === "committedValue") return "+91";
+      return super.call(frame, name, ...args);
+    }
+  }
+  const driver = new Slow({ top: () => frameObs([{ ref: "1", role: "combobox", name: "Country" }]) });
+  const { refs, frames } = await observeTab(driver);
+  const out = await execute(driver, refs, frames, { type: "select", ref: "0.1", text: "+91", command_id: "c" }, async () => null);
+  assert.equal(out.verified, true);
+  assert.equal(driver.calls.some((c) => c[0] === "insertText"), false);
+});
+
 test("a wrong entry that took the Enter is taken back and reported", async () => {
   class Wrong extends FakeDriver {
     shown = "";
@@ -701,4 +783,18 @@ test("a browser dialog is handed to the user and the run resumes when it closes,
   const blocker = updates.find((u) => u.question?.kind === "blocker");
   assert.match(blocker.question.text, /Leave site\?.*Answer it yourself/);
   assert.equal(steps, 1); // one decision, after the dialog closed; none while it was open
+});
+
+test("a busy 409 is sent again with the same request_id; other errors are not", async () => {
+  const sent = [];
+  let calls = 0;
+  const flaky = async (body) => { sent.push(body.request_id); if (++calls === 1) throw new BridgeError(409, "An agent decision is already running."); return { status: "ask_user" }; };
+  assert.deepEqual(await stepWithRetry(flaky, { request_id: "r1" }, [0, 0]), { status: "ask_user" });
+  assert.deepEqual(sent, ["r1", "r1"]);
+  const verify = async () => { throw new BridgeError(409, "Verify the previous submission before autofilling again."); };
+  await assert.rejects(stepWithRetry(verify, { request_id: "r2" }, [0, 0]), /Verify/);
+  let tries = 0;
+  const stuck = async () => { tries++; throw new BridgeError(409, "An agent decision is already running."); };
+  await assert.rejects(stepWithRetry(stuck, { request_id: "r3" }, [0, 0]), /already running/);
+  assert.equal(tries, 3);
 });

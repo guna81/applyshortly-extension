@@ -404,6 +404,18 @@
             "title": "In Viewport",
             "type": "boolean"
           },
+          "input_mode": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Mode"
+          },
           "input_type": {
             "anyOf": [
               {
@@ -436,6 +448,23 @@
             "title": "Options",
             "type": "array"
           },
+          "pattern": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          },
+          "popup": {
+            "default": false,
+            "title": "Popup",
+            "type": "boolean"
+          },
           "ref": {
             "maxLength": 64,
             "minLength": 1,
@@ -462,6 +491,19 @@
             "default": false,
             "title": "Submit Like",
             "type": "boolean"
+          },
+          "text_limit": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Limit"
           },
           "user_edited": {
             "default": false,
@@ -725,6 +767,11 @@
             ],
             "title": "Kind",
             "type": "string"
+          },
+          "optional": {
+            "default": false,
+            "title": "Optional",
+            "type": "boolean"
           },
           "ref": {
             "anyOf": [

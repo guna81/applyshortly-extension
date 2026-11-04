@@ -115,6 +115,10 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Can you open the application form, or give me the direct link?" }).choices), [P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "blocker", text: "Solve the CAPTCHA on the page." })),
     { text: "Solve the CAPTCHA on the page. Tap Continue when it's done.", choices: [P.CONTINUE_REPLY] });
+  // An optional field is offered with "leave it blank", never "I'll fill it on the page".
+  const optional = P.agentAsk({ kind: "question", text: "Source", optional: true, choices: ["Naukri", "LinkedIn"] });
+  assert.deepEqual(plain(optional.choices), ["Naukri", "LinkedIn", P.SKIP_REPLY]);
+  assert.match(optional.question.note, /Optional/);
   assert.equal(P.agentAsk(null), null);
 });
 

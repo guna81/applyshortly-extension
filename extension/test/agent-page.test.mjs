@@ -60,6 +60,7 @@ test("observe: fields, radio options, buttons and the site's errors", () => {
   assert.deepEqual(obs.blockers, []);
   assert.match(obs.text, /Senior Engineer/);
   assert.deepEqual(
+    // In page order, not grouped by kind: questions are asked in the order the form shows them.
     obs.elements.map((e) => [e.role, e.name]),
     [
       ["textbox", "First name"],
@@ -68,8 +69,8 @@ test("observe: fields, radio options, buttons and the site's errors", () => {
       ["radio", "No"],
       ["select", "Country"],
       ["textbox", "Start date"],
-      ["file", "Resume"],
       ["textarea", "Cover note"],
+      ["file", "Resume"],
       ["button", "Save & Continue"],
       ["button", "Submit application"],
       ["link", "Accept cookies"],
@@ -187,6 +188,49 @@ test("actions: options of an open dropdown are matched to the answer", () => {
   const none = plain(A.matchOption(combo.ref, "Tokyo", false));
   assert.equal(none.ok, false);
   assert.deepEqual(none.options, ["Bengaluru, Karnataka, India", "Bengkulu, Indonesia"]);
+});
+
+test("matchOption finds an option past the first hundred of a long list (Greenhouse's country picker)", () => {
+  // 244 react-select options in the owned listbox, India at 101, plus the intl-tel-input copy
+  // of the list (also role=option) that the combobox does not own.
+  const options = Array.from({ length: 244 }, (_, i) => (i === 31 ? "British Indian Ocean Territory +246" : i === 101 ? "India +91" : `Country ${i} +${i + 300}`));
+  const { A, observe } = page(`
+    <label id="l">Country</label>
+    <input id="country" role="combobox" aria-labelledby="l" aria-controls="lb" aria-haspopup="true">
+    <div id="lb" role="listbox">${options.map((t, i) => `<div role="option" id="o${i}">${t}</div>`).join("")}</div>
+    <ul role="listbox">${options.map((t) => `<li role="option">${t.replace(" +", "+")}</li>`).join("")}</ul>`);
+  const combo = observe().elements.find((e) => e.role === "textbox" || e.role === "combobox");
+  for (const answer of ["India +91", "India (+91)", "India"]) {
+    const match = plain(A.matchOption(combo.ref, answer, false));
+    assert.equal(match.ok, true, answer);
+    assert.equal(match.text, "India +91", answer);
+  }
+});
+
+test("observe: a box reports the input mode and pattern it declares, so a value can be shaped to fit", () => {
+  const { observe } = page(`
+    <form>
+      <label for="ph">WhatsApp number *</label><input id="ph" type="text" pattern="[0-9 ]*" inputmode="numeric" required>
+      <label for="nm">Full name</label><input id="nm">
+    </form>`);
+  const phone = byName(observe(), "WhatsApp number");
+  assert.equal(phone.input_mode, "numeric");
+  assert.equal(phone.pattern, "[0-9 ]*");
+  const name = byName(observe(), "Full name");
+  assert.equal(name.input_mode, undefined);
+  assert.equal(name.pattern, undefined);
+});
+
+test("observe: a bare Attach button takes its name from the group around it (Greenhouse's upload fields)", () => {
+  const { observe } = page(`
+    <div role="group" aria-labelledby="upload-label-resume"><div id="upload-label-resume">Resume/CV <span>*</span></div>
+      <div><button type="button">Attach</button><label for="resume">Attach</label><input id="resume" type="file"></div></div>
+    <div role="group" aria-labelledby="upload-label-cover_letter"><div id="upload-label-cover_letter">Cover Letter</div>
+      <div><button type="button">Attach</button><label for="cover_letter">Attach</label><input id="cover_letter" type="file"></div></div>
+    <label for="cv2">Upload your résumé</label><input id="cv2" type="file">`);
+  const files = observe().elements.filter((e) => e.role === "file");
+  assert.deepEqual(files.map((f) => f.name), ["Resume/CV", "Cover Letter", "Upload your résumé"]);
+  assert.deepEqual(files.map((f) => f.required), [true, false, false]);
 });
 
 test("settle resolves once the DOM is quiet", async () => {
@@ -351,6 +395,21 @@ test("Escape is pressed only into an open list, never into the application dialo
   doc.getElementById("c").setAttribute("aria-expanded", "true");
   assert.equal(A.pickerOpen(country, false), true);
   assert.equal(A.prepareKey(country, "Escape"), true);
+});
+
+test("Enter goes only into an open list: on a closed picker it would submit the form (Greenhouse)", () => {
+  const { A, doc, observe } = page(`<form>
+      <label for="c">Country</label><input id="c" role="combobox" aria-expanded="false" aria-controls="list">
+      <div id="list" role="listbox" hidden><div role="option">India +91</div></div>
+      <label for="s">State</label><select id="s"><option>TN</option></select>
+    </form>`);
+  const obs = observe();
+  const country = byName(obs, "Country").ref;
+  assert.equal(A.prepareKey(country, "Enter"), false);
+  assert.equal(A.prepareKey(country, "ArrowDown"), true); // opening it is fine
+  doc.getElementById("c").setAttribute("aria-expanded", "true");
+  assert.equal(A.prepareKey(country, "Enter"), true);
+  assert.equal(A.prepareKey(byName(obs, "State").ref, "Enter"), true); // a native select doesn't submit
 });
 
 test("hasText finds visible text for wait_for, never the panel's own text", () => {
