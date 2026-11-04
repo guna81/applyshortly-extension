@@ -13,6 +13,7 @@
   let submittedReported = false;
   let attemptPending = false;
   let receiptBaseline = [];
+  let attemptUrl = "";
   let autoSubmitting = false; // Auto apply clicked Submit; its own report covers the submit event
   const AUTO_APPLY_DELAY_S = 3;
   // The assistant's conversation for this page; reset with `state`.
@@ -41,7 +42,10 @@
   function report(event, extra = {}) {
     if (state?.appId == null) return Promise.resolve(null);
     if (event === "submission_attempted") {
-      if (!attemptPending) receiptBaseline = receiptTexts();
+      if (!attemptPending) {
+        receiptBaseline = receiptTexts();
+        attemptUrl = location.href;
+      }
       attemptPending = true;
       if (state.ctx?.app) state.ctx.app = { ...state.ctx.app, status: "submission_unconfirmed" };
     }
@@ -139,6 +143,12 @@
       }
       return { field, status: "filled", value: picked, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
     }
+    if (F.isPhoneBox(field)) {
+      // A phone answer counts once the page holds a complete number under the right country.
+      const phone = await F.applyPhone(field, answer.value);
+      if (!phone.ok) return { field, status: "unresolved", reason: phone.reason ?? "Enter your phone number on the page.", suggestion: answer.value };
+      return { field, status: "filled", value: phone.value, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
+    }
     const written = F.apply(field, answer.value, { strict });
     if (written === null) {
       if (field.kind === "text") return { field, status: "unresolved", reason: "This answer doesn't fit the field. Please enter it on the page." };
@@ -146,7 +156,7 @@
     }
     // Give frameworks a task boundary to commit this change before writing the next field.
     // Several onChange handlers can otherwise use the same stale form-state snapshot.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
   }
 
@@ -309,6 +319,21 @@
         state = { appId: ctx.app?.id ?? appId, ctx, resume, results: [] };
         if (!quiet) await report("opened");
       }
+      if (!quiet && state.ctx.controllerVersion === 2) { panel.idle(); return true; }
+      if (quiet && state.ctx.controllerVersion === 2) {
+        // Readback only: the controller owns writes, including during completion refresh.
+        state.results = F.collectFields(document).map((field) => {
+          const native = agent?.filled?.find((f) => f.label === field.label);
+          const answered = answeredNow(field);
+          return { field, status: answered ? native ? "filled" : "done" : field.required ? "unresolved" : "optional",
+            value: currentValue(field), source: native?.source ?? "you",
+            needsReview: native?.needs_review ?? false, manual: field.kind === "checkbox" || field.kind === "file",
+            optional: !field.required, reason: answered ? "" : "Not answered on the page" };
+        });
+        outline();
+        panel.idle();
+        return true;
+      }
       const generate = allowGenerate ?? state.ctx.aiDrafts;
       panel.busy(generate ? "Drafting answers with AI… this can take a few seconds" : "Matching your answers to the form…");
       state.results = merge(state.results, await fillAll({ allowGenerate: generate }));
@@ -430,7 +455,10 @@
     chat.lines.push({ role: "user", text: message });
     chat.draft = "";
     if (q?.kind !== "question") {
-      await agentControl("resume");
+      // The Continue chip on a CAPTCHA/sign-in/click prompt is "done on the page", not an answer:
+      // sent as a reply the platform never sees `resumed`, so a solved CAPTCHA keeps blocking.
+      const done = message === P.ON_PAGE_REPLY || message === P.CONTINUE_REPLY;
+      await agentControl(agent.agent_engine === "browser" && !done ? "reply" : "resume", message);
       return panel.idle();
     }
     if (message === P.ON_PAGE_REPLY) {
@@ -486,6 +514,19 @@
   async function askAssistant(text) {
     const message = text.trim();
     if (!message || chat.pending) return;
+    if (agent?.controller_version === 2 && !["failed", "stopped"].includes(agent.status)) {
+      // The chips on the agent's own question are the panel's: "Draft it for me" drafts the answer
+      // and "I'll fill it on the page" skips it. Sent as replies they would be taken as the answer.
+      if (agent.status === "waiting" && agent.question?.kind === "question" && (P.isDraftRequest(message) || message === P.ON_PAGE_REPLY)) {
+        return replyToAgent(message);
+      }
+      chat.lines.push({ role: "user", text: message });
+      chat.draft = "";
+      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" &&
+        !/^(can|could|do|does|why|what|how|where|is|are|fill|set|change|select|choose|upload|click|continue|open|scroll|update|replace)\b/i.test(message);
+      await agentControl(plainAnswer ? "reply" : "message", message);
+      return panel.idle();
+    }
     if (agent?.status === "waiting") return replyToAgent(message);
     if (agentLive() || !state?.ctx) return; // it's clicking through the form; the box is off meanwhile
     if (P.isNavigateRequest(message)) {
@@ -494,13 +535,14 @@
       return handOff("asked");
     }
     // The question the chat asked last; a plain answer to it is filled here, for free.
-    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant") ?? greeting()).target;
+    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant") ?? greeting())?.target;
     // A draft request drafts the question just asked, required or optional.
     const target = P.isDraftRequest(message) ? asked ?? P.promptTarget(state.results) : P.LOCAL_REPLIES.includes(message) ? P.promptTarget(state.results) : null;
     const answer = target ? null : P.directAnswer(asked, message);
     if (target || answer != null) {
       const turn = chat;
-      if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...greeting() });
+      const hello = turn.lines.length ? null : greeting();
+      if (hello) turn.lines.push({ role: "assistant", greeting: true, ...hello });
       turn.lines.push({ role: "user", text: message });
       turn.draft = "";
       turn.pending = true;
@@ -521,7 +563,8 @@
       return;
     }
     const turn = chat;
-    if (!turn.lines.length) turn.lines.push({ role: "assistant", greeting: true, ...greeting() });
+    const hello = turn.lines.length ? null : greeting();
+    if (hello) turn.lines.push({ role: "assistant", greeting: true, ...hello });
     turn.lines.push({ role: "user", text: message });
     turn.draft = "";
     turn.pending = true;
@@ -536,7 +579,7 @@
       turn.lines.push({ role: "assistant", ...withNext(reply) });
     } catch (err) {
       turn.lines.pop();
-      if (turn.lines.length === 1) turn.lines = [];
+      if (turn.lines.length === 1 && turn.lines[0].greeting) turn.lines = [];
       turn.draft = message;
       panel.toast(`Assistant unavailable: ${err.message}`);
     } finally {
@@ -554,7 +597,7 @@
         if (field.options?.length) return field.options.some((o) => o.el.checked === true);
         return field.el.checked === true || field.el.getAttribute("aria-checked") === "true";
       case "dropdown":
-        return Boolean(F.dropdownValue(field)) && !F.isInvalid(field);
+        return field.phoneFor ? !F.isEmpty(field) : Boolean(F.dropdownValue(field)) && !F.isInvalid(field);
       case "picker": // Google Forms hides "Add file" once the file is attached
         return ![...field.el.querySelectorAll('[role="button"]')].some(
           (b) => /add file|upload/i.test(b.textContent) && b.getClientRects().length > 0,
@@ -649,8 +692,11 @@
 
   // Only explicit receipt evidence in a visible status/heading counts as confirmation.
   // A duplicate-profile error, a submit click, and general job-description text do not.
+  // Sites put the receipt in a heading, a status region or just a paragraph or box, so any
+  // visible short element can carry it; the wording and the "new since the attempt" check decide.
+  const RECEIPT_ELEMENTS = 'h1, h2, h3, p, div, span, [role="status"], [role="alert"], .alert, .toast';
   function receiptTexts() {
-    return [...document.querySelectorAll('h1, h2, [role="status"], [role="alert"], .alert, .toast')].filter((el) => {
+    return [...document.querySelectorAll(RECEIPT_ELEMENTS)].filter((el) => {
       if (!el.getClientRects().length || el.closest('jobhunt-autofill-panel')) return false;
       const text = F.cleanLabel(el.textContent ?? "");
       // Ashby's receipt has a generic heading and company-specific thanks. Require its
@@ -664,10 +710,17 @@
   }
 
   const hasReceipt = () => receiptTexts().some((text) => !receiptBaseline.includes(text));
+  // The site moved to its own confirmation page (a single-page app changes the address without reloading).
+  const reachedConfirmationPage = () => location.href !== attemptUrl && F.confirmationPath(location.href);
 
-  new MutationObserver(() => {
-    if (attemptPending && !submittedReported && hasReceipt()) void markSubmitted("site confirmed application receipt");
-  }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  function checkConfirmation() {
+    if (!attemptPending || submittedReported) return;
+    if (hasReceipt()) void markSubmitted("site confirmed application receipt");
+    else if (reachedConfirmationPage()) void markSubmitted("confirmation page");
+  }
+
+  // A single-page app re-renders when its route changes, so the same observer sees the move.
+  new MutationObserver(checkConfirmation).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 
   async function markSubmitted(note) {
     if (submittedReported || state?.appId == null) return;
@@ -844,6 +897,7 @@
     panel.setRetry(appId);
     await panel.restore(opts);
     if (!(await run(appId)) || agentLive()) return;
+    if (state?.ctx.controllerVersion === 2 && !opts.unattended) return startAgent(opts);
     // A page that needs clicking through (an Apply pop-up, Next steps, a form in a frame): carry on.
     const reason = handedOff ? null : P.navigationNeeded(pageShape());
     // Autopilot's window has nobody watching: no agent (it spends a run's credits behind a debugging
@@ -862,6 +916,12 @@
       const previous = agent;
       agent = msg;
       void agentChanged(previous, msg);
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg?.type === "assistantUpdate") {
+      // The connected assistant is filling this page: show its steps in this panel.
+      panel.assistant({ active: msg.active === true, paused: msg.paused === true, steps: Array.isArray(msg.steps) ? msg.steps : [], notes: Array.isArray(msg.notes) ? msg.notes : [] });
       sendResponse({ ok: true });
       return;
     }

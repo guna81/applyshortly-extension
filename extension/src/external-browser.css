@@ -1,0 +1,49 @@
+/* Scoped to the assistant connection page. */
+.assistant main { max-width: 760px; margin: 56px auto; gap: 20px; padding: 0 24px; }
+.assistant .hero-head { align-items: flex-start; gap: 18px; margin-bottom: 8px; }
+.assistant .mark.lg { margin-top: 4px; }
+.assistant .eyebrow { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 5px; }
+.assistant h1 { font-size: 28px; letter-spacing: -.035em; line-height: 1.25; }
+.assistant .hero-head p { margin-top: 8px; font-size: 14px; }
+.assistant .card { padding: 24px; border-radius: 16px; }
+.assistant .conn-card { gap: 14px; }
+.assistant #state { font-size: 18px; letter-spacing: -.02em; }
+.assistant .conn-card small { margin-top: 2px; }
+.assistant button { min-height: 40px; font-size: 13px; font-weight: 600; }
+.assistant #stop { color: var(--muted); }
+.assistant .connection-message:empty { display: none; }
+.assistant .connection-message { margin: 14px 0 0; font-size: 13px; }
+.assistant .permissions { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; }
+.assistant .permissions h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 16px; }
+.assistant label.trust-row, .assistant .site-access { display: flex; align-items: center; justify-content: space-between; gap: 24px; font-weight: 400; }
+.assistant .permission-title { display: block; font-size: 14px; font-weight: 600; }
+.assistant .permissions small { margin-top: 4px; line-height: 1.6; max-width: 410px; }
+.assistant .trust-row { cursor: pointer; }
+.assistant .trust-row input.switch { flex: 0 0 38px; margin: 0; }
+.assistant .site-access { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 20px; }
+.assistant .site-access button { flex-shrink: 0; }
+.assistant .site-state { color: var(--good); }
+.assistant .site-state:empty { display: none; }
+.assistant .safety-note { display: flex; gap: 10px; margin-top: 24px; padding: 14px 16px; background: var(--accent-soft); border-radius: 10px; font-size: 12px; }
+.assistant .safety-icon { color: var(--accent); font-size: 16px; }
+.assistant .safety-note b { font-size: 12px; }
+.assistant .safety-note p { color: var(--muted); margin: 4px 0 0; line-height: 1.65; }
+.assistant .reconnect-note { margin: 12px 0 0; font-size: 11px; text-align: center; }
+.assistant .activity-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.assistant .activity-heading h2 { margin: 0; font-size: 14px; }
+.assistant .activity-caption { font-size: 11px; }
+.assistant .step { padding: 10px 0; gap: 12px; }
+.assistant .step + .step { border-top: 1px solid var(--line); }
+.assistant .step .text { overflow-wrap: anywhere; }
+.assistant .usage-note { text-align: center; font-size: 11px; padding: 0 12px; }
+.assistant .row-btns { flex-wrap: wrap; }
+@media (max-width: 540px) {
+  .assistant main { margin: 28px auto; padding: 0 16px; gap: 16px; }
+  .assistant h1 { font-size: 23px; }
+  .assistant .hero-head { gap: 12px; }
+  .assistant .mark.lg { width: 40px; height: 40px; }
+  .assistant .card { padding: 18px; }
+  .assistant .conn-card { flex-wrap: wrap; }
+  .assistant .site-access { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .assistant .activity-caption { display: none; }
+}

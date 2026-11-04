@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
+import { externalBrowser } from "../src/external-browser.js";
 import { autoApplyUrl } from '../src/bridge.js';
 import { webcrypto } from 'node:crypto';
 
@@ -27,6 +28,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   };
   class BridgeError extends Error { constructor(status, message) { super(message); this.status = status; } }
   class JobHuntBridge {
+    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "classic" }); }
     aiSettings() { return { mode: "platform", configured: [] }; }
     selectAI(body) { calls.push({ selectedAI: body }); return { ...body, configured: [] }; }
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }
@@ -70,8 +72,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class {} }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -397,6 +399,27 @@ test('the agent runs in the tab it was started from, one tab at a time, and take
   assert.deepEqual(h.calls.filter((c) => c.agentReply || c === 'agentStop'), [{ agentReply: '30 days' }, 'agentStop']);
 });
 
+test('starting the agent ends a run in another tab that is only waiting on the user', async () => {
+  for (const status of ['waiting', 'paused']) {
+    const h = harness();
+    await h.send({ type: 'agentStart', appId: null }, h.content);
+    const first = h.agentInstances[0];
+    first.status = status; // a question, or the user paused it, then moved on to another job
+    const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
+    assert.equal((await h.send({ type: 'agentStart', appId: null }, other)).ok, true, status);
+    assert.equal(first.stopped, true, status);
+    assert.equal(h.agentInstances.length, 2, status);
+  }
+  // A run still filling is never cut off; the refusal names its tab.
+  const h = harness();
+  await h.send({ type: 'agentStart', appId: null }, h.content);
+  const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
+  const refused = await h.send({ type: 'agentStart', appId: null }, other);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /still filling "Engineer at Acme" in another tab/);
+  assert.equal(h.agentInstances[0].stopped, false);
+});
+
 test('the agent refuses an application whose last submission is unconfirmed', async () => {
   const h = harness({ blocked: true });
   const result = await h.send({ type: 'agentStart', tabId: 10, url: 'https://example.com/apply', appId: 7 });
@@ -479,7 +502,7 @@ test('the window closes shortly after Auto apply clicks Submit, and only then', 
   // Not before the pause that lets the site's confirmation show.
   assert.equal((await h.send({ type: 'autoApplied' }, tab)).data, true);
   assert.ok(h.session.autopilotWindow.closeAt > Date.now());
-  assert.equal(h.timers[0].ms, 8000);
+  assert.equal(h.timers[0].ms, 60000);
   await h.alarm();
   assert.equal(h.calls.some((c) => c.removedTab), false);
   h.session.autopilotWindow.closeAt = Date.now() - 1;
@@ -495,6 +518,20 @@ test('a confirmation page also closes the window', async () => {
   const tab = { id: h.content.id, url: 'https://acme.wd5.myworkdayjobs.com/done', tab: { id: 55 } };
   await h.send({ type: 'report', event: { application_id: 21, event: 'submitted' } }, tab);
   assert.ok(h.session.autopilotWindow.closeAt);
+});
+
+test('a confirmation brings the close forward from the wait for it, and an attempt never pushes it back', async () => {
+  const h = harness({ autopilotItem: dueItem });
+  await h.alarm();
+  const tab = { ...h.content, tab: { id: 55, url: 'https://acme.wd5.myworkdayjobs.com/' }, url: 'https://acme.wd5.myworkdayjobs.com/' };
+  await h.send({ type: 'autoApplied' }, tab);
+  const waiting = h.session.autopilotWindow.closeAt;
+  assert.ok(waiting - Date.now() > 50_000);
+  assert.equal((await h.send({ type: 'autoApplied' }, tab)).data, false);
+  assert.equal(h.session.autopilotWindow.closeAt, waiting);
+  h.session['tab:55'] = { appId: 21, origin: 'https://acme.wd5.myworkdayjobs.com', tracked: true };
+  await h.send({ type: 'report', event: { application_id: 21, event: 'submitted' } }, { id: h.content.id, url: tab.url, tab: { id: 55 } });
+  assert.ok(h.session.autopilotWindow.closeAt - Date.now() <= 3_000);
 });
 
 test('a window nothing finished is flagged after 15 minutes and left open', async () => {
@@ -568,4 +605,27 @@ test('sign-out discards pending outcomes so another account cannot receive them'
   h.local.token = 'other-account';
   await h.alarm();
   assert.equal(h.calls.filter((c) => c.report).length, 1);
+});
+
+test('starting another application stops a ready v2 controller before attaching', async () => {
+  const h = harness();
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  const previous = h.agentInstances[0];
+  previous.controllerVersion = 2;
+  previous.status = 'ready';
+  let detached = false;
+  previous.runPromise = Promise.resolve().then(() => { detached = true; });
+  const next = await h.send({ type: 'agentStart', tabId: 12, url: 'https://careers.example.test/another', appId: null });
+  assert.equal(next.ok, true);
+  assert.equal(previous.stopped, true);
+  assert.equal(detached, true);
+  assert.equal(h.agentInstances.length, 2);
+});
+
+test('employer pages cannot connect, approve or control the external browser', async () => {
+  const h = harness();
+  for (const action of ['connect', 'decision', 'reviewAnswers', 'stop']) {
+    const result = await h.send({ type: 'externalBrowser', action }, h.content);
+    assert.equal(result.ok, false);
+  }
 });

@@ -39,6 +39,7 @@
 
     const css = `
       :host { all: initial; }
+      :host::backdrop { display: none !important; }
       .wrap {
         --bg: #ffffff; --fg: #18181b; --muted: #6b7280; --line: #e5e7eb; --soft: #f4f4f6; --hover: #ececf1;
         --accent: #078651; --accent-soft: #ecfdf5; --accent-fg: #ffffff; --good: #15803d; --good-soft: #dcfce7;
@@ -93,6 +94,19 @@
       .alog { list-style: none; margin: 0; padding: 0; font-size: 13px; }
       .alog li { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
       .alog li:last-child { color: var(--fg); }
+      /* The connected assistant's steps, in the same panel */
+      .xsteps li { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: start; }
+      .xsteps li .ic { text-align: center; font-weight: 700; color: var(--good); }
+      .xsteps li.error, .xsteps li.error .ic { color: var(--bad); }
+      .xsteps li.warn, .xsteps li.warn .ic { color: #b45309; }
+      .xsteps li.running { color: var(--fg); font-weight: 600; }
+      .xsteps .spin { width: 12px; height: 12px; margin-top: 3px; }
+      /* What the user wrote to the connected assistant, and whether it has been read */
+      .notes { margin-top: 10px; }
+      .notes li { color: var(--fg); }
+      .notes small { display: block; color: var(--muted); font-size: 11px; }
+      .notes small.read { color: var(--good); }
+      .note-error { color: var(--bad); font-size: 12px; margin: 6px 2px 0; }
       details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
       .msg { margin: 4px 0 8px; padding: 12px; border-radius: 10px; }
       .msg.bad { background: var(--bad-soft); }
@@ -107,7 +121,9 @@
       .toast { margin: 0 12px 10px; padding: 8px 10px; border-radius: 8px; background: var(--fg); color: var(--bg);
         font-size: 13px; animation: in .15s ease-out; }
       .chat { display: flex; flex-direction: column; gap: 8px; min-height: 140px; }
-      .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+      .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+      .bubble.assistant { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
+      .bubble.assistant p { margin: 0; }
       .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
       .bubble.assistant { width: fit-content; max-width: 100%; box-sizing: border-box; background: var(--soft); border-top-left-radius: 4px; }
       .turn { display: flex; align-items: flex-start; gap: 8px; }
@@ -168,11 +184,85 @@
 
     const btn = (label, onclick, cls = "", attrs = {}) => el("button", { class: `b ${cls}`, type: "button", onclick, ...attrs }, label);
 
+    // A site's own modals (LinkedIn's Easy Apply, a native <dialog>, popovers) sit in the browser's
+    // top layer, above any z-index, and a modal <dialog> makes everything outside it inert. So the
+    // panel is a manual popover (top layer), lives inside an open modal dialog (the only place a
+    // modal leaves clickable), and is raised again whenever the site puts something above it.
+    const HOST_STYLE = {
+      position: "fixed", inset: "auto 0 0 auto", width: "0", height: "0", margin: "0", padding: "0",
+      border: "0", background: "transparent", overflow: "visible", display: "block", "z-index": "2147483647",
+    };
+    let watching = false;
+    let raiseQueued = false;
+    let modalTimer = 0;
+
+    function topModal() {
+      let top = null;
+      for (const d of document.querySelectorAll("dialog")) {
+        try { if (d.matches(":modal")) top = d; } catch { /* no :modal support */ }
+      }
+      return top;
+    }
+
+    function raise() {
+      if (!host?.parentNode) return; // closed by the user
+      const home = topModal() ?? document.documentElement;
+      // Moving the host and re-entering the top layer both drop focus: keep the user's typing.
+      const focused = root.activeElement;
+      const caret = typeof focused?.selectionStart === "number" ? focused.selectionStart : null;
+      if (host.parentNode !== home) home.append(host);
+      if (host.inert) host.inert = false;
+      try {
+        if (host.matches(":popover-open")) host.hidePopover();
+        host.showPopover();
+      } catch { /* no Popover API: the z-index still applies */ }
+      if (focused && root.activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+        if (caret != null) focused.setSelectionRange?.(caret, caret);
+      }
+      clearInterval(modalTimer);
+      // A modal removed from the page without closing takes the panel with it: bring it back.
+      if (home !== document.documentElement) {
+        modalTimer = setInterval(() => {
+          if (host.parentNode === home && host.isConnected && topModal() === home) return;
+          if (host.parentNode === home) document.documentElement.append(host);
+          raise();
+        }, 500);
+      }
+    }
+
+    function queueRaise() {
+      if (raiseQueued) return;
+      raiseQueued = true;
+      queueMicrotask(() => { raiseQueued = false; raise(); });
+    }
+
+    function watch() {
+      if (watching) return;
+      watching = true;
+      const ours = (node) => node === host || node?.hasAttribute?.("data-applyshortly-screenshot-refs");
+      // Popovers announce themselves with a toggle event, which doesn't bubble: listen in capture.
+      document.addEventListener("toggle", (e) => {
+        if (!ours(e.target) && /** @type {any} */ (e).newState === "open") queueRaise();
+      }, true);
+      // A dialog opened with showModal() or closed again flips its `open` attribute; a site that
+      // marks the panel inert (focus traps do) gets it undone.
+      new MutationObserver((records) => {
+        if (records.some((r) => (r.target === host && host.inert) || (!ours(r.target) && r.target instanceof HTMLDialogElement))) queueRaise();
+      }).observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["open", "inert"] });
+    }
+
     function ensure() {
       if (host?.isConnected) return;
-      host = document.createElement("jobhunt-autofill-panel");
-      root = host.attachShadow({ mode: "closed" });
+      if (!host) {
+        host = document.createElement("jobhunt-autofill-panel");
+        root = host.attachShadow({ mode: "closed" });
+        host.setAttribute("popover", "manual");
+        for (const [prop, value] of Object.entries(HOST_STYLE)) host.style.setProperty(prop, value, "important");
+      }
       document.documentElement.append(host);
+      watch();
+      raise();
     }
 
     function focusField(field) {
@@ -230,7 +320,10 @@
       if (!ctl.agent) return null;
       const steps = ctl.agent.log ?? [];
       if (agentBusy()) {
-        return el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), ctl.agent.status === "paused" ? "Paused." : steps.at(-1) ?? "Working…");
+        const paused = ctl.agent.status === "paused";
+        // An automatic pause (stalled page, call limit) explains itself in its last log line.
+        const why = paused && /Paused to avoid/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
+        return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), paused ? why : steps.at(-1) ?? "Working…");
       }
       if (agentLive() || !steps.length) return null;
       const log = el("ul", { class: "alog" });
@@ -239,6 +332,68 @@
       return el("div", { class: "activity" },
         review.length ? el("div", { class: "filled" }, "Double-check:", review.map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label.length > 40 ? `${f.label.slice(0, 40)}…` : f.label))) : null,
         el("details", {}, el("summary", {}, "What I did on the page"), log));
+    }
+
+    const STEP_ICON = { done: "✓", error: "✕", warn: "!" };
+    function assistantNoteBox() {
+      const input = el("textarea", {
+        class: "note-input", rows: "1", "aria-label": "Message your assistant", maxlength: "500",
+        placeholder: "Message your assistant…",
+      });
+      input.value = view.noteDraft ?? "";
+      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
+      const send = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        view.noteDraft = ""; view.noteError = null; input.value = ""; grow();
+        try { await ctl.send({ type: "assistantControl", action: "note", text }); }
+        catch (error) { view.noteDraft = text; view.noteError = error?.message || "The message was not sent."; }
+        render();
+      };
+      input.addEventListener("input", () => { view.noteDraft = input.value; grow(); });
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation(); // keep the job site's own shortcuts out of the box
+        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); }
+        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
+      });
+      queueMicrotask(grow);
+      return el("div", { class: "composer" },
+        el("div", { class: "box" }, input,
+          btn(icon(SEND), () => void send(), "primary send", { "aria-label": "Send", title: "Send" })),
+        view.noteError ? el("div", { class: "note-error", role: "alert" }, view.noteError)
+          : el("small", { class: "hint" }, "Your assistant reads this with its next step. It can't submit for you."));
+    }
+
+    function assistantSection(a) {
+      const control = (action) => void ctl.send({ type: "assistantControl", action }).catch(() => {});
+      const hero = el("div", { class: "hero" },
+        el("strong", {}, a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form…" : "Your assistant has finished"),
+        el("div", { class: "meta" }, a.paused
+          ? "Edit anything you like. Click Continue and the assistant reads the page again before it goes on."
+          : a.active ? "You still submit. Click Pause for me to type in the form yourself." : "Check the form, then submit it yourself."));
+      const list = el("ul", { class: "alog xsteps", "aria-label": "Assistant steps" });
+      for (const step of (a.steps ?? []).slice(-14)) {
+        list.append(el("li", { class: step.state },
+          step.state === "running" ? el("span", { class: "spin" }) : el("span", { class: "ic" }, STEP_ICON[step.state] ?? ""),
+          el("span", {}, step.text)));
+      }
+      const sent = el("ul", { class: "alog notes", "aria-label": "Your messages" });
+      for (const item of (a.notes ?? []).slice(-6)) {
+        sent.append(el("li", {}, el("span", {}, `You: ${item.text}`),
+          el("small", { class: item.read ? "read" : "" }, item.read ? "✓ Your assistant read this" : "Waiting for your assistant to read this")));
+      }
+      const body = el("div", { class: "body", role: "log" },
+        el("div", { class: "meta", "aria-label": "Form agent driver" }, "Driver: Your assistant (your own AI allowance, no ApplyShortly credits)"),
+        (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step…"),
+        sent.children.length ? sent : null);
+      queueMicrotask(() => { body.scrollTop = body.scrollHeight; });
+      const foot = a.active
+        ? el("div", { class: "f" },
+          a.paused ? btn("Continue", () => control("continue"), "primary") : btn("Pause for me", () => control("pause"), ""),
+          el("span", { class: "grow" }),
+          btn("Stop", () => control("stop"), "ghost"))
+        : null;
+      return [hero, body, ...(a.active ? [assistantNoteBox()] : []), ...(foot ? [foot] : [])];
     }
 
     function agentControls() {
@@ -250,8 +405,19 @@
         btn("Stop and take over", () => void ctl.agentControl("stop"), "ghost"));
     }
 
+    // Long replies arrive as one block: break on newlines, else after every two sentences.
+    function paragraphs(text) {
+      const blocks = String(text).split(/\n+/).map((p) => p.trim()).filter(Boolean);
+      if (blocks.length > 1 || text.length <= 140) return blocks;
+      const sentences = text.trim().split(/(?<=[.!?])\s+(?=[A-Z])/);
+      const out = [];
+      for (let i = 0; i < sentences.length; i += 2) out.push(sentences.slice(i, i + 2).join(" "));
+      return out;
+    }
+
     function chatView(results) {
-      const greeting = ctl.state?.ctx ? [{ role: "assistant", greeting: true, ...P.assistantGreeting(results) }] : [];
+      const hello = ctl.state?.ctx ? P.assistantGreeting(results) : null;
+      const greeting = hello ? [{ role: "assistant", greeting: true, ...hello }] : [];
       const lines = ctl.chat.lines.length ? ctl.chat.lines : greeting;
       const log = el("div", { class: "chat", "aria-live": "polite" });
       lines.forEach((line, i) => {
@@ -265,7 +431,7 @@
         log.append(el("div", { class: "turn" },
           el("span", { class: "avatar" }, icon(BOT)),
           el("div", { class: "said" },
-            line.text ? el("div", { class: "bubble assistant" }, line.text) : null,
+            line.text ? el("div", { class: "bubble assistant" }, ...paragraphs(line.text).map((t) => el("p", {}, t))) : null,
             line.filled?.length ? el("ul", { class: "filled", "aria-label": "Filled" }, line.filled.map((f) => el("li", { title: f }, icon(CHECK), el("span", {}, f)))) : null,
             q ? el("div", { class: "question" },
               q.step ? el("p", { class: "step" }, q.step) : null,
@@ -300,7 +466,7 @@
     }
 
     function composer() {
-      const busy = agentBusy();
+      const busy = agentBusy() && ctl.agent?.controller_version !== 2;
       const input = el("textarea", {
         class: "composer-input", rows: "1", "aria-label": "Message the agent", disabled: busy,
         placeholder: busy ? "Working on the form… I'll ask here when I need you." : ctl.agent?.status === "waiting" ? "Type your answer…" : "Type your answer, or ask to change one…",
@@ -310,7 +476,7 @@
       input.addEventListener("input", () => { ctl.chat.draft = input.value; grow(); });
       input.addEventListener("keydown", (e) => {
         e.stopPropagation(); // keep the job site's own shortcuts out of the chat box
-        if (e.key === "Escape") setMinimized(true);
+        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); } // not the site's modal too
         else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ctl.askAssistant(input.value); }
       });
       queueMicrotask(grow);
@@ -327,6 +493,9 @@
     function mount(wrap) {
       if (!root.contains(styleEl)) root.replaceChildren(styleEl);
       const old = root.querySelector(".wrap");
+      // The agent reports several times per step, mostly with nothing new to show: keeping the
+      // identical panel avoids restarting its spinner and animations (a visible flicker).
+      if (old && old.outerHTML === wrap.outerHTML) return;
       if (old) old.replaceWith(wrap);
       else root.append(wrap);
     }
@@ -334,7 +503,15 @@
     function render() {
       ensure();
       // Re-rendering replaces the panel; keep the chat box focused while the user is typing.
-      const typing = root.activeElement?.classList?.contains("composer-input") ? root.activeElement.selectionStart : null;
+      const focused = root.activeElement;
+      const typingIn = ["composer-input", "note-input"].find((name) => focused?.classList?.contains(name));
+      const typing = typingIn ? focused.selectionStart : null;
+      const refocus = () => {
+        if (typing === null) return;
+        const input = root.querySelector(`.${typingIn}`);
+        input?.focus({ preventScroll: true });
+        input?.setSelectionRange(typing, typing);
+      };
       const prevScroll = root.querySelector(".body")?.scrollTop ?? 0;
       const app = ctl.state?.ctx?.app;
       const results = ctl.state?.results ?? [];
@@ -351,7 +528,9 @@
           class: root.querySelector(".pill") ? "pill" : "pill enter", type: "button", title: "Open ApplyShortly autofill",
           onclick: () => setMinimized(false),
         }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
-          view.busy ? el("span", { class: "spin" }) : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
+          view.busy || (view.assistant?.active && !view.assistant.paused) ? el("span", { class: "spin" })
+            : view.assistant ? el("span", { class: "badge" }, view.assistant.paused ? "Paused" : "Done")
+              : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
         mount(wrap);
         return;
       }
@@ -359,8 +538,27 @@
       // Slide in only when the panel appears, not on every re-render (agent updates, typing).
       const entering = !root.querySelector(".p");
       const p = el("div", { class: entering ? "p enter" : "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
-      p.addEventListener("keydown", (e) => { if (e.key === "Escape") setMinimized(true); });
+      p.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault(); // inside a site's modal dialog, Escape would close the application too
+        setMinimized(true);
+      });
       p.append(header(title, subtitle));
+      if (view.assistant) {
+        p.append(...assistantSection(view.assistant));
+        wrap.append(p);
+        mount(wrap);
+        refocus();
+        return;
+      }
+      if (ctl.agent) {
+        const engine = ctl.agent.agent_engine;
+        const label = engine === "browser" ? "AI driver" : engine === "classic" ? "Rules first" : "Not reported yet";
+        p.append(el("div", { class: "sub", role: "status", "aria-label": "Form agent engine", style: "padding:0 16px 10px" }, `Engine: ${label}`));
+        // Who decides each step. The page tools are the same whoever drives; only the decider and its cost differ.
+        if (engine) p.append(el("div", { class: "sub", "aria-label": "Form agent driver", style: "padding:0 16px 10px" },
+          `Driver: ${engine === "browser" ? "Platform AI (uses ApplyShortly AI)" : "Rules first"}`));
+      }
 
       if (view.busy) {
         p.append(el("div", { class: "busy", role: "status" }, el("span", { class: "spin" }), view.busy));
@@ -440,11 +638,7 @@
 
       wrap.append(p);
       mount(wrap);
-      if (typing !== null) {
-        const input = root.querySelector(".composer-input");
-        input?.focus({ preventScroll: true });
-        input?.setSelectionRange(typing, typing);
-      }
+      refocus();
     }
 
     let retryAppId = null;
@@ -459,6 +653,17 @@
         render();
       },
       setRetry(appId) { retryAppId = appId; },
+      /**
+       * The connected assistant's progress (the browser controller): its steps, a Pause for me /
+       * Continue button, and the panel opened on the first update.
+       */
+      assistant(update) {
+        const first = !view.assistant;
+        view.assistant = update;
+        if (!update.active) view.noteError = null;
+        if (first) Object.assign(view, { minimized: false, busy: null, error: null });
+        render();
+      },
       /** Shows the agent's latest update. */
       agent(show) {
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });

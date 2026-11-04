@@ -200,12 +200,18 @@
     ].filter(Boolean).join(" ");
   }
 
+  const PAGE_ACTION = /\b(?:links?|urls?|web ?sites?|pages?|tabs?|buttons?|click|open|navigate|sign[- ]?in|log[- ]?in|captcha|upload|attach|tick|untick|check ?box(?:es)?|consent)\b/i;
+  // A question about one of these is answered by choosing or doing, never by drafted text.
+  const TYPED_ROLES = ["textbox", "textarea", "searchbox"];
+
   /** The chat line for the agent waiting on the user: its question, or what to do on the page. */
   function agentAsk(question) {
     if (!question) return null;
     if (question.kind === "question") {
       const choices = (question.choices ?? []).slice(0, MAX_CHOICES);
-      const draft = !choices.length && draftable({ kind: "text", label: question.text });
+      // A request to open a page, link or button is for the user to act on, never an answer to draft.
+      const typed = !question.role || TYPED_ROLES.includes(question.role);
+      const draft = typed && !choices.length && !PAGE_ACTION.test(question.text ?? "") && draftable({ kind: "text", label: question.text });
       return {
         text: "",
         question: { label: question.text, note: draft ? "Type your answer, or I can draft one." : undefined },
@@ -240,7 +246,15 @@
     if (options.length) return options.find((o) => o.toLowerCase() === message.toLowerCase()) ?? null;
     // Editing instructions belong to the assistant, not verbatim in the current answer.
     if (/^(?:please\s+)?(?:set|change|update|correct|replace|use my|fill (?:these|this|the|my))\b/i.test(message.trim())) return null;
-    return row.field.kind === "text" ? message : null;
+    if (row.field.kind !== "text") return null;
+    // A phone/number/email field only takes a value of that shape; anything else (a question
+    // about the page, say) goes to the assistant instead of being typed into the form.
+    const type = String(row.field.el?.type ?? "").toLowerCase();
+    const text = message.trim();
+    if ((row.field.phoneCountry || type === "tel") && !/^\+?[\d\s().-]{6,20}$/.test(text)) return null;
+    if (type === "number" && !/^-?[\d.,\s]+$/.test(text)) return null;
+    if (type === "email" && !/^\S+@\S+\.\S+$/.test(text)) return null;
+    return message;
   }
 
   /**
@@ -303,8 +317,17 @@
     return [...options.filter(hit), ...options.filter((o) => !hit(o))];
   }
 
+  /** A phone number (or its country code) is asked as the number, never as the selector's text. */
+  function phoneLabel(row) {
+    if (row.field.phoneFor) return "Which country code does your phone number use";
+    if (row.field.phoneCountry || row.field.el?.type === "tel") return "What phone number should we use";
+    return null;
+  }
+
   function nextPrompt(results) {
-    const open = openQuestions(results);
+    const all0 = openQuestions(results);
+    // A number and its country selector both open: ask for the number once, with its country code.
+    const open = all0.filter((r) => !(r.field.phoneFor && all0.some((o) => o.field === r.field.phoneFor)));
     if (open.length) {
       const first = open[0];
       const all = likelyFirst((first.field.options ?? []).map((o) => o.text).filter(Boolean), first.suggestion);
@@ -315,7 +338,7 @@
       return {
         text: `${open.length === 1 ? "One question needs" : `${open.length} questions need`} your answer${required ? " before you can submit" : ""}.`,
         question: {
-          label: `${bare(first)}?`,
+          label: `${phoneLabel(first) ?? bare(first)}?`,
           step: first.field.required ? "Required" : undefined,
           note: draft ? "Type your answer, or I can draft one." : all.length > MAX_CHOICES ? "Pick one, or type yours." : undefined,
         },
@@ -344,12 +367,16 @@
     return null;
   }
 
-  /** Opening message and quick replies, like the web app's review assistant. */
+  /**
+   * Opening message and quick replies, like the web app's review assistant: the next question,
+   * else a line about this form's answers, else nothing (a page without questions gets no chat
+   * line; the input's placeholder already says it takes changes).
+   */
   function assistantGreeting(results) {
-    return nextPrompt(results) ?? {
-      text: 'Want to change anything? Tell me, e.g. "set notice period to 60 days", and I\'ll update the fields.',
-      choices: [],
-    };
+    const prompt = nextPrompt(results);
+    if (prompt) return prompt;
+    const n = results.filter((r) => r.status === "filled" && canAssist(r)).length;
+    return n ? { text: `${n === 1 ? "The answer is" : `All ${n} answers are`} filled in. Check the form, and tell me here if one should change.`, choices: [] } : null;
   }
 
   /** A line as the AI reads it: its text, then the question card it asks, if any. */

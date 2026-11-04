@@ -67,7 +67,7 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
 }
 
 async function until(check, label) {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) {
     const value = check();
     if (value && value.length !== 0) return value; // an empty list is not there yet
     await tick(10);
@@ -868,7 +868,8 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
   await until(() => bubbles().filter((t) => /more than one step/.test(t)), "the handoff line");
   assert.ok(!buttons().includes("Fill with the agent"));
 
-  page.message({ type: "agentUpdate", status: "running", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "browser", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
+  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Engine: AI driver"), "session engine badge");
   await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
   assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
   assert.equal(shadow().querySelector(".composer-input").disabled, true);
@@ -1022,6 +1023,37 @@ test('SPA submit clicks sync an attempt, then an explicit receipt syncs confirma
   page.win.close();
 });
 
+test('a receipt in a plain paragraph confirms the attempt, like any site that skips headings and status regions', async () => {
+  const page = panelPage(() => ({}), { form: '<label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'fill');
+  page.win.document.querySelector('button').click();
+  await until(() => page.sent.find((m) => m.event?.event === 'submission_attempted'), 'attempt');
+  page.win.document.body.insertAdjacentHTML('beforeend', '<div class="done"><p>Thanks for applying! We have received your application.</p></div>');
+  await until(() => page.sent.find((m) => m.event?.event === 'submitted'), 'confirmation');
+  assert.equal(page.sent.filter((m) => m.event?.event === 'submitted').length, 1);
+  page.win.close();
+});
+
+test('moving to the site\'s own thank-you page confirms the attempt; a job path that merely contains the word does not', async () => {
+  const page = panelPage(() => ({}), { form: '<label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
+  page.start();
+  await until(() => page.sent.find((m) => m.event?.event === 'filled'), 'fill');
+  page.win.document.querySelector('button').click();
+  await until(() => page.sent.find((m) => m.event?.event === 'submission_attempted'), 'attempt');
+  const route = (path, html) => {
+    page.win.history.pushState({}, '', path);
+    page.win.document.body.insertAdjacentHTML('beforeend', html);
+  };
+  route('/jobs/customer-success-manager/apply', '<p>Saving…</p>');
+  await tick(30);
+  assert.equal(page.sent.some((m) => m.event?.event === 'submitted'), false);
+  route('/jobs/customer-success-manager/apply/thank-you', '<p>Done</p>');
+  await until(() => page.sent.find((m) => m.event?.event === 'submitted'), 'confirmation page');
+  assert.equal(page.sent.filter((m) => m.event?.event === 'submitted').length, 1);
+  page.win.close();
+});
+
 test('a duplicate-profile error and existing receipt text never turn an attempt into Applied', async () => {
   const page = panelPage(() => ({}), { form: '<h2>Thank you for applying</h2><label for="name">Full name</label><input id="name" required><button type="button">Submit</button>' });
   page.start();
@@ -1074,5 +1106,176 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   page.win.document.body.insertAdjacentHTML("beforeend", ashbyReceipt);
   await until(() => page.sent.some((m) => m.event?.event === "submitted"), "Ashby receipt");
   assert.equal(page.sent.filter((m) => m.event?.event === "submitted").length, 1);
+  page.win.close();
+});
+
+for (const [engine, driver] of [["browser", "Driver: Platform AI (uses ApplyShortly AI)"], ["classic", "Driver: Rules first"]]) {
+  test(`agent panel names the driver for the ${engine} engine`, async () => {
+    const page = panelPage(() => ({}), { form: STEP_FORM });
+    page.start();
+    await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
+    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: engine, log: [] });
+    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent driver"]')].filter((el) => el.textContent === driver), "driver label");
+    page.win.close();
+  });
+}
+
+for (const [engine, label] of [["classic", "Rules first"], [undefined, "Not reported yet"]]) {
+  test(`agent panel shows ${label} from session metadata`, async () => {
+    const page = panelPage(() => ({}), { form: STEP_FORM });
+    page.start();
+    await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
+    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: engine, log: [] });
+    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === `Engine: ${label}`), "engine label");
+    page.win.close();
+  });
+}
+
+test("the connected assistant's steps open in this same panel, with Pause for me and Continue", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
+  page.handlers.assistantControl = () => true;
+  // Nothing was started here: the first update opens the panel by itself.
+  assert.equal(page.shadow(), undefined);
+  page.message({ type: "assistantUpdate", active: true, paused: false, steps: [
+    { id: "1", text: "Typing into “First Name” (1 of 15)", state: "done" },
+    { id: "2", text: "Choosing an option in “City” (2 of 15)", state: "running" },
+  ] });
+  await until(() => /Your assistant is filling this form/.test(page.shadow()?.textContent ?? ""), "assistant headline");
+  const text = page.shadow().textContent;
+  assert.match(page.shadow().querySelector('[aria-label="Form agent driver"]').textContent, /^Driver: Your assistant/);
+  assert.match(text, /Typing into “First Name” \(1 of 15\)/);
+  assert.match(text, /Choosing an option in “City” \(2 of 15\)/);
+  assert.equal(page.shadow().querySelector(".composer-input"), null, "no chat box while the assistant drives");
+  const button = (label) => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === label);
+  button("Pause for me").click();
+  await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "pause"), "pause sent");
+  page.message({ type: "assistantUpdate", active: true, paused: true, steps: [{ id: "3", text: "You paused the assistant. Edit the form freely", state: "warn" }] });
+  await until(() => /Paused: the form is yours/.test(page.shadow().textContent), "paused headline");
+  button("Continue").click();
+  await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "continue"), "continue sent");
+  page.message({ type: "assistantUpdate", active: false, paused: false, steps: [{ id: "4", text: "Released the application tab", state: "done" }] });
+  await until(() => /Your assistant has finished/.test(page.shadow().textContent), "finished headline");
+  assert.equal(button("Pause for me"), undefined, "no controls once it has finished");
+  page.win.close();
+});
+
+test("the user can message the connected assistant from the panel and sees when it was read", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
+  let refuse = null;
+  page.handlers.assistantControl = (msg) => { if (refuse) throw new Error(refuse); return true; };
+  const update = (extra = {}) => page.message({ type: "assistantUpdate", active: true, paused: false, steps: [{ id: "1", text: "Typing into “First Name” (1 of 15)", state: "running" }], notes: [], ...extra });
+  update();
+  await until(() => page.shadow()?.querySelector(".note-input"), "message box");
+  assert.equal(page.shadow().querySelector(".composer-input"), null, "the agent chat box stays hidden");
+  const input = () => page.shadow().querySelector(".note-input");
+  input().value = "Use my work email please";
+  input().dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  update({ steps: [{ id: "2", text: "Choosing an option in “City” (2 of 15)", state: "running" }] }); // a re-render keeps what was typed
+  assert.equal(input().value, "Use my work email please");
+  input().dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  const note = await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "note"), "note sent");
+  assert.equal(note.text, "Use my work email please");
+  assert.equal(input().value, "", "the box is cleared once sent");
+  update({ notes: [{ id: "n1", text: "Use my work email please", read: false }] });
+  await until(() => /You: Use my work email please/.test(page.shadow().textContent) && /Waiting for your assistant to read this/.test(page.shadow().textContent), "waiting line");
+  update({ notes: [{ id: "n1", text: "Use my work email please", read: true }] });
+  await until(() => /Your assistant read this/.test(page.shadow().textContent), "read receipt");
+  // A refused message comes back into the box with the reason.
+  refuse = "Your assistant has no approved application open right now.";
+  input().value = "Second try";
+  input().dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  input().dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => /no approved application/.test(page.shadow().textContent), "refusal shown");
+  assert.equal(input().value, "Second try");
+  // Once the assistant has finished there is nobody to write to.
+  update({ active: false });
+  await until(() => /Your assistant has finished/.test(page.shadow().textContent), "finished");
+  assert.equal(input(), null);
+  page.win.close();
+});
+
+test("browser manual handoff sends page questions back to the browser controller", async () => {
+  const page = panelPage(() => { throw new Error("text-only assistant must not receive the question"); }, { form: STEP_FORM });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "browser", appId: 5, log: [], question: { kind: "click", text: "Please inspect the page." } });
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "Can you see the City field?";
+  input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply"), "page question delivered to browser");
+  assert.equal(page.sent.find((m) => m.type === "agentControl" && m.action === "reply").text, "Can you see the City field?");
+});
+
+test("v2 starts the controller before filling and accepts page questions while running", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
+    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    suggest: () => { throw new Error("deterministic filler must not run"); },
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
+  assert.equal(page.win.document.getElementById("name").value, "");
+  page.message({ type: "agentUpdate", status: "running", controller_version: 2, agent_engine: "browser", appId: 5, log: [] });
+  const input = page.shadow().querySelector(".composer-input");
+  assert.equal(input.disabled, false);
+  input.value = "Can you see City?";
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "question queued in controller");
+  assert.equal(page.sent.filter((m) => m.type === "assist").length, 0);
+  page.win.document.getElementById("name").value = "Verified name";
+  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "browser", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
+  await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /been through/.test(b.textContent)), "readback refresh");
+  assert.equal(page.win.document.getElementById("name").value, "Verified name");
+  assert.equal(page.sent.filter((m) => m.type === "suggest").length, 0);
+});
+
+test("v2: Draft it for me on the agent's question drafts the answer instead of sending the chip text", async () => {
+  const asked = "5. Where do you see yourself in the next 5 years, in terms of your career goal?";
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
+    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => (msg.allowGenerate ? { answer: "I want to lead an AI platform team.", source: "generated", needs_review: true } : { answer: null }),
+  });
+  page.start();
+  await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
+  page.message({ type: "agentUpdate", status: "waiting", controller_version: 2, agent_engine: "browser", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal" } });
+  const quick = () => [...page.shadow().querySelectorAll(".quick button")];
+  await until(() => quick().filter((b) => b.textContent === "Draft it for me"), "the draft chip on a single question");
+  quick().find((b) => b.textContent === "Draft it for me").click();
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply" && m.text === "I want to lead an AI platform team."), "the draft goes to the agent");
+  assert.ok(!page.sent.some((m) => m.type === "agentControl" && /draft it/i.test(m.text ?? "")));
+  page.win.close();
+});
+
+test("the panel stays above and inside a site's modal dialog, and returns when it closes", async () => {
+  const page = panelPage(() => ({}));
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "panel");
+  const doc = page.win.document;
+  const host = doc.querySelector("jobhunt-autofill-panel");
+  // A manual popover in the browser's top layer, styled so page CSS for [popover] can't move it.
+  assert.equal(host.getAttribute("popover"), "manual");
+  assert.equal(host.style.getPropertyPriority("position"), "important");
+  assert.equal(host.parentNode, doc.documentElement);
+  // jsdom has no top layer: a dialog with `open` stands in for showModal().
+  const modal = doc.createElement("dialog");
+  const matches = modal.matches.bind(modal);
+  modal.matches = (sel) => (sel === ":modal" ? modal.hasAttribute("open") : matches(sel));
+  doc.body.append(modal);
+  modal.setAttribute("open", "");
+  await until(() => host.parentNode === modal, "panel inside the modal");
+  // A focus trap marking the panel inert is undone.
+  host.inert = true;
+  host.setAttribute("inert", "");
+  await tick(20);
+  assert.equal(host.inert, false);
+  modal.removeAttribute("open");
+  await until(() => host.parentNode === doc.documentElement, "panel back on the page");
+  // A modal removed while open takes the panel with it; it comes back.
+  modal.setAttribute("open", "");
+  await until(() => host.parentNode === modal, "panel inside the modal again");
+  modal.remove();
+  await until(() => host.isConnected && host.parentNode === doc.documentElement, "panel restored after removal");
   page.win.close();
 });

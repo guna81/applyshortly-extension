@@ -15,6 +15,18 @@
             ],
             "title": "Checked"
           },
+          "command_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
           "direction": {
             "anyOf": [
               {
@@ -29,6 +41,21 @@
               }
             ],
             "title": "Direction"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AgentFieldWrite"
+                },
+                "maxItems": 25,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
           },
           "file": {
             "anyOf": [
@@ -72,7 +99,7 @@
           "ms": {
             "anyOf": [
               {
-                "maximum": 5000.0,
+                "maximum": 10000.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -81,6 +108,18 @@
               }
             ],
             "title": "Ms"
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
           },
           "ref": {
             "anyOf": [
@@ -93,6 +132,17 @@
             ],
             "title": "Ref"
           },
+          "tab_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tab Id"
+          },
           "text": {
             "anyOf": [
               {
@@ -104,6 +154,17 @@
             ],
             "title": "Text"
           },
+          "to_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Ref"
+          },
           "type": {
             "enum": [
               "click",
@@ -113,10 +174,39 @@
               "upload",
               "press",
               "scroll",
-              "wait"
+              "wait",
+              "switch_tab",
+              "hover",
+              "drag",
+              "wait_for",
+              "fill_form",
+              "options",
+              "review"
             ],
             "title": "Type",
             "type": "string"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
           }
         },
         "required": [
@@ -128,6 +218,18 @@
       "AgentActionResult": {
         "additionalProperties": false,
         "properties": {
+          "command_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
           "detail": {
             "anyOf": [
               {
@@ -140,6 +242,18 @@
             ],
             "title": "Detail"
           },
+          "effect": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect"
+          },
           "index": {
             "maximum": 50.0,
             "minimum": 0.0,
@@ -149,6 +263,18 @@
           "ok": {
             "title": "Ok",
             "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
           }
         },
         "required": [
@@ -158,10 +284,57 @@
         "title": "AgentActionResult",
         "type": "object"
       },
+      "AgentCapabilities": {
+        "properties": {
+          "agent_engine": {
+            "enum": [
+              "classic",
+              "browser"
+            ],
+            "title": "Agent Engine",
+            "type": "string"
+          },
+          "controller_version": {
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Controller Version",
+            "type": "integer"
+          },
+          "verified_commands": {
+            "default": false,
+            "title": "Verified Commands",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "controller_version",
+          "agent_engine"
+        ],
+        "title": "AgentCapabilities",
+        "type": "object"
+      },
       "AgentElement": {
         "additionalProperties": false,
         "description": "One interactive element. `ref` is the driver's handle for it (a CDP backend node id with\nits frame) and is only meaningful within the observation that carried it.",
         "properties": {
+          "bounds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bounds"
+          },
           "checked": {
             "anyOf": [
               {
@@ -190,6 +363,12 @@
             ],
             "title": "Error"
           },
+          "frame": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Frame",
+            "type": "string"
+          },
           "group": {
             "anyOf": [
               {
@@ -201,6 +380,24 @@
               }
             ],
             "title": "Group"
+          },
+          "href": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Href"
+          },
+          "identity": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Identity",
+            "type": "string"
           },
           "in_viewport": {
             "default": true,
@@ -255,9 +452,20 @@
             "title": "Role",
             "type": "string"
           },
+          "section": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Section",
+            "type": "string"
+          },
           "submit_like": {
             "default": false,
             "title": "Submit Like",
+            "type": "boolean"
+          },
+          "user_edited": {
+            "default": false,
+            "title": "User Edited",
             "type": "boolean"
           },
           "value": {
@@ -278,6 +486,46 @@
           "role"
         ],
         "title": "AgentElement",
+        "type": "object"
+      },
+      "AgentFieldWrite": {
+        "additionalProperties": false,
+        "description": "One entry of a fill_form: a control and what to put in it (typed, chosen, or checked).",
+        "properties": {
+          "checked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked"
+          },
+          "ref": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "AgentFieldWrite",
         "type": "object"
       },
       "AgentFilled": {
@@ -311,6 +559,12 @@
       "AgentObservation": {
         "additionalProperties": false,
         "properties": {
+          "accessibility": {
+            "default": "",
+            "maxLength": 16000,
+            "title": "Accessibility",
+            "type": "string"
+          },
           "blockers": {
             "items": {
               "enum": [
@@ -321,6 +575,15 @@
             },
             "maxItems": 2,
             "title": "Blockers",
+            "type": "array"
+          },
+          "coverage": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Coverage",
             "type": "array"
           },
           "dialog": {
@@ -334,6 +597,18 @@
               }
             ],
             "title": "Dialog"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
           },
           "elements": {
             "items": {
@@ -357,6 +632,18 @@
             "title": "More Below",
             "type": "boolean"
           },
+          "observation_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
+          },
           "screenshot": {
             "anyOf": [
               {
@@ -369,9 +656,30 @@
             ],
             "title": "Screenshot"
           },
+          "screenshot_scale": {
+            "default": 1.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 4.0,
+            "title": "Screenshot Scale",
+            "type": "number"
+          },
+          "step_label": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Step Label",
+            "type": "string"
+          },
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTab"
+            },
+            "maxItems": 10,
+            "title": "Tabs",
+            "type": "array"
+          },
           "text": {
             "default": "",
-            "maxLength": 4000,
+            "maxLength": 12000,
             "title": "Text",
             "type": "string"
           },
@@ -385,6 +693,20 @@
             "maxLength": 2000,
             "title": "Url",
             "type": "string"
+          },
+          "viewport_height": {
+            "default": 0,
+            "maximum": 20000.0,
+            "minimum": 0.0,
+            "title": "Viewport Height",
+            "type": "integer"
+          },
+          "viewport_width": {
+            "default": 0,
+            "maximum": 20000.0,
+            "minimum": 0.0,
+            "title": "Viewport Width",
+            "type": "integer"
           }
         },
         "required": [
@@ -441,13 +763,39 @@
             ],
             "title": "Application Id"
           },
+          "controller_version": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Controller Version",
+            "type": "integer"
+          },
           "in_user_tab": {
             "default": true,
             "title": "In User Tab",
             "type": "boolean"
           },
+          "inspect_only": {
+            "default": false,
+            "title": "Inspect Only",
+            "type": "boolean"
+          },
           "observation": {
             "$ref": "#/components/schemas/AgentObservation"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
           },
           "results": {
             "items": {
@@ -479,6 +827,18 @@
             "title": "Skip Question",
             "type": "boolean"
           },
+          "user_message": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Message"
+          },
           "user_reply": {
             "anyOf": [
               {
@@ -490,6 +850,11 @@
               }
             ],
             "title": "User Reply"
+          },
+          "verified_commands": {
+            "default": false,
+            "title": "Verified Commands",
+            "type": "boolean"
           }
         },
         "required": [
@@ -506,6 +871,35 @@
             },
             "title": "Actions",
             "type": "array"
+          },
+          "agent_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "classic",
+                  "browser"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Engine"
+          },
+          "annotate_screenshot": {
+            "default": false,
+            "title": "Annotate Screenshot",
+            "type": "boolean"
+          },
+          "controller_version": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Controller Version",
+            "type": "integer"
           },
           "failure_code": {
             "anyOf": [
@@ -525,10 +919,27 @@
             "title": "Filled",
             "type": "array"
           },
+          "focus_query": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Focus Query",
+            "type": "string"
+          },
           "message": {
             "default": "",
             "title": "Message",
             "type": "string"
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
           },
           "question": {
             "anyOf": [
@@ -577,6 +988,31 @@
           "status"
         ],
         "title": "AgentStepResponse",
+        "type": "object"
+      },
+      "AgentTab": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "title": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2000,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url"
+        ],
+        "title": "AgentTab",
         "type": "object"
       },
       "AnswerSuggestionOut": {
@@ -706,6 +1142,85 @@
           "reply"
         ],
         "title": "AssistantResponse",
+        "type": "object"
+      },
+      "AttemptBody": {
+        "properties": {
+          "application_id": {
+            "title": "Application Id",
+            "type": "integer"
+          },
+          "new_answers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "New Answers",
+            "type": "object"
+          }
+        },
+        "required": [
+          "application_id",
+          "new_answers"
+        ],
+        "title": "AttemptBody",
+        "type": "object"
+      },
+      "ConfirmBody": {
+        "properties": {
+          "application_id": {
+            "title": "Application Id",
+            "type": "integer"
+          },
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "application_id",
+          "confirmed"
+        ],
+        "title": "ConfirmBody",
+        "type": "object"
+      },
+      "Decision": {
+        "properties": {
+          "approve": {
+            "title": "Approve",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approve"
+        ],
+        "title": "Decision",
+        "type": "object"
+      },
+      "DeviceBody": {
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "resume_device_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Device Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DeviceBody",
         "type": "object"
       },
       "ExtensionAIIn": {
@@ -1543,6 +2058,21 @@
         "title": "Link",
         "type": "object"
       },
+      "NoteBody": {
+        "properties": {
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "NoteBody",
+        "type": "object"
+      },
       "ProviderKeyIn": {
         "additionalProperties": false,
         "properties": {
@@ -1590,6 +2120,25 @@
           "model"
         ],
         "title": "ProviderKeyStatus",
+        "type": "object"
+      },
+      "ResultBody": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "title": "ResultBody",
         "type": "object"
       },
       "ValidationError": {
@@ -1690,6 +2239,55 @@
           }
         },
         "summary": "Account",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/agent/capabilities": {
+      "get": {
+        "operationId": "extensionAgentCapabilities",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentCapabilities"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capabilities",
         "tags": [
           "extension"
         ]
@@ -2417,6 +3015,546 @@
         "summary": "Autopilot Next",
         "tags": [
           "extension"
+        ]
+      }
+    },
+    "/api/extension/browser/devices": {
+      "post": {
+        "operationId": "register_api_extension_browser_devices_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Register Api Extension Browser Devices Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/devices/{device_id}/batches/{batch_id}/attempt": {
+      "post": {
+        "operationId": "attempt_api_extension_browser_devices__device_id__batches__batch_id__attempt_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttemptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Attempt Api Extension Browser Devices  Device Id  Batches  Batch Id  Attempt Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attempt",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/devices/{device_id}/batches/{batch_id}/confirmation": {
+      "post": {
+        "operationId": "confirm_api_extension_browser_devices__device_id__batches__batch_id__confirmation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Confirm Api Extension Browser Devices  Device Id  Batches  Batch Id  Confirmation Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/devices/{device_id}/batches/{batch_id}/decision": {
+      "post": {
+        "operationId": "decide_api_extension_browser_devices__device_id__batches__batch_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Decision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Decide Api Extension Browser Devices  Device Id  Batches  Batch Id  Decision Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/devices/{device_id}/batches/{batch_id}/note": {
+      "post": {
+        "description": "A message the user typed in the page panel, kept until the assistant's next tool reply.",
+        "operationId": "note_api_extension_browser_devices__device_id__batches__batch_id__note_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Note Api Extension Browser Devices  Device Id  Batches  Batch Id  Note Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Note",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/devices/{device_id}/commands/{command_id}/result": {
+      "post": {
+        "operationId": "result_api_extension_browser_devices__device_id__commands__command_id__result_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Result Api Extension Browser Devices  Device Id  Commands  Command Id  Result Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Result",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/devices/{device_id}/poll": {
+      "get": {
+        "description": "Batches and queued commands for the device.\n\nWith ``wait`` the answer is held back (up to a few seconds) until a command is queued, so the\nextension picks one up the moment the assistant sends it instead of on its next tick.",
+        "operationId": "poll_api_extension_browser_devices__device_id__poll_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wait",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Wait",
+              "type": "number"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Poll Api Extension Browser Devices  Device Id  Poll Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Poll",
+        "tags": [
+          "extension-browser"
         ]
       }
     },

@@ -159,14 +159,18 @@ test("actions: clickable refuses the final submit; native selects, dates and upl
   assert.equal(A.focusForTyping(ref("Name")).mode, "keys");
 
   const b64 = Buffer.from("%PDF-1.4").toString("base64");
-  assert.deepEqual(plain(A.attach(ref("Resume"), b64, "Ada_Resume.pdf", "application/pdf")), { ok: true, value: "Ada_Resume.pdf" });
+  assert.deepEqual(plain(await A.attach(ref("Resume"), b64, "Ada_Resume.pdf", "application/pdf")), { ok: true, value: "Ada_Resume.pdf" });
   assert.deepEqual(plain(A.state(ref("Resume"))), { value: "Ada_Resume.pdf" });
   // A drop zone with no file input gets the file as a drop.
   const drop = doc.getElementById("drop");
   drop.setAttribute("data-applyshortly-ref", "drop");
+  // A zone that ignores the drop shows nothing: reported, never claimed as attached.
+  const ignored = await A.attach("drop", b64, "Ada_Resume.pdf", "application/pdf");
+  assert.equal(ignored.ok, false);
+  assert.match(ignored.detail, /didn't take the file/);
   let dropped = null;
-  drop.addEventListener("drop", (e) => { dropped = e.dataTransfer.files[0].name; });
-  assert.equal(A.attach("drop", b64, "Ada_Resume.pdf", "application/pdf").ok, true);
+  drop.addEventListener("drop", (e) => { dropped = e.dataTransfer.files[0].name; drop.append(` ${dropped}`); });
+  assert.equal((await A.attach("drop", b64, "Ada_Resume.pdf", "application/pdf")).ok, true);
   assert.equal(dropped, "Ada_Resume.pdf");
 });
 
@@ -209,6 +213,64 @@ test("matchOption finds a plain list that appeared after noteShown, when nothing
   assert.equal(doc.querySelector(`[data-applyshortly-ref="${match.ref}"]`).textContent, "Mr.");
 });
 
+test("observe lists disabled dependent fields as disabled, so the planner waits for them", () => {
+  const { observe } = page(`
+    <label for="co">Country</label><input id="co">
+    <label for="st">State / Region</label><input id="st" disabled>
+    <label for="ct">City / Town</label><input id="ct" aria-disabled="true">`);
+  const obs = observe();
+  const country = byName(obs, "Country");
+  const state = byName(obs, "State / Region");
+  const city = byName(obs, "City / Town");
+  assert.equal(country.disabled, false);
+  assert.equal(state.disabled, true);
+  assert.equal(state.role, "textbox");
+  assert.equal(city.disabled, true);
+  // Disabled entries follow the fillable ones, and never duplicate them.
+  assert.ok(obs.elements.indexOf(state) > obs.elements.indexOf(country));
+  assert.equal(obs.elements.filter((e) => e.name === "Country").length, 1);
+  // Once enabled, the field is a normal fillable element again.
+  const { observe: observeEnabled } = page(`<label for="st">State / Region</label><input id="st">`);
+  assert.equal(byName(observeEnabled(), "State / Region").disabled, false);
+});
+
+test("typedSuggestion commits a typeahead pick after typing; a plain answer stays", () => {
+  const { doc, A, observe } = page(`
+    <label for="co">Country</label><input id="co" role="combobox" aria-expanded="true" aria-controls="co-list">
+    <ul id="co-list" role="listbox" hidden><li role="option">India</li><li role="option">Indonesia</li></ul>
+    <label for="nm">Nickname</label><input id="nm">
+    <ul class="suggestions" hidden><li>Indie</li><li>Indigo</li></ul>`);
+  const obs = observe();
+  const country = byName(obs, "Country");
+  assert.equal(country.role, "textbox"); // an editable combobox reads as a text box
+  doc.querySelector("#co-list").hidden = false; // what typing opened
+  const pick = plain(A.typedSuggestion(country.ref, "India", false));
+  assert.equal(pick.ok, true);
+  assert.equal(doc.querySelector(`[data-applyshortly-ref="${pick.ref}"]`).textContent, "India");
+
+  // A plain box with no ARIA: only a list that appeared after noteShown counts.
+  const nickname = byName(obs, "Nickname");
+  assert.equal(plain(A.typedSuggestion(nickname.ref, "Indie", false)).ok, false); // no noteShown yet
+  A.noteShown(false);
+  assert.equal(plain(A.typedSuggestion(nickname.ref, "Indie", false)).ok, false); // nothing appeared
+  doc.querySelector(".suggestions").hidden = false; // the widget answered the typing
+  const again = plain(A.typedSuggestion(nickname.ref, "Indie", false));
+  assert.equal(again.ok, true);
+  assert.equal(doc.querySelector(`[data-applyshortly-ref="${again.ref}"]`).textContent, "Indie");
+});
+
+test("typedSuggestion commits a list that typing narrowed to one match", () => {
+  const { doc, A, observe } = page(`
+    <label for="co">Country</label><input id="co" placeholder="Search...">
+    <ul class="list" hidden><li>India</li></ul>`);
+  const country = byName(observe(), "Country");
+  A.noteShown(false);
+  doc.querySelector(".list").hidden = false; // typing "India" filtered the list to one
+  const pick = plain(A.typedSuggestion(country.ref, "India", false));
+  assert.equal(pick.ok, true);
+  assert.equal(doc.querySelector(`[data-applyshortly-ref="${pick.ref}"]`).textContent, "India");
+});
+
 test("observe: a closed combobox lists the options its listbox already holds, without -None-", () => {
   const { observe, A } = page(`
     <label id="g">Gender</label>
@@ -232,4 +294,188 @@ test("Ashby yes/no observations retain the question, requirement and selected No
   doc.querySelector('[data-option="no"]').setAttribute("aria-pressed", "true");
   radios = observe().elements.filter((e) => e.role === "radio");
   assert.equal(radios.find((e) => e.name === "No").checked, true);
+});
+
+test("screenshot ref labels use merged refs, do not intercept input, and are removed", () => {
+  const { doc, A, observe } = page('<label for="n">Full name</label><input id="n">');
+  const ref = byName(observe(), "Full name").ref;
+  doc.querySelector("#n").getBoundingClientRect = () => ({ left: 10, top: 30, bottom: 50, width: 100, height: 20 });
+  A.screenshotRefs([{ local: ref, ref: `2.${ref}` }]);
+  const layer = doc.querySelector("[data-applyshortly-screenshot-refs]");
+  assert.deepEqual([...layer.querySelectorAll("span")].map((s) => s.textContent), [`2.${ref}`]);
+  assert.equal(layer.style.pointerEvents, "none");
+  // A manual popover, so the labels also show over a site modal in the browser's top layer.
+  assert.equal(layer.getAttribute("popover"), "manual");
+  A.clearScreenshotRefs();
+  assert.equal(doc.querySelector("[data-applyshortly-screenshot-refs]"), null);
+});
+
+test("observation includes location instructions and excludes hidden/panel text", () => {
+  const { observe } = page(`<p>Choose country before city.</p><label>City / Town</label><input placeholder="Search..."><p hidden>Secret instructions</p><jobhunt-autofill-panel><p>Assistant conversation</p></jobhunt-autofill-panel>`);
+  const obs = observe();
+  assert.match(obs.text, /City \/ Town/);
+  assert.match(obs.text, /Choose country before city/);
+  assert.doesNotMatch(obs.text, /Secret instructions|Assistant conversation/);
+});
+
+test("snapshot hiding restores the panel's original visibility", () => {
+  const { doc, A } = page('<jobhunt-autofill-panel style="visibility:visible!important"></jobhunt-autofill-panel>');
+  const panel = doc.querySelector("jobhunt-autofill-panel");
+  A.snapshotState(true);
+  assert.equal(panel.style.visibility, "hidden");
+  A.snapshotState(false);
+  assert.equal(panel.style.visibility, "visible");
+  assert.equal(panel.style.getPropertyPriority("visibility"), "important");
+});
+
+test("focused discovery can inspect a city control beyond the normal observation limit", () => {
+  const { observe } = page(Array.from({ length: 310 }, (_, i) => `<label>Name ${i}<input></label>`).join("") + '<label>City / Town<input></label>');
+  const normal = observe();
+  assert.equal(byName(normal, "City / Town"), undefined);
+  const focused = observe({ extended: true, query: "City" });
+  assert.ok(byName(focused, "City / Town"));
+  assert.ok(focused.coverage.some((t) => /Focused view/.test(t)));
+});
+
+test("Escape is pressed only into an open list, never into the application dialog", () => {
+  const { A, doc, observe } = page(`
+    <div role="dialog" aria-label="Apply to Acme">
+      <label for="c">Country</label><input id="c" role="combobox" aria-expanded="false" aria-controls="list">
+      <ul id="list" role="listbox" hidden><li role="option">India</li></ul>
+      <label for="n">Name</label><input id="n">
+    </div>`);
+  const obs = observe();
+  const country = byName(obs, "Country").ref;
+  assert.equal(A.pickerOpen(country, false), false);
+  assert.equal(A.prepareKey(country, "Escape"), false);
+  doc.getElementById("c").setAttribute("aria-expanded", "true");
+  assert.equal(A.pickerOpen(country, false), true);
+  assert.equal(A.prepareKey(country, "Escape"), true);
+});
+
+test("hasText finds visible text for wait_for, never the panel's own text", () => {
+  const { A, doc } = page(`<p>Uploading…</p><jobhunt-autofill-panel>Upload complete</jobhunt-autofill-panel>`);
+  assert.equal(A.hasText("upload complete", false), false);
+  doc.querySelector("p").textContent = "Upload complete";
+  assert.equal(A.hasText("Upload complete", false), true);
+});
+
+test("rebind: a re-rendered control gets its old ref back; ambiguous names do not", () => {
+  const { doc, A, observe } = page(`<label for="e">Email</label><input id="e" type="email"><label for="n">Name</label><input id="n"><label for="m">Name</label><input id="m">`);
+  const email = byName(observe(), "Email");
+  assert.equal(A.freshState(email.ref).present, true);
+  // The site replaces the node (React key change): the ref attribute is gone with it.
+  doc.getElementById("e").replaceWith(Object.assign(doc.createElement("input"), { id: "e", type: "email" }));
+  assert.equal(A.freshState(email.ref).present, false);
+  assert.equal(A.rebind(email.ref, "Email", "textbox"), true);
+  assert.equal(A.freshState(email.ref).present, true);
+  assert.equal(A.rebind("999", "Name", "textbox"), false); // two controls share the name
+});
+
+test("committedValue: reads a plain input and a native select", () => {
+  const { doc, A, observe } = page(`<label for="t">City</label><input id="t" value="Trichy"><label for="s">Country</label><select id="s"><option value="">Choose</option><option selected>India</option></select>`);
+  const obs = observe();
+  assert.equal(A.committedValue(byName(obs, "City").ref), "Trichy");
+  assert.equal(A.committedValue(byName(obs, "Country").ref), "India");
+  assert.equal(doc.getElementById("t").value, "Trichy");
+});
+
+test("committedValue: a rich-text box (contenteditable) reads back its text, not an empty value", () => {
+  const { doc, A, observe } = page(`<div id="q" role="textbox" contenteditable="true" aria-label="Describe an integration you built"></div>`);
+  const obs = observe();
+  const box = byName(obs, "Describe an integration you built");
+  assert.equal(A.committedValue(box.ref), "", "empty before anything is typed");
+  doc.getElementById("q").textContent = "Built a RAG pipeline  with Redis caching";
+  assert.equal(A.committedValue(box.ref), "Built a RAG pipeline with Redis caching");
+});
+
+test("an Airtable-style plaintext-only box is observed with the text it holds", () => {
+  const { doc, observe } = page(`<div id="q" role="textbox" contenteditable="plaintext-only" aria-label="Describe an integration you built"></div>`);
+  assert.equal(byName(observe(), "Describe an integration you built").value, "");
+  doc.getElementById("q").textContent = "Built a RAG pipeline with Redis caching";
+  const box = byName(observe(), "Describe an integration you built");
+  assert.equal(box.value, "Built a RAG pipeline with Redis caching", "the next observation shows the filled text, not an empty box");
+  assert.equal(box.input_type, "richtext");
+});
+
+test("a search-style react-select reports its pick as the value and reads it back", () => {
+  const { A, observe } = page(`
+    <label for="city">Location (City)</label>
+    <div class="select__control"><div class="select__value-container select__value-container--has-value">
+      <div class="select__single-value">Trichy, Tamil Nadu, India</div>
+      <div class="select__input-container"><input id="city" class="select__input" type="text" role="combobox" aria-haspopup="true" aria-autocomplete="list"></div>
+    </div></div>
+    <label for="q">Reference calls</label>
+    <div class="select__control"><div class="select__value-container">
+      <div class="select__input-container"><input id="q" class="select__input" type="text" role="combobox" aria-haspopup="true" aria-autocomplete="list" value="Yes"></div>
+    </div></div>`);
+  const obs = observe();
+  const city = byName(obs, "Location (City)");
+  assert.equal(city.value, "Trichy, Tamil Nadu, India");
+  assert.equal(city.popup, true);
+  assert.equal(A.committedValue(city.ref, true), "Trichy, Tamil Nadu, India");
+  const typed = byName(obs, "Reference calls");
+  assert.equal(A.committedValue(typed.ref), "Yes", "search text is the plain value");
+  assert.equal(A.committedValue(typed.ref, true), "", "but nothing was picked");
+});
+
+test("an Airtable-style dropdown (a div named by itself) reads back the choice it shows", () => {
+  const { A, observe, doc } = page(`
+    <div id="lab">Authorized to Call</div>
+    <div role="combobox" aria-labelledby="lab self" aria-required="true" aria-expanded="false" tabindex="0" data-testid="autocomplete-button"><div><span><span><span><div><div id="self"></div></div></span></span></span></div></div>`);
+  const before = byName(observe(), "Authorized to Call");
+  assert.ok(before, "found by its question: " + JSON.stringify(observe().elements.map((e) => [e.role, e.name])));
+  doc.getElementById("self").textContent = "Yes";
+  const after = observe().elements.find((e) => e.role === "combobox");
+  assert.equal(after.value, "Yes");
+  assert.equal(A.committedValue(after.ref), "Yes");
+});
+
+test("a drop that opens the site's own upload dialog counts once the dialog lists the file", async () => {
+  const { A, doc } = page(`<div id="zone"><span>Drop files here or click to browse</span></div><div id="portal"></div>`);
+  const zone = doc.getElementById("zone");
+  zone.setAttribute("data-applyshortly-ref", "zone");
+  const b64 = Buffer.from("%PDF-1.4").toString("base64");
+  // Airtable shows the dropped file in a dialog elsewhere on the page, never inside the zone.
+  zone.addEventListener("drop", () => {
+    doc.getElementById("portal").innerHTML = `<div role="dialog"><button aria-label="View attachment ”Ada_Resume.pdf”"></button><button>Attach file</button></div>`;
+  });
+  assert.equal((await A.attach("zone", b64, "Ada_Resume.pdf", "application/pdf")).ok, true);
+});
+
+test("a div-style dropdown the form mapper skips still reads back the choice it shows", () => {
+  const { A, doc } = page(`<div id="d" role="combobox" aria-disabled="true"><div><span>Yes</span></div></div>
+    <div id="e" role="combobox" aria-disabled="true"><div><span>Select…</span></div></div>`);
+  doc.getElementById("d").setAttribute("data-applyshortly-ref", "d");
+  doc.getElementById("e").setAttribute("data-applyshortly-ref", "e");
+  assert.equal(A.committedValue("d"), "Yes");
+  assert.equal(A.committedValue("d", true), "Yes");
+  assert.equal(A.committedValue("e") ?? "", "", "a prompt is no choice");
+});
+
+test("a dropdown whose chosen text sits in an aria-hidden wrapper reads back the choice (Airtable)", () => {
+  const { A, observe } = page(`
+    <div id="lab">Authorized to Call</div>
+    <div role="combobox" aria-labelledby="lab id_x" aria-required="true" aria-expanded="false" tabindex="0" data-testid="autocomplete-button"><div><span aria-hidden="true"><span><div><div id="id_x" title="Yes">Yes</div></div></span></span></div></div>
+    <div id="lab2">Source</div>
+    <div role="combobox" aria-labelledby="lab2" aria-required="false" aria-expanded="false" tabindex="0"><div><span aria-hidden="true"></span></div></div>`);
+  const combos = observe().elements.filter((e) => e.role === "combobox");
+  const yes = combos.find((e) => /Authorized/.test(e.name));
+  assert.equal(yes.value, "Yes");
+  assert.equal(A.committedValue(yes.ref), "Yes");
+  assert.equal(A.committedValue(yes.ref, true), "Yes");
+  const source = combos.find((e) => /Source/.test(e.name));
+  assert.equal(source.value, "", "nothing chosen yet");
+});
+
+test("a drop counts when the site's upload dialog from an earlier drop already lists the file", async () => {
+  const { A, doc } = page(`<div id="zone"><span>Drop files here or click to browse</span></div>
+    <div role="dialog"><button aria-label="View attachment ”Ada_Resume.pdf”"></button><button>Attach file</button></div>`);
+  doc.getElementById("zone").setAttribute("data-applyshortly-ref", "zone");
+  const b64 = Buffer.from("%PDF-1.4").toString("base64");
+  assert.equal((await A.attach("zone", b64, "Ada_Resume.pdf", "application/pdf")).ok, true);
+  // Without a dialog, a name elsewhere on the page proves nothing.
+  const other = page(`<div id="zone"><span>Drop files here</span></div><p>Ada_Resume.pdf was uploaded last year</p>`);
+  other.doc.getElementById("zone").setAttribute("data-applyshortly-ref", "zone");
+  assert.equal((await other.A.attach("zone", b64, "Ada_Resume.pdf", "application/pdf")).ok, false);
 });

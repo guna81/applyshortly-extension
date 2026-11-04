@@ -80,6 +80,16 @@ export class JobHuntBridge {
     return res.status === 204 ? null : res.json();
   }
 
+  browserRelayUrl() {
+    const url = new URL(`${this.baseUrl}/api/extension/browser/relay`);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.href;
+  }
+
+  registerBrowser(name) {
+    return this.request("/api/extension/browser/devices", { method: "POST", body: JSON.stringify({ name }) });
+  }
+
   account() { return this.request("/api/extension/account"); }
 
   aiSettings() { return this.request("/api/extension/ai"); }
@@ -156,7 +166,11 @@ export class JobHuntBridge {
     return this.request("/api/extension/assistant/fill", { method: "POST", body: JSON.stringify(body) });
   }
 
-  /** One round trip of the form agent: the page as observed → the next vetted actions. */
+  /** One round trip: vetted actions, or want_screenshot with optional annotate_screenshot. */
+  agentCapabilities() {
+    return this.request("/api/extension/agent/capabilities");
+  }
+
   agentStep(body) {
     return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
   }

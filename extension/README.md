@@ -1,14 +1,57 @@
-# Apply Shortly Form Assistant (Chrome extension, Tier B)
+# ApplyShortly Chrome Extension Guide: Job Application Autofill
 
-Fills job application forms in **your own** Chrome, from your ApplyShortly profile and answer bank.
-Use it for forms the server-side browser can't handle: anything behind your login (Google Forms,
-Workday, iCIMS), CAPTCHAs, and unknown layouts. Like Tier A, **it fills and never submits on its
-own**. You review the form and click the site's own submit button, or choose **⚡ Auto apply**
-(below) to have it click that button for you once every required field is answered.
+**Apply Shortly Form Assistant** fills job application forms in your Chrome browser from your ApplyShortly profile and saved answer bank. Reuse contact details, work history, education and screening answers, get optional AI drafts, and review the completed application before submission.
+
+[Install the Chrome extension](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [ApplyShortly website](https://applyshortly.com) · [Source and developer README](../README.md)
+
+The form agent helps with multi-step applications, pop-ups and embedded forms on pages you start it on, including forms behind your own login. Site support varies, and you handle sign-in, CAPTCHAs, consent and any fields it cannot complete. Submit on the employer's site yourself, or explicitly choose **Auto apply** to submit after required-field checks and a cancellable countdown. The form agent itself never clicks final Submit.
+
+## Quick start: autofill a job application
+
+1. Install the extension from the Chrome Web Store and sign in to [ApplyShortly](https://applyshortly.com).
+2. Save your profile, résumé and application answers in ApplyShortly, then open the extension settings to check your connection.
+3. Open a job application in Chrome. Choose **Fill this form** or press **Alt+Shift+F**.
+4. Answer remaining questions in the on-page panel, review the fields and attachments, and complete any manual steps.
+5. Click the employer's Submit button, or explicitly choose **Submit for me (Auto apply)** and use Cancel during the countdown if needed.
+
+Filling from your profile and saved answers is free with an ApplyShortly account. Optional AI features use credits or a supported personal AI provider key; provider charges may apply.
+
+## Guide contents
+
+- [Extension screenshots](#screenshots)
+- [Installation and account connection](#install)
+- [Build and load an unpacked extension](#build-from-source)
+- [Autofill, form agent and Auto apply](#use)
+- [How saved answers are chosen](#how-answers-are-chosen)
+- [Chrome permissions](#why-it-asks-for-these-permissions)
+- [Form compatibility and limitations](#limits)
+- [External AI assistant control pilot](#external-ai-assistant-control-pilot)
 
 Plain JavaScript with no compilation step. The build packages an allowlisted set of runtime files;
 it never reads `.env` or includes local credentials. An ApplyShortly account is required,
 including when using a personal AI key. See `../extension-bridge/README.md` for the API.
+
+## Screenshots
+
+### Job application autofill and Auto apply
+
+![ApplyShortly filling a fictional Northstar Labs application with saved profile details, a relocation answer, AI draft options and an Auto apply countdown with Cancel](../docs/images/applyshortly-autofill-auto-apply-demo.jpg)
+
+*The demo shows saved details filled into the application, a screening answer supplied in chat, optional AI drafting and the cancellable submission countdown. The company and applicant are fictional; no application is sent.*
+
+### Submission confirmation
+
+![ApplyShortly extension beside an ElevenLabs application receipt, showing Submitted and Saved in ApplyShortly](../docs/images/applyshortly-submission-confirmed.jpg)
+
+*The employer page confirms the submission, and the extension shows the application saved in ApplyShortly.*
+
+### Application tracking
+
+![ApplyShortly application tracking panel beside an Ashby success receipt for an MLOps Engineer application at AHL Saaf AI](../docs/images/applyshortly-application-tracking.jpg)
+
+*The panel reflects a confirmed application and provides an Open ApplyShortly button to return to your account.*
+
+These existing captures show individual application outcomes. Form support varies by website; they do not establish compatibility with every employer or ATS. Employer names and logos identify the pages shown and do not imply endorsement.
 
 ## Install
 
@@ -66,6 +109,11 @@ apply. No shared token or credential-seeding file is distributed or loaded.
 
 ### The agent panel
 
+In the AI driver, questions inspect the page without editing it. Explicit instructions such
+as "Recover this application", "Proceed with the edits", and "Please remove blank rows"
+allow the agent to make the requested changes. Recovery retains the session's AI spending
+limits; resuming does not reset them.
+
 The floating panel is one chat: the ApplyShortly agent, the same as the review chat on the
 website. There is no separate assistant, agent button or question box. It fills the form, steps
 through it when it has more than one page, drafts answers and asks you what it can't answer. It asks the unanswered questions one at a time, shows the form's options as tappable replies, and
@@ -95,6 +143,35 @@ Ashby Yes/No buttons are counted as screening questions, including a selected **
 Required multi-select questions count as one question and stay open until you select an option.
 Consent still asks for your explicit choice. Auto apply waits for those required answers;
 a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
+
+### AI driver controller
+
+The AI driver and a connected assistant run the same page commands (`extension/src/agent/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the AI driver uses them too and sends each action's `result`; the panel names the driver (Platform AI or Your assistant).
+
+Protocol 2 pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. The platform also pauses after six decisions without progress and caps AI spend at about $1 per application. Resume explicitly after checking the page; each resume starts a new safety window.
+
+Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. Besides click, type, choose, check, upload, keys, scroll and wait, the agent can hover, drag between two controls, and wait for text to appear. Screenshots are capped at 1280 pixels on the longest side, and taken only when the page layout changed. Taking one changes nothing on the page: the capture is shrunk and labelled inside the extension (never with Chrome's clip option, which briefly resizes the page), and the panel stays in place. A field already on screen is filled without scrolling. Your saved answers for plain fields (text, email, numbers, native dropdowns) are typed in one go without an AI call; the AI handles pickers, phone numbers, uploads and anything that didn't stick.
+
+Choose **Settings → Form agent engine → AI driver** in ApplyShortly for new sessions.
+AI driver is the service default. It uses fresh page observations, screenshots
+and native AI tool calls; Anthropic and Gemini native tools are supported. Personal OpenAI
+keys support structured drafts rather than this native tool loop; sessions on those keys, or with
+no AI, run Rules first instead.
+
+With controller protocol 2 (the server default), the extension inspects the page before filling
+and keeps page questions, actions and review in one session. Messages interrupt pending actions
+and receive fresh page context. Page questions stay read-only until you ask it to edit or
+continue. The controller tracks field readback and user edits, bounds failed interaction
+strategies, and can follow an application tab opened by its recent click. It stops for review;
+the agent itself never clicks final Submit. Stop ends browser access.
+
+This upgraded session sends visible page context and transient screenshots to the configured
+AI provider through ApplyShortly. The panel stays visible (the AI is told it is ApplyShortly's own) and lets clicks through while the agent acts. The classic
+assistant description above applies outside this upgraded session.
+
+The server gate defaults on. Reload the updated extension and start a new session after an
+upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
+mechanics, but representative real-model ATS reliability has not been established.
 
 ### Choose how AI drafts are paid for
 
@@ -216,6 +293,8 @@ For each empty field, in order:
 1. **Profile facts** (`src/fill.js` → `profileAnswer`): name and first/last name, email, phone,
    location, links, total experience, current company and title, highest qualification, college
    and branch, cover letter, summary.
+   Annual compensation uses saved amounts in the matching currency. Questions explicitly in
+   lakhs per annum (LPA) convert saved INR amounts to lakhs; monthly pay is not inferred.
 2. **`POST /answers/suggest`** with `allow_generate: false`, which covers preferences (notice
    period, CTC, relocation, work authorisation, sponsorship) and the answer bank. If the full
    question doesn't match, it retries with the first sentence. *"Current CTC? Mention fixed and
@@ -320,3 +399,26 @@ on the page, or your confirmation through **I already submitted it**, moves it t
 Duplicate-profile errors do not count as a successful application. Temporary connection errors
 queue outcome metadata locally and retry once a minute, even with Autopilot windows off.
 Signing out discards this queue so it cannot sync to another account.
+
+## External AI assistant control (pilot)
+
+Compatible servers can enable application-only MCP control. Open **Connect ChatGPT or Claude**
+from the popup, connect the browser, and approve the assistant's exact batch locally. Keep the
+control page open. New answers require review; submission needs explicit batch submission
+permission, validation and a cancellable countdown. Stop ends browser control. Login, CAPTCHA,
+and new domains require your intervention. No ApplyShortly AI calls or preparation credits are
+used in this mode; your assistant's plan limits still apply. General browser control and
+screenshots are not exposed. This pilot is disabled by default on the server.
+
+Batch approval requests Chrome access to the exact employer origins; approve new origins
+separately if the application redirects. Check uploaded-resume parsing and entered answers
+before local review. Required checked consent is validated alongside native form validity
+and upload requirements. Submission must produce employer confirmation; an uncertain attempt
+blocks retries.
+
+One local Breezy HR application has completed through MCP, including extension filling,
+resume upload, review, countdown and submission. This is limited live validation, not a claim
+of general ATS or native ChatGPT/Claude connector compatibility. The local HTTP MCP test
+client supplied decisions without platform AI calls. Production release remains separate.
+Idle/disconnect detaches the driver; it does not resume an already filled tab. Inspect that
+tab for an existing submission before starting again.

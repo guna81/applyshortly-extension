@@ -73,6 +73,17 @@ test("Rippling upload reads its field caption and required flag, and nested radi
   assert.equal(fields.filter((f) => f.kind === "radio").length, 1);
 });
 
+test("React Select typeaheads take their label from the caption div before them", () => {
+  const { doc, F } = page(`
+    <label for="loc">Current Location *</label>
+    <div id="loc"><div><div>Country</div><div><span id="react-select-a-live-region"></span>
+      <input id="react-select-a-input" type="text" role="combobox" value=""></div></div>
+    <div><div>State / Region</div><div><span id="react-select-b-live-region"></span>
+      <input id="react-select-b-input" type="text" role="combobox" disabled value=""></div></div></div>`);
+  const labels = plain(F.collectFields(doc, { checkLayout: false }).map((f) => f.label));
+  assert.deepEqual(labels, ["Country"]);
+});
+
 test("Rippling split phone control fills a country code before the national number", () => {
   const { doc, F } = page(`<div data-testid="field"><div data-testid="phone_number-code"><input role="combobox" aria-label="Search" value="+44 GB"></div></div>
     <label>Phone number<input data-input="phone_number"></label>`);
@@ -226,12 +237,27 @@ test("current company is flagged for review when no job is marked current", () =
   assert.deepEqual(plain(F.profileAnswer("Current company name", past, null)), { value: "Analytical Engines", needsReview: true });
 });
 
-test("annual expectations use saved compensation only for the question's currency", () => {
+test("annual compensation uses the saved current or expected amount only in matching currency", () => {
   const { F } = page("");
-  const profile = { ...PROFILE, preferences: { expected_ctc: "2200000", currency: "INR" } };
-  assert.equal(F.profileAnswer("What are your annual expectations (in INR)?", profile).value, "2200000");
+  const profile = { ...PROFILE, preferences: { current_ctc: "1850000", expected_ctc: "2450000", currency: "INR" } };
+  assert.equal(F.profileAnswer("What are your annual expectations (in INR)?", profile).value, "2450000");
   assert.equal(F.profileAnswer("What are your annual expectations (in USD)?", profile), null);
   assert.equal(F.profileAnswer("What are your annual expectations?", profile), null);
+  assert.equal(F.profileAnswer("Last drawn annual compensation (in INR)?", profile).value, "1850000");
+  assert.equal(F.profileAnswer("Current yearly salary (INR)", profile).value, "1850000");
+  assert.equal(F.profileAnswer("Last drawn annual compensation (USD)?", profile), null);
+  assert.equal(F.profileAnswer("Last drawn monthly salary (INR)?", profile), null);
+});
+
+test("salary in lakhs per annum converts saved rupees to the requested unit", () => {
+  const { F } = page("");
+  const profile = { ...PROFILE, preferences: { current_ctc: "1,850,000", expected_ctc: "2450000", currency: "INR" } };
+  assert.equal(F.profileAnswer("What’s your current salary? (in lakhs per annum)", profile).value, "18.5");
+  assert.equal(F.profileAnswer("Expected CTC (LPA)", profile).value, "24.5");
+  assert.equal(F.profileAnswer("Current salary in lakhs per month", profile), null);
+  assert.equal(F.profileAnswer("Current salary in USD (LPA)", profile), null);
+  assert.equal(F.profileAnswer("Current CTC (LPA)", { ...profile, preferences: { ...profile.preferences, currency: "USD" } }), null);
+  assert.equal(F.profileAnswer("Salary in LPA", profile), null);
 });
 
 test("Ashby and native date inputs reject prose and receive valid calendar dates", () => {
@@ -621,6 +647,80 @@ test("react-select style: the input stays empty and the choice shows beside it",
   assert.equal(F.dropdownValue(title), "", "a placeholder is not a value");
 });
 
+test("react-select with a hidden required input and a menu beside it still reads its chosen value", () => {
+  const { doc, F } = page(`
+    <label for="city">Location (City)</label>
+    <div class="select-shell">
+      <div class="select__control"><div class="select__value-container">
+        <div class="select__single-value">Trichy, Tamil Nadu, India</div>
+        <div class="select__input-container"><input id="city" role="combobox" aria-haspopup="listbox"></div>
+      </div></div>
+      <input tabindex="-1" required style="opacity:0" value="x">
+      <ul class="select__menu"><li>Trichy, Tamil Nadu, India</li></ul>
+      <span aria-live="polite">option Trichy, Tamil Nadu, India, selected.</span>
+    </div>
+    <label for="c2">Place</label>
+    <div class="select-shell">
+      <div class="select__control"><div class="select__value-container">
+        <div class="select__input-container"><input id="c2" role="combobox" aria-haspopup="listbox"></div>
+      </div></div>
+      <input tabindex="-1" required style="opacity:0">
+      <ul class="select__menu"><li>Chennai</li></ul>
+      <span aria-live="polite">option Chennai, selected.</span>
+    </div>`);
+  const all = F.collectFields(doc, { checkLayout: false });
+  const city = all.find((f) => f.el.id === "city");
+  const place = all.find((f) => f.el.id === "c2");
+  assert.equal(F.dropdownValue(city), "Trichy, Tamil Nadu, India");
+  assert.equal(F.dropdownValue(place), "Chennai", "the live-region note is used when no value element exists");
+});
+
+test("chooseOption ranks whole-word and prefix matches before giving up on substrings", () => {
+  const { F } = page("");
+  const opts = [{ text: "British Indian Ocean Territory" }, { text: "India (+91)" }, { text: "Indiana" }, { text: "Indonesia" }];
+  assert.equal(F.chooseOption(opts, "India")?.text, "India (+91)");
+  assert.equal(F.chooseOption([{ text: "Indiana" }, { text: "Indianapolis" }], "India"), null);
+});
+
+test("a react-select that the form treats as free text still shows its pick through widgetPick", () => {
+  const { doc, F } = page(`
+    <label for="city">Location (City)</label>
+    <div class="select-shell"><div class="select__control"><div class="select__value-container select__value-container--has-value">
+      <div class="select__single-value">Trichy, Tamil Nadu, India</div>
+      <div class="select__input-container"><input id="city" class="select__input" type="text" role="combobox" aria-haspopup="true" aria-autocomplete="list"></div>
+    </div></div></div>
+    <label for="plain">Nickname</label><input id="plain" type="text" value="Gee">
+    <label for="empty">Place</label>
+    <div class="select-shell"><div class="select__control"><div class="select__value-container">
+      <div class="select__placeholder">Select...</div>
+      <div class="select__input-container"><input id="empty" class="select__input" type="text" role="combobox" aria-haspopup="true" aria-autocomplete="list"></div>
+    </div></div></div>`);
+  const field = F.collectFields(doc, { checkLayout: false }).find((f) => f.el.id === "city");
+  assert.equal(field.kind, "text", "the form classifies it as a typeahead");
+  assert.equal(F.widgetPick(doc.getElementById("city")), "Trichy, Tamil Nadu, India");
+  assert.equal(F.widgetPick(doc.getElementById("plain")), "");
+  assert.equal(F.widgetPick(doc.getElementById("empty")), "", "a placeholder is not a pick");
+});
+
+test("an exact option text wins even when a longer listing comes first (dial-code lists)", () => {
+  const { F } = page("");
+  const opts = [{ text: "British Indian Ocean Territory +246" }, { text: "India +91" }, { text: "Indonesia +62" }];
+  assert.equal(F.chooseOption(opts, "India")?.text, "India +91");
+  assert.equal(F.chooseOption(opts, "India +91")?.text, "India +91");
+});
+
+test("widgetOnly ignores search text typed into a combobox that was never picked", () => {
+  const { doc, F } = page(`
+    <label for="q">Reference calls</label>
+    <div class="select__control"><div class="select__value-container">
+      <div class="select__input-container"><input id="q" role="combobox" aria-haspopup="listbox" value="Yes"></div>
+    </div></div>
+    <div class="select__menu">No options</div>`);
+  const field = F.collectFields(doc, { checkLayout: false }).find((f) => f.el.id === "q");
+  assert.equal(F.dropdownValue(field), "Yes", "typed text is the value for widgets that show their pick in the input");
+  assert.equal(F.dropdownValue(field, { widgetOnly: true }), "", "but it is not proof that an option was picked");
+});
+
 test("strict chooseOption (AI drafts) never ticks an option a sentence merely contains", () => {
   const { F } = page("");
   const auth = ["I am legally authorized", "I am not legally authorized"].map((text) => ({ text }));
@@ -754,14 +854,20 @@ test("Ashby: yes/no buttons and required multi-selects are complete questions, n
   assert.equal(F.apply(fields[3], "Yes"), null, "consent is never inferred");
 });
 
-test("text filling notifies delegated focusout handlers and sends an InputEvent", () => {
+test("text filling lets input commit before delegated focusout validation", async () => {
   const { doc, F, win } = page('<label>Email<input type="email" required></label>');
   const field = F.collectFields(doc, { checkLayout: false })[0];
   let committed = "";
   let inputEvent;
-  doc.addEventListener("input", (event) => { inputEvent = event; });
-  doc.addEventListener("focusout", (event) => { committed = event.target.value; });
+  let inputCommitted = false;
+  doc.addEventListener("input", (event) => {
+    inputEvent = event;
+    win.setTimeout(() => { inputCommitted = true; }, 0);
+  });
+  doc.addEventListener("focusout", (event) => { committed = inputCommitted ? event.target.value : "stale"; });
   F.apply(field, "fixture@example.com");
+  assert.equal(committed, "");
+  await new Promise((resolve) => setTimeout(resolve, 80));
   assert.equal(committed, "fixture@example.com");
   assert.ok(inputEvent instanceof win.InputEvent);
   assert.equal(doc.activeElement, doc.body);
@@ -778,6 +884,52 @@ test("a question heading in the same list item labels a box named section_x_ques
   assert.equal(field.label, "Where are you currently based (City, Country)?");
 });
 
+test("Greenhouse React Select validation inputs are not extra unanswered questions", () => {
+  // Reduced from the Coinbase embedded Greenhouse application. The validation inputs
+  // are aria-hidden, but still have layout boxes; display/visibility checks don't hide them.
+  const select = (id, label, placeholder = "") => `<div>
+    <label id="${id}-label" for="${id}">${label} *</label>
+    <div class="select-shell remix-css-b62m3t-container">
+      <span id="react-select-${id}-live-region"></span><span aria-live="polite" role="log"></span>
+      <div><div class="select__control"><div class="select__value-container">
+        <div class="select__placeholder" id="react-select-${id}-placeholder">${placeholder}</div>
+        <div class="select__input-container"><input id="${id}" type="text" role="combobox"
+          aria-labelledby="${id}-label" aria-required="true" aria-haspopup="true" tabindex="0"></div>
+      </div></div></div>
+      <input required tabindex="-1" aria-hidden="true" class="remix-css-1a0ro4n-requiredInput" value="">
+    </div></div>`;
+  const { doc, F } = page(`<form>${select("country", "Country")}${select("candidate-location", "Location (City)")}
+    ${select("question_1", "Are you at least 18 years of age?", "Select...")}
+    <label for="resume">Resume/CV *</label><input id="resume" type="file" required style="opacity:0">
+    <label for="standalone">Other answer</label><input id="standalone" aria-hidden="true" tabindex="-1">
+  </form>`, "https://job-boards.greenhouse.io/embed/job_app?token=fixture&for=example");
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => f.label)), [
+    "Country", "Location (City)", "Are you at least 18 years of age?", "Resume/CV", "Other answer",
+  ]);
+  assert.ok(fields.slice(0, 4).every((f) => f.required));
+  assert.equal(fields[3].kind, "file", "retains transparent upload inputs");
+  assert.ok(fields.every((f) => !f.el.classList.contains("remix-css-1a0ro4n-requiredInput")));
+});
+
+test("deeply wrapped application controls retain their own labels without borrowing adjacent ones", () => {
+  const wrap = (control) => `<div><div><div><div><div>${control}</div></div></div></div></div>`;
+  const { doc, F } = page(`<form>
+    <div><label>Country *</label>${wrap('<input role="combobox" readonly aria-required="true">')}</div>
+    <div><label>Location (City) *</label>${wrap('<input role="combobox" aria-required="true">')}</div>
+    <div>${wrap('<input required>')}</div>
+    <div><label>Email</label><input type="email">${wrap('<input required>')}</div>
+  </form>`, "https://job-boards.greenhouse.io/example/jobs/1");
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map(({ kind, label, required }) => ({ kind, label, required }))), [
+    { kind: "dropdown", label: "Country", required: true },
+    { kind: "text", label: "Location (City)", required: true },
+    { kind: "text", label: "", required: true },
+    { kind: "text", label: "Email", required: false },
+    { kind: "text", label: "", required: true },
+  ]);
+});
+
 // Binary-style forms: the "*" ends the question's <label>; the box sits in a sibling block.
 test("a label ending in * marks the box in its wrapper as required", () => {
   const { doc, F } = page(
@@ -786,4 +938,13 @@ test("a label ending in * marks the box in its wrapper as required", () => {
   );
   const fields = F.collectFields(doc, { checkLayout: false });
   assert.deepEqual([...fields.map((f) => f.required)], [true, false]);
+});
+
+test("a starred group heading makes each sub-field required", () => {
+  const { doc, F } = page(`<div><div class="field-label">Current Location *</div>
+    <div><span>Country</span><input type="text" placeholder="Search..."></div>
+    <div><span>State</span><input type="text" placeholder="Search..."></div></div>
+    <div><label>Nickname <input type="text"></label><label>Pet <input type="text"></label></div>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => f.required)), [true, true, false, false]);
 });

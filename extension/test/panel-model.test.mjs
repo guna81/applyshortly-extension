@@ -112,9 +112,22 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.equal(open.question.note, "Type your answer, or I can draft one.");
   assert.deepEqual(plain(open.choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Years of experience?" }).choices), [P.ON_PAGE_REPLY]);
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Can you open the application form, or give me the direct link?" }).choices), [P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "blocker", text: "Solve the CAPTCHA on the page." })),
     { text: "Solve the CAPTCHA on the page. Tap Continue when it's done.", choices: [P.CONTINUE_REPLY] });
   assert.equal(P.agentAsk(null), null);
+});
+
+test("questions about a checkbox, upload or choice never offer a draft", () => {
+  const consent = "Do you want to tick \"I agree to allow XCaliber Health to store and process my personal data\"?";
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text: consent }).choices), [P.ON_PAGE_REPLY]);
+  const text = "Should we mention anything else about your background for this role?";
+  for (const role of ["checkbox", "radio", "file", "combobox", "select"]) {
+    const ask = P.agentAsk({ kind: "question", text, role });
+    assert.deepEqual(plain(ask.choices), [P.ON_PAGE_REPLY], role);
+    assert.equal(ask.question.note, undefined, role);
+  }
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text, role: "textarea" }).choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
 });
 
 test("a long option list shows the likely answer first and says it can be typed", () => {
@@ -134,7 +147,10 @@ test("assistantGreeting asks the first open question with its options as quick r
   assert.equal(g.text, "2 questions need your answer before you can submit.");
   assert.deepEqual(plain(g.question), { label: "Work authorisation?", step: "Required" });
   assert.deepEqual(plain(g.choices), ["Citizen", "Visa"]);
-  assert.match(P.assistantGreeting([]).text, /Want to change anything/);
+  assert.equal(P.assistantGreeting([]), null); // no questions on the page: no chat line
+  const done = [{ field: { kind: "text", label: "City" }, status: "filled" }, { field: { kind: "text", label: "Notice" }, status: "filled" }];
+  assert.equal(P.assistantGreeting(done).text, "All 2 answers are filled in. Check the form, and tell me here if one should change.");
+  assert.doesNotMatch(P.assistantGreeting(done).text, /notice period to 60/);
   const consent = [{ field: { kind: "checkbox", label: "I agree to the terms" }, status: "unresolved" }];
   assert.deepEqual(plain(P.assistantGreeting(consent).choices), [P.AGREE_REPLY, P.SHOW_REPLY]);
   assert.equal(P.promptTarget(consent), consent[0]);
@@ -153,6 +169,9 @@ test("directAnswer takes an option or free text for the asked question, never a 
   assert.equal(P.directAnswer({ ...text, status: "filled" }, "Pune"), null);
   assert.equal(P.directAnswer({ field: { kind: "checkbox" }, status: "unresolved" }, "Yes"), null); // consent stays a tap
   assert.equal(P.directAnswer(null, "Pune"), null);
+  const tel = { field: { kind: "text", el: { type: "tel" } }, status: "unresolved" };
+  assert.equal(P.directAnswer(tel, "+91 98765 43210"), "+91 98765 43210");
+  assert.equal(P.directAnswer(tel, "can you see the country and state field?"), null);
   const open = [radio];
   assert.equal(P.nextPrompt(open).target, radio);
 });
