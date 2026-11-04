@@ -1,7 +1,7 @@
 // Tests for src/agent/commands.js: the guarded, verified commands every controller shares.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CommandRunner } from "../src/agent/commands.js";
+import { CommandRunner, driftOf } from "../src/agent/commands.js";
 import { Agent } from "../src/agent/loop.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
@@ -71,6 +71,61 @@ test("fill_form types a text entry the platform sends with checked: null (it is 
   assert.deepEqual(driver.typed, [["First", "Guna"], ["Last", "P"]]);
   assert.deepEqual(out.fields.map((f) => f.type), ["type", "type"]);
   assert.equal(out.done, 2);
+});
+
+/** After `Email` is written, `First` is reset to `reset` (as a later dropdown moves an earlier phone country). */
+function undoingDriver(reset, { sticky = false } = {}) {
+  const driver = makeDriver();
+  const call = driver.call.bind(driver);
+  let emailWritten = false;
+  driver.call = async (frame, name, ...args) => {
+    const out = await call(frame, name, ...args);
+    if (name === "setDirect") {
+      const who = driver.map.get(args[0]);
+      if (who === "Email") { emailWritten = true; driver.values.First = reset; }
+      else if (who === "First" && emailWritten && sticky) driver.values.First = reset;
+    }
+    return out;
+  };
+  return driver;
+}
+
+test("a field a later one undid is written once more, and the batch still counts it", async () => {
+  const driver = undoingDriver("+93 changed");
+  const runner = await read(driver);
+  const refs = refsOf(runner);
+  const out = await runner.fillForm([{ ref: refs.First, text: "Guna" }, { ref: refs.Email, text: "g@x.y" }],
+    { observationId: runner.observed.observation.observation_id, commandId: "c-undo" });
+  assert.equal(out.done, 2);
+  assert.equal(driver.values.First, "Guna");
+  assert.deepEqual(driver.typed.filter(([n]) => n === "First").map(([, v]) => v), ["Guna", "Guna"]);
+});
+
+test("a field that keeps changing is reported as not stuck, naming what it shows", async () => {
+  const driver = undoingDriver("+93 changed", { sticky: true });
+  const runner = await read(driver);
+  const refs = refsOf(runner);
+  const out = await runner.fillForm([{ ref: refs.First, text: "Guna" }, { ref: refs.Email, text: "g@x.y" }],
+    { observationId: runner.observed.observation.observation_id, commandId: "c-undo2" });
+  assert.equal(out.done, 1);
+  assert.equal(out.fields[0].ok, false);
+  assert.equal(out.fields[0].verified, false);
+  assert.match(out.fields[0].detail, /later field changed this one.*\+93 changed/);
+});
+
+test("a phone number is checked against its country selector's dial code", () => {
+  const phone = { ref: "p", name: "Phone", role: "textbox", input_type: "tel", section: "Phone", value: "+91 6381868258" };
+  const country = (value) => ({ ref: "c", name: "Country", role: "textbox", popup: true, section: "Phone", value });
+  const result = { type: "type", requested: "+91 6381868258", committed: "+91 6381868258" };
+  const field = { ref: "p", text: "+91 6381868258" };
+  assert.equal(driftOf(result, field, phone, [country("+91"), phone]), "");
+  assert.match(driftOf(result, field, phone, [country("+93"), phone]), /country shows \+93/);
+  assert.equal(driftOf(result, field, phone, [country(""), phone]), ""); // no code shown: nothing to judge
+  // a dropdown that reads back empty is not judged; a plain box that went empty is
+  const box = { ref: "b", name: "Years", role: "textbox", popup: true, value: "" };
+  assert.equal(driftOf({ type: "select", requested: "7-10 years", committed: "7-10 years" }, { ref: "b", text: "7-10 years" }, box, [box]), "");
+  const text = { ref: "t", name: "City", role: "textbox", value: "" };
+  assert.match(driftOf({ type: "type", requested: "Pune", committed: "Pune" }, { ref: "t", text: "Pune" }, text, [text]), /empty/);
 });
 
 test("a write the page cannot read back is not reported as done, and the batch stops there", async () => {
@@ -160,6 +215,34 @@ test("review lists every field, the required ones still empty, and options reads
   assert.equal(review.field_count, 2);
   assert.deepEqual(review.missing_required.map((m) => m.name), ["Last"]);
   await assert.rejects(runner.options({ ref: "nope" }), /no longer on the page/);
+});
+
+test("an answer longer than the box's maxlength is refused, not typed half", async () => {
+  const driver = makeDriver({ names: ["Why"] });
+  const original = driver.call.bind(driver);
+  driver.call = async (frame, name, ...args) => (name === "textLimit" ? 10 : original(frame, name, ...args));
+  const runner = await read(driver);
+  const refs = refsOf(runner);
+  const out = await runner.fillForm([{ ref: refs.Why, text: "this is far longer than ten" }], { observationId: runner.observed.observation.observation_id, commandId: "c" });
+  assert.equal(out.done, 0);
+  assert.match(out.fields[0].detail, /at most 10 characters.*27/);
+  assert.deepEqual(driver.typed, []);
+  const fresh = await read(driver);
+  const ok = await fresh.fillForm([{ ref: refsOf(fresh).Why, text: "short" }], { observationId: fresh.observed.observation.observation_id, commandId: "c" });
+  assert.equal(ok.done, 1);
+});
+
+test("review names an attached file even though its file input is gone", async () => {
+  const driver = makeDriver({ names: ["First"] });
+  const original = driver.call.bind(driver);
+  driver.call = async (frame, name, ...args) => {
+    const out = await original(frame, name, ...args);
+    return name === "observe" ? { ...out, text: "Apply | resume.pdf | Attach | Enter manually", elements: [...out.elements, { ref: "99", role: "button", name: "Remove file" }] } : out;
+  };
+  const runner = await read(driver);
+  assert.deepEqual((await runner.review()).attached_files, ["resume.pdf"]);
+  const plain = await read(makeDriver({ names: ["First"] }));
+  assert.equal((await plain.review()).attached_files, undefined);
 });
 
 // The platform's AI driver gets the same verified results through the Agent loop.

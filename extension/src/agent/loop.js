@@ -27,11 +27,12 @@ const CALL_LIMIT = 40;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Only explicit commands unlock edits. Polite prefixes and recovery commands are commands
-// too; questions and negations must retain the inspection-only path.
+// too ("put my website in", "type 5 years", "use the second one"); questions and negations
+// must retain the inspection-only path.
 export function isEditingInstruction(message) {
   const text = String(message).trim().replace(/^please\s+/i, "");
-  if (/^(do not|don't|never)\b/i.test(text)) return false;
-  return /^(fill|set|change|select|choose|upload|attach|click|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
+  if (/^(do not|don't|never)\b/i.test(text) || text.endsWith("?")) return false;
+  return /^(fill|set|change|select|choose|pick|upload|attach|click|tick|check|mark|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify|put|type|enter|write|input|insert|paste|use|answer|make|leave|switch|turn)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
 }
 
 // Ignore transient IDs and screenshot bytes when detecting stalled planning.
@@ -63,6 +64,24 @@ export class ProgressGuard {
 
 /** A platform from before the agent answers its route with FastAPI's bare 404. */
 const unsupported = (error) => error?.status === 404 && error.message === "Not Found";
+
+const BUSY_RETRIES = [1000, 2500];
+/**
+ * One step request. "Already running" (409) is the platform's session lock: it can answer that
+ * while it still finishes this very decision. Sent again with the same request_id, the finished
+ * decision comes back from its cache instead of the run ending. Other 409s are not retried.
+ */
+export async function stepWithRetry(step, body, waits = BUSY_RETRIES) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await step(body);
+    } catch (error) {
+      const busy = error?.status === 409 && /already running/i.test(String(error?.message ?? ""));
+      if (!busy || !body.request_id || attempt >= waits.length) throw error;
+      await sleep(waits[attempt]);
+    }
+  }
+}
 
 /** Platform errors in words the panel can show. */
 export function explain(error) {
@@ -236,7 +255,10 @@ async function choose(driver, target, frames, answer, adaptive = false) {
   if (!match.ok) {
     // A typeahead: type the answer and wait for suggestions.
     const focus = await driver.call(target.frame, "focusForTyping", target.local);
-    if (focus?.ok && focus.mode === "keys") {
+    // A dial code ("+91") is not part of any country's name: typed into the search box it would
+    // filter every country away (or leave an unfiltered list whose first entry is a different country).
+    const dialCode = /^\+\d{1,4}$/.test(String(answer).trim());
+    if (focus?.ok && focus.mode === "keys" && !dialCode) {
       await driver.insertText(answer);
       if (!adaptive) await sleep(TYPEAHEAD_WAIT_MS);
       match = adaptive
@@ -269,6 +291,9 @@ async function choose(driver, target, frames, answer, adaptive = false) {
   }
   await clickRef(driver, { ...target, local: match.ref }, frames);
   const readback = await readCommitted(driver, target, [match.text, answer]);
+  // Some widgets (a phone's country list) stay open after a pick, and an open list of 200+ options
+  // would fill every later page read: close it now that the choice is made.
+  await closePicker(driver, target);
   return { matched: match.text, ...readback };
 }
 
@@ -301,10 +326,15 @@ async function commitByKeys(driver, target, answer) {
   const typed = await driver.call(target.frame, "typedText", target.local).catch(() => "");
   if (!showsChoice(typed, answer)) return { committed: "", verified: false };
   const before = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
+  // A list that shows its options must show the answer first: the highlighted entry is what Enter takes.
+  const first = await driver.call(target.frame, "firstOptionMatches", target.local, answer).catch(() => null);
+  if (first?.known && !first.matches) return { committed: "", verified: false };
   try {
-    // Enter on a plain input could submit the form: only press it on a focused combobox/listbox.
-    if (!(await driver.call(target.frame, "prepareKey", target.local, "Enter"))) return { committed: "", verified: false };
+    // Enter on a plain input, or a combobox whose list closed, submits the form: check again right
+    // before Enter, after ArrowDown, that the list is still open.
+    if (!(await driver.call(target.frame, "prepareKey", target.local, "ArrowDown"))) return { committed: "", verified: false };
     await driver.press("ArrowDown");
+    if (!(await driver.call(target.frame, "prepareKey", target.local, "Enter"))) return { committed: "", verified: false };
     await driver.press("Enter");
   } catch {
     return { committed: "", verified: false };
@@ -327,6 +357,15 @@ async function commitByKeys(driver, target, answer) {
  * after opening it for a moment. [] for free-text questions or when nothing could be read.
  * The platform names the field by its ref; radio groups as "g<n>:<ref of one option>".
  */
+/**
+ * The observation with each search-style picker (a textbox the page marks `popup`, as Greenhouse's
+ * dropdowns are) as the dropdown it is, so reading its choices opens it instead of treating it as
+ * free text. Shared by the commands (options, fill_form) and the questions put to the candidate.
+ */
+export function comboView(observation) {
+  return { ...observation, elements: observation.elements.map((e) => (e.popup && e.role === "textbox" ? { ...e, role: "combobox" } : e)) };
+}
+
 /** The role of the field a question is about (checkbox, file, textbox…), or null when it names none. */
 export function questionRole(observation, question) {
   const ref = String(question?.ref ?? "").replace(/^g\d+:/, "");
@@ -339,6 +378,12 @@ export async function questionChoices(driver, refs, frames, observation, questio
   if (!el) return [];
   if (el.role === "radio" || (el.role === "checkbox" && el.group)) {
     return observation.elements.filter((e) => e.role === el.role && e.group === el.group).map((e) => e.name).filter(Boolean);
+  }
+  if (el.role === "checkbox" && !el.group && el.section) {
+    // Boxes the page lists under one question without grouping them (Greenhouse's salary ranges)
+    // are that question's choices; the platform folds them the same way.
+    const same = observation.elements.filter((e) => e.role === "checkbox" && !e.group && e.section === el.section);
+    if (same.length >= 2 && /\?|\b(?:select|choose|pick)\b|all that apply/i.test(el.section)) return same.map((e) => e.name).filter(Boolean);
   }
   if (el.options?.length) return el.options;
   const target = refs.get(ref);
@@ -396,6 +441,9 @@ export async function execute(driver, refs, frames, action, files) {
         if (!current?.ok) throw new Error(current?.reason ?? "Choose the phone country first.");
         text = current.text;
       }
+      // A box with a maxlength silently cuts a longer answer: say so instead of typing half of it.
+      const limit = await driver.call(target.frame, "textLimit", target.local).catch(() => 0);
+      if (limit > 0 && String(text).length > limit) throw new Error(`This field accepts at most ${limit} characters and the answer has ${String(text).length}. Shorten it to fit.`);
       await typeInto(driver, target, frames, text, Boolean(action.command_id));
       if (!plan) {
         // Read the field back so an input the page dropped or cleared is reported, not assumed.
@@ -735,7 +783,7 @@ export class Agent {
           continue;
         }
         const controlRevision = this.controlRevision;
-        const res = await this.step({
+        const res = await stepWithRetry(this.step, {
           ...(this.controllerVersion === 2 ? { controller_version: 2, request_id: crypto.randomUUID() } : {}),
           ...(this.verifiedCommands ? { verified_commands: true } : {}),
           session_id: sessionId,
@@ -807,7 +855,8 @@ export class Agent {
           ? res.actions.every((a) => ["review", "options", "observe", "read_page"].includes(a.type))
           : Boolean(res.want_screenshot);
         this.progressGuard.noteReading(looks && results.every((r) => r.ok));
-        this.progressGuard.noteFailures(results.filter((r) => !r.ok).map((r) => String(res.actions?.[r.index]?.label || res.actions?.[r.index]?.type || "a field")));
+        // The field's name, not the verb the action's label starts with ("Filled Phone" → "Phone").
+        this.progressGuard.noteFailures(results.filter((r) => !r.ok).map((r) => String(res.actions?.[r.index]?.label || res.actions?.[r.index]?.type || "a field").replace(/^(?:Filled|Filling|Chose|Typed|Selected)\s+/i, "")));
         if (res.status === "ready_for_review") {
           this.status = "ready";
           this.say("Everything I could fill is done. Review the form and submit it yourself.");
@@ -828,8 +877,11 @@ export class Agent {
         }
         if (res.status === "ask_user") {
           if (res.question?.kind === "question") {
-            const choices = await questionChoices(this.driver, refs, frames, observation, res.question);
-            this.last.question = { ...res.question, choices, role: questionRole(observation, res.question) };
+            // A picker the page reports as a textbox is still a dropdown: its choices become the
+            // card's buttons, not "type your answer / draft it".
+            const view = comboView(observation);
+            const choices = await questionChoices(this.driver, refs, frames, view, res.question);
+            this.last.question = { ...res.question, choices, role: questionRole(view, res.question) };
           }
           this.status = "waiting";
           this.emit();

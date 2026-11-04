@@ -44,6 +44,25 @@ export function autoApplyUrl(url, id, code) {
   }
 }
 
+/**
+ * The message for a failed request. A validation failure (422) carries a list, not a string: name
+ * the fields it rejected ("observation.elements.3.popup: extra inputs are not permitted") rather
+ * than the bare status text, so a rejected page can be told apart from a broken server.
+ * @param {{detail?: unknown}} body @param {string} statusText
+ */
+export function errorMessage(body, statusText) {
+  const detail = body?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length) {
+    const items = detail.slice(0, 3).map((d) => {
+      const where = Array.isArray(d?.loc) ? d.loc.filter((p) => p !== "body").join(".") : "";
+      return [where, typeof d?.msg === "string" ? d.msg : ""].filter(Boolean).join(": ");
+    }).filter(Boolean);
+    if (items.length) return `${statusText || "Rejected"} (${items.join("; ")}${detail.length > 3 ? "; …" : ""})`;
+  }
+  return statusText;
+}
+
 export class BridgeError extends Error {
   /** @param {number} status @param {string} message */
   constructor(status, message) {
@@ -75,7 +94,7 @@ export class JobHuntBridge {
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new BridgeError(res.status, typeof body.detail === "string" ? body.detail : res.statusText);
+      throw new BridgeError(res.status, errorMessage(body, res.statusText));
     }
     return res.status === 204 ? null : res.json();
   }

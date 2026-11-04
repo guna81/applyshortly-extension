@@ -124,6 +124,24 @@
     return invalid ? { invalid, error: clip(F.invalidReason(field) || "", 300) || null } : { invalid: false };
   }
 
+  const GENERIC_UPLOAD = /^(?:attach|upload|choose|browse|select|add)(?: a| your)?(?: file| document| resume| cv)?s?\W*$/i;
+
+  /**
+   * A file input whose own label is only its button ("Attach") is named by the group around it
+   * ("Resume/CV *", "Cover Letter"): Greenhouse puts one such button per document, so the button
+   * text alone cannot tell the résumé from the cover letter.
+   */
+  function uploadGroupLabel(el, label) {
+    if (label && !GENERIC_UPLOAD.test(label.trim())) return { name: label, required: false };
+    const group = el.closest('[role="group"][aria-labelledby], fieldset');
+    const ids = group?.getAttribute?.("aria-labelledby");
+    const text = ids
+      ? ids.split(/\s+/).map((id) => el.ownerDocument.getElementById(id)?.textContent ?? "").join(" ")
+      : group?.querySelector?.("legend")?.textContent ?? "";
+    const name = clip(clean(text), 500);
+    return name ? { name, required: /\*\s*$/.test(text.trim()) } : { name: label, required: false };
+  }
+
   /** Field → observation elements: one per input, or one per option for radio groups. */
   function fieldElements(field) {
     const { el } = field;
@@ -137,8 +155,13 @@
       const role = el.tagName === "TEXTAREA" ? "textarea" : "textbox";
       // A search-style combobox (react-select) keeps its input empty and shows the pick beside it.
       const picked = el.value ? "" : F.widgetPick(el);
+      const cap = Number.isInteger(el.maxLength) && el.maxLength > 0 && el.maxLength < 1_000_000 ? { text_limit: el.maxLength } : {};
+      // What the box accepts: its input mode and pattern say "digits only" for a phone beside a
+      // country selector, which a "+91 …" value would be refused by.
+      const mode = el.inputMode ? { input_mode: clip(el.inputMode, 20) } : {};
+      const pat = el.getAttribute?.("pattern") ? { pattern: clip(el.getAttribute("pattern"), 200) } : {};
       return [base(el, { role, name: label, input_type: el.type || "text", value: clip(el.value || picked || "", 2000), required,
-        ...(el.matches('[role="combobox"]') ? { popup: true } : {}), ...group, ...invalidInfo(field) })];
+        ...(el.matches('[role="combobox"]') ? { popup: true } : {}), ...group, ...cap, ...mode, ...pat, ...invalidInfo(field) })];
     }
     if (field.kind === "select") {
       const chosen = el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
@@ -163,7 +186,8 @@
       return [base(el, { role: "checkbox", name: label, checked, required })];
     }
     if (field.kind === "file") {
-      return [base(el, { role: "file", name: label, value: el.files?.[0]?.name ?? "", required, in_viewport: true })];
+      const named = uploadGroupLabel(el, label);
+      return [base(el, { role: "file", name: named.name, value: el.files?.[0]?.name ?? "", required: required || named.required, in_viewport: true })];
     }
     if (field.kind === "dropdown") {
       const options = listedOptions(el).slice(0, 100).map((t) => clip(t, 500));
@@ -373,6 +397,9 @@
     if (key === "Escape" && !pickerOpen(ref)) return false;
     const role = el.getAttribute("role");
     if (key === "Enter" && !["combobox", "listbox", "option"].includes(role) && el.tagName !== "SELECT") return false;
+    // Enter in an input whose list is closed reaches the form: react-select lets it through, and
+    // the browser submits (on Greenhouse every empty required field turned red). Only into an open list.
+    if (key === "Enter" && el.tagName === "INPUT" && !listShown(el)) return false;
     if (clickable(ref)) return false;
     el.focus?.();
     return document.activeElement === el || el.getRootNode()?.activeElement === el;
@@ -423,6 +450,14 @@
       push(extraTextElements(root, dialog, checkLayout));
       push(disabledElements(root, dialog, checkLayout));
     }
+    // Page order, not collection order: collectFields groups by kind (text inputs, then
+    // selects, …), and the agent asks its questions in the order the elements come.
+    elements.sort((a, b) => {
+      const x = find(a.ref), y = find(b.ref);
+      if (!x || !y || x === y) return 0;
+      const place = x.compareDocumentPosition(y);
+      return place & 4 ? -1 : place & 2 ? 1 : 0;
+    });
     for (const root of roots(doc)) push(buttonElements(root, dialog, checkLayout));
     if (extended) {
       for (const item of elements) Object.assign(item, contextOf(find(item.ref)));
@@ -607,7 +642,7 @@
     return true;
   }
 
-  function visibleOptions(ref, checkLayout = true) {
+  function visibleOptions(ref, checkLayout = true, limit = 100) {
     const el = find(ref);
     if (!el) return [];
     const doc = el.ownerDocument;
@@ -618,7 +653,7 @@
       .filter((o) => isVisible(o, checkLayout) && o.getAttribute("aria-disabled") !== "true");
     if (!found.length && shownBefore) found = F.appearedOptions(shownBefore, doc, checkLayout).map((o) => o.el);
     return found
-      .slice(0, 100)
+      .slice(0, limit)
       .map((o) => ({ ref: refOf(o), text: clip(clean(o.getAttribute("aria-label") || o.textContent), 200) }));
   }
 
@@ -629,10 +664,24 @@
 
   /** The option to click for an answer among the showing ones; partial matches allowed. */
   function matchOption(ref, answer, checkLayout = true) {
-    const options = visibleOptions(ref, checkLayout);
+    // The whole list, not the first hundred: a country picker has 244 entries and India is past 100.
+    const options = visibleOptions(ref, checkLayout, Infinity);
     const chosen = F.chooseOption(options, answer)
       ?? options.find((o) => o.text.toLowerCase().startsWith(String(answer).toLowerCase().slice(0, 12)));
     return chosen ? { ok: true, ref: chosen.ref, text: chosen.text } : { ok: false, options: options.map((o) => o.text).slice(0, 15) };
+  }
+
+  /**
+   * Is the first entry of the open list the answer? Enter commits the highlighted entry, which is the
+   * first one only when the typed text narrowed the list: a country list searched by name does not
+   * narrow on "+91", so its first entry (Afghanistan) would be picked. known=false when no option
+   * can be read (role-less lists), where the caller falls back on reading the widget back.
+   */
+  function firstOptionMatches(ref, answer) {
+    const [first] = visibleOptions(ref, true, 3);
+    if (!first) return { known: false, matches: false };
+    const matches = Boolean(F.chooseOption([first], answer)) || first.text.toLowerCase().startsWith(String(answer).toLowerCase().slice(0, 12));
+    return { known: true, matches };
   }
 
   /**
@@ -688,6 +737,13 @@
    * Whether the field's own list is showing: Escape then closes that list. With nothing open,
    * Escape goes to the page, and dialogs (an Apply pop-up with the whole form) close on it.
    */
+  /** The input's own list is showing: it says it is expanded, or a list it controls is visible. */
+  function listShown(el) {
+    const opener = el.closest?.("[aria-expanded]") ?? el;
+    if (el.getAttribute?.("aria-expanded") === "true" || opener.getAttribute?.("aria-expanded") === "true") return true;
+    return ownedLists(el).some((list) => isVisible(list, true));
+  }
+
   function pickerOpen(ref, checkLayout = true) {
     const el = find(ref);
     if (!el) return false;
@@ -855,6 +911,11 @@
     describeAccessible,
     hitTest,
     prepareKey,
+    /** The most characters a text box takes (its maxlength), or 0 when it has no limit. */
+    textLimit: (ref) => {
+      const n = find(ref)?.maxLength;
+      return Number.isInteger(n) && n > 0 && n < 1_000_000 ? n : 0;
+    },
     snapshotState,
     executionState: (value) => { executing = value; passThrough(value); },
     freshState: (ref) => {
@@ -880,6 +941,7 @@
     shownChoices,
     noteShown,
     matchOption,
+    firstOptionMatches,
     typedSuggestion,
     scrollOptions,
     attach,

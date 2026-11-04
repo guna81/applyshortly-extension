@@ -212,6 +212,16 @@
       // A request to open a page, link or button is for the user to act on, never an answer to draft.
       const typed = !question.role || TYPED_ROLES.includes(question.role);
       const draft = typed && !choices.length && !PAGE_ACTION.test(question.text ?? "") && draftable({ kind: "text", label: question.text });
+      // An optional field never blocks: it can be left blank (the agent moves on), not just "filled on the page".
+      if (question.optional) {
+        const note = choices.length ? "Optional: pick an answer, or leave it blank." : draft ? "Optional: type an answer, I can draft one, or leave it blank." : "Optional: type an answer, or leave it blank.";
+        return {
+          text: "",
+          question: { label: question.text, note },
+          choices: [...choices, ...(draft ? [DRAFT_REPLY] : []), SKIP_REPLY],
+          draftable: draft,
+        };
+      }
       return {
         text: "",
         question: { label: question.text, note: draft ? "Type your answer, or I can draft one." : undefined },
