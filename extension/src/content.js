@@ -458,7 +458,7 @@
       // The Continue chip on a CAPTCHA/sign-in/click prompt is "done on the page", not an answer:
       // sent as a reply the platform never sees `resumed`, so a solved CAPTCHA keeps blocking.
       const done = message === P.ON_PAGE_REPLY || message === P.CONTINUE_REPLY;
-      await agentControl(agent.agent_engine === "browser" && !done ? "reply" : "resume", message);
+      await agentControl(agent.agent_engine === "ai_led" && !done ? "reply" : "resume", message);
       return panel.idle();
     }
     if (message === P.ON_PAGE_REPLY || (q.optional && message === P.SKIP_REPLY)) {

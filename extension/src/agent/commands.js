@@ -1,4 +1,4 @@
-// The verified command layer shared by every controller: the platform's AI driver (loop.js) and a
+// The verified command layer shared by every controller: the platform's AI-led engine (loop.js) and a
 // host assistant over the relay (external-browser.js). A controller decides what to do; this runs it
 // against the page, checks the page is still what was observed, and reports what the page shows after.
 import { observeTab, execute, questionChoices, comboView } from "./loop.js";

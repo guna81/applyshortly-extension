@@ -637,7 +637,7 @@ export class Agent {
   }
 
   message(text) {
-    if (this.controllerVersion !== 2) throw new Error("Restart with the upgraded AI driver.");
+    if (this.controllerVersion !== 2) throw new Error("Restart with the upgraded AI-led controller.");
     this.progressGuard.reset();
     this.messages.push(text);
     this.controlRevision += 1;
@@ -820,7 +820,7 @@ export class Agent {
         focusQuery = res.focus_query || "";
         wantScreenshot = Boolean(res.want_screenshot);
         annotateScreenshot = Boolean(res.annotate_screenshot);
-        if (res.message?.startsWith("Using Standard: Adaptive is unavailable")) this.fillingNotice = res.message.split(".")[0] + ".";
+        if (res.message?.startsWith("Using Rules-led: AI-led is unavailable")) this.fillingNotice = res.message.split(".")[0] + ".";
         this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code };
         if (res.message && res.status !== "continue") this.say(res.message);
         for (const [index, action] of (res.actions ?? []).entries()) {

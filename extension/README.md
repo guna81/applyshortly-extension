@@ -109,7 +109,7 @@ apply. No shared token or credential-seeding file is distributed or loaded.
 
 ### The agent panel
 
-In the AI driver, questions inspect the page without editing it. Explicit instructions such
+In the AI-led engine, questions inspect the page without editing it. Explicit instructions such
 as "Recover this application", "Proceed with the edits", and "Please remove blank rows"
 allow the agent to make the requested changes. Recovery retains the session's AI spending
 limits; resuming does not reset them.
@@ -144,19 +144,19 @@ Required multi-select questions count as one question and stay open until you se
 Consent still asks for your explicit choice. Fill and submit waits for those required answers;
 a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
 
-### AI driver controller
+### AI-led controller
 
-The AI driver and a connected assistant run the same page commands (`extension/src/agent/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the AI driver uses them too and sends each action's `result`; the panel names the driver (Platform AI or Your assistant).
+The AI-led engine and a connected assistant run the same page commands (`extension/src/agent/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the AI-led engine uses them too and sends each action's `result`; the panel says who it is run by (ApplyShortly or your assistant).
 
 Protocol 2 pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. The platform also pauses after six decisions without progress and caps AI spend at about $1 per application. Resume explicitly after checking the page; each resume starts a new safety window.
 
 Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. Besides click, type, choose, check, upload, keys, scroll and wait, the agent can hover, drag between two controls, and wait for text to appear. Screenshots are capped at 1280 pixels on the longest side, and taken only when the page layout changed. Taking one changes nothing on the page: the capture is shrunk and labelled inside the extension (never with Chrome's clip option, which briefly resizes the page), and the panel stays in place. A field already on screen is filled without scrolling. Your saved answers for plain fields (text, email, numbers, native dropdowns) are typed in one go without an AI call; the AI handles pickers, phone numbers, uploads and anything that didn't stick.
 
-Choose **Settings → Form agent engine → AI driver** in ApplyShortly for new sessions.
-AI driver is the service default. It uses fresh page observations, screenshots
+Choose **Settings → Advanced settings → Form filling method → AI-led** in ApplyShortly for new sessions.
+AI-led is the service default. It uses fresh page observations, screenshots
 and native AI tool calls; Anthropic and Gemini native tools are supported. Personal OpenAI
 keys support structured drafts rather than this native tool loop; sessions on those keys, or with
-no AI, run Rules first instead.
+no AI, run Rules-led instead.
 
 With controller protocol 2 (the server default), the extension inspects the page before filling
 and keeps page questions, actions and review in one session. Messages interrupt pending actions
@@ -430,8 +430,8 @@ connector URL shown there to your assistant, connect Chrome, choose applications
 assistant, then review the selection and site permissions. A single online browser is selected
 automatically. Closing the setup page keeps the connection active; **Stop access** ends it.
 
-**Controlled by** identifies ApplyShortly or your connected assistant. Platform runs expose
-**Standard** and **Adaptive (experimental)** under **Filling details**; change them in website
+**Run by** identifies ApplyShortly or your connected assistant. Platform runs show
+**Rules-led** or **AI-led** under **Filling details**; change the method in website
 Settings → Advanced settings → Form filling method. Connected assistants use their own allowance.
 **Fill and submit** is an explicit submission choice with the existing completion checks and
 cancellable countdown. **Submission needs verification** requires checking the employer result

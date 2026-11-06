@@ -250,7 +250,7 @@ export interface AgentStepResponse {
   controller_version?: 1 | 2;
   observation_id?: string | null;
   session_id: string;
-  agent_engine?: "classic" | "browser" | null;
+  agent_engine?: "rules_led" | "ai_led" | null;
   status: "continue" | "ask_user" | "ready_for_review" | "failed";
   actions: AgentAction[];
   message: string;
@@ -416,7 +416,7 @@ export class JobHuntBridge {
   }
 
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
-  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "classic" | "browser"; verified_commands?: boolean}> {
+  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "rules_led" | "ai_led"; verified_commands?: boolean}> {
     return this.request("/api/extension/agent/capabilities");
   }
 

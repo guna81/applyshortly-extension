@@ -245,7 +245,7 @@ test("review names an attached file even though its file input is gone", async (
   assert.equal((await plain.review()).attached_files, undefined);
 });
 
-// The platform's AI driver gets the same verified results through the Agent loop.
+// The platform's AI-led engine gets the same verified results through the Agent loop.
 const frameObs = (elements) => ({ url: "https://careers.example.com/apply", title: "Apply", dialog: null, blockers: [], errors: [], text: "", elements, more_below: false, document_id: "doc", observation_id: "o1", viewport_width: 1000, viewport_height: 800 });
 
 async function runAgent({ verifiedCommands, actions }) {
@@ -270,7 +270,7 @@ async function runAgent({ verifiedCommands, actions }) {
   return { requests, driver };
 }
 
-test("the AI driver sends verified_commands and gets a result for a batched fill_form", async () => {
+test("the AI-led engine sends verified_commands and gets a result for a batched fill_form", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: true,
     actions: (ids, obs) => [{ type: "fill_form", command_id: "s:1:0", observation_id: obs, label: "Filling your saved answers",
       fields: [{ ref: ids.First, text: "Guna" }, { ref: ids.Last, text: "P" }] }] });
@@ -282,7 +282,7 @@ test("the AI driver sends verified_commands and gets a result for a batched fill
   assert.equal(result.result.done, 2);
 });
 
-test("the AI driver types a fill_form exactly as the platform serialises it (checked: null on text entries)", async () => {
+test("the AI-led engine types a fill_form exactly as the platform serialises it (checked: null on text entries)", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: true,
     actions: (ids, obs) => [{ type: "fill_form", command_id: "s:1:0", observation_id: obs, label: "Filled 2 saved answers", ref: null, text: null, checked: null,
       fields: [{ ref: ids.First, text: "Guna", checked: null }, { ref: ids.Last, text: "P", checked: null }] }] });
@@ -301,7 +301,7 @@ test("an unverified write in a batch fails the result so the model sees it did n
   assert.equal(result.result.done, 1);
 });
 
-test("without the capability the AI driver neither asks for verified commands nor sends results", async () => {
+test("without the capability the AI-led engine neither asks for verified commands nor sends results", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: false,
     actions: (ids, obs) => [{ type: "type", ref: ids.First, text: "Guna", command_id: "s:1:0", observation_id: obs, label: "Filled First" }] });
   assert.equal("verified_commands" in requests[0], false);

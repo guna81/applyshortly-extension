@@ -127,7 +127,7 @@ export function externalBrowser({
   const changedAnswers = new Map();
   const approvedAnswers = new Map();
   // Runs every page command (verified writes, fill_form, options, review) the same way the platform's
-  // own AI driver does; this controller only decides who is allowed to ask for them.
+  // own AI-led engine does; this controller only decides who is allowed to ask for them.
   const runner = new CommandRunner({ policy: {
     blockers: true,
     allowHref: (href, origin) => {

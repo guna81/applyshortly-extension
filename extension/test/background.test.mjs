@@ -28,7 +28,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   };
   class BridgeError extends Error { constructor(status, message) { super(message); this.status = status; } }
   class JobHuntBridge {
-    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "classic" }); }
+    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "rules_led" }); }
     aiSettings() { return { mode: "platform", configured: [] }; }
     selectAI(body) { calls.push({ selectedAI: body }); return { ...body, configured: [] }; }
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }

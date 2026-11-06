@@ -868,8 +868,8 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
   await until(() => bubbles().filter((t) => /more than one step/.test(t)), "the handoff line");
   assert.ok(!buttons().includes("Fill with the agent"));
 
-  page.message({ type: "agentUpdate", status: "running", agent_engine: "browser", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
-  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Filling method: Adaptive (experimental)"), "session engine badge");
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
+  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Filling method: AI-led"), "session engine badge");
   await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
   assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
   assert.equal(shadow().querySelector(".composer-input").disabled, true);
@@ -1109,18 +1109,18 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   page.win.close();
 });
 
-for (const [engine, driver] of [["browser", "Controlled by: ApplyShortly"], ["classic", "Controlled by: ApplyShortly"]]) {
-  test(`agent panel names the driver for the ${engine} engine`, async () => {
+for (const [engine, driver] of [["ai_led", "Run by: ApplyShortly"], ["rules_led", "Run by: ApplyShortly"]]) {
+  test(`agent panel says who runs it for the ${engine} engine`, async () => {
     const page = panelPage(() => ({}), { form: STEP_FORM });
     page.start();
     await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
     page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: engine, log: [] });
-    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent driver"]')].filter((el) => el.textContent === driver), "driver label");
+    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent run by"]')].filter((el) => el.textContent === driver), "driver label");
     page.win.close();
   });
 }
 
-for (const [engine, label] of [["classic", "Standard"], [undefined, "Not reported yet"]]) {
+for (const [engine, label] of [["rules_led", "Rules-led"], [undefined, "Not reported yet"]]) {
   test(`agent panel shows ${label} from session metadata`, async () => {
     const page = panelPage(() => ({}), { form: STEP_FORM });
     page.start();
@@ -1142,7 +1142,7 @@ test("the connected assistant's steps open in this same panel, with Pause for me
   ] });
   await until(() => /Your assistant is filling this form/.test(page.shadow()?.textContent ?? ""), "assistant headline");
   const text = page.shadow().textContent;
-  assert.match(page.shadow().querySelector('[aria-label="Form agent driver"]').textContent, /^Controlled by: Your assistant/);
+  assert.match(page.shadow().querySelector('[aria-label="Form agent run by"]').textContent, /^Run by: Your assistant/);
   assert.match(text, /Typing into “First Name” \(1 of 15\)/);
   assert.match(text, /Choosing an option in “City” \(2 of 15\)/);
   assert.equal(page.shadow().querySelector(".composer-input"), null, "no chat box while the assistant drives");
@@ -1198,7 +1198,7 @@ test("browser manual handoff sends page questions back to the browser controller
   const page = panelPage(() => { throw new Error("text-only assistant must not receive the question"); }, { form: STEP_FORM });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
-  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "browser", appId: 5, log: [], question: { kind: "click", text: "Please inspect the page." } });
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [], question: { kind: "click", text: "Please inspect the page." } });
   const input = page.shadow().querySelector(".composer-input");
   input.value = "Can you see the City field?";
   input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
@@ -1210,13 +1210,13 @@ test("browser manual handoff sends page questions back to the browser controller
 test("v2 starts the controller before filling and accepts page questions while running", async () => {
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
-    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
     suggest: () => { throw new Error("deterministic filler must not run"); },
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   assert.equal(page.win.document.getElementById("name").value, "");
-  page.message({ type: "agentUpdate", status: "running", controller_version: 2, agent_engine: "browser", appId: 5, log: [] });
+  page.message({ type: "agentUpdate", status: "running", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [] });
   const input = page.shadow().querySelector(".composer-input");
   assert.equal(input.disabled, false);
   input.value = "Can you see City?";
@@ -1224,7 +1224,7 @@ test("v2 starts the controller before filling and accepts page questions while r
   await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "question queued in controller");
   assert.equal(page.sent.filter((m) => m.type === "assist").length, 0);
   page.win.document.getElementById("name").value = "Verified name";
-  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "browser", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
   await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /been through/.test(b.textContent)), "readback refresh");
   assert.equal(page.win.document.getElementById("name").value, "Verified name");
   assert.equal(page.sent.filter((m) => m.type === "suggest").length, 0);
@@ -1234,12 +1234,12 @@ test("v2: Draft it for me on the agent's question drafts the answer instead of s
   const asked = "5. Where do you see yourself in the next 5 years, in terms of your career goal?";
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
-    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
     suggest: (msg) => (msg.allowGenerate ? { answer: "I want to lead an AI platform team.", source: "generated", needs_review: true } : { answer: null }),
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
-  page.message({ type: "agentUpdate", status: "waiting", controller_version: 2, agent_engine: "browser", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal" } });
+  page.message({ type: "agentUpdate", status: "waiting", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal" } });
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
   await until(() => quick().filter((b) => b.textContent === "Draft it for me"), "the draft chip on a single question");
   quick().find((b) => b.textContent === "Draft it for me").click();
@@ -1254,12 +1254,12 @@ test("v2: after the agent finishes, 'I agree, tick it' ticks the box on the page
     <button type="submit">Submit application</button>`;
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form,
-    context: () => ({ controllerVersion: 2, agentEngine: "browser", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   page.win.document.getElementById("name").value = "Profile name";
-  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "browser", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
   await until(() => quick().find((b) => b.textContent === "I agree, tick it"), "the tick chip");
   const consent = page.win.document.getElementById("consent");
@@ -1308,7 +1308,7 @@ test("external assistant panel names the controller and never treats an uncertai
   try {
     page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "needs_verification", steps: [] });
     await until(() => /Submission needs verification/.test(page.shadow()?.textContent ?? ""), "uncertain outcome");
-    assert.match(page.shadow().querySelector('[aria-label="Form agent driver"]').textContent, /Controlled by: Claude/);
+    assert.match(page.shadow().querySelector('[aria-label="Form agent run by"]').textContent, /Run by: Claude/);
     assert.match(page.shadow().textContent, /Do not submit again/);
     assert(!page.shadow().textContent.includes("then submit it yourself"));
     page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "submitted", steps: [] });
@@ -1321,12 +1321,12 @@ test("the panel explains a provider fallback while keeping method details second
   try {
     page.start();
     await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
-    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: "classic", filling_notice: "Using Standard: Adaptive is unavailable because the current AI provider does not support browser tools.", log: [] });
-    await until(() => /Using Standard: Adaptive is unavailable/.test(page.shadow().textContent), "fallback explanation");
+    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: "rules_led", filling_notice: "Using Rules-led: AI-led is unavailable because the current AI provider does not support browser tools.", log: [] });
+    await until(() => /Using Rules-led: AI-led is unavailable/.test(page.shadow().textContent), "fallback explanation");
     const details = [...page.shadow().querySelectorAll("details")].find((node) => node.querySelector("summary")?.textContent === "Filling details");
     assert.equal(details.open, false);
-    assert.match(details.textContent, /Filling method: Standard/);
-    assert.equal(page.shadow().querySelector('[aria-label="Form agent driver"]').textContent, "Controlled by: ApplyShortly");
+    assert.match(details.textContent, /Filling method: Rules-led/);
+    assert.equal(page.shadow().querySelector('[aria-label="Form agent run by"]').textContent, "Run by: ApplyShortly");
   } finally { page.win.close(); }
 });
 

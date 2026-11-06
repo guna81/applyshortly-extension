@@ -288,8 +288,8 @@
         "properties": {
           "agent_engine": {
             "enum": [
-              "classic",
-              "browser"
+              "rules_led",
+              "ai_led"
             ],
             "title": "Agent Engine",
             "type": "string"
@@ -923,8 +923,8 @@
             "anyOf": [
               {
                 "enum": [
-                  "classic",
-                  "browser"
+                  "rules_led",
+                  "ai_led"
                 ],
                 "type": "string"
               },

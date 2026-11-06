@@ -28,11 +28,11 @@ Preserve user-chosen submission (the user clicks the site's Submit, or explicitl
 
 Autopilot windows (`src/background.js`, `autopilot*`) open only a link the platform returned from `/autopilot/next`, with its one-time code, only with the user's setting on, one at a time and never for a job board (the platform doesn't offer them; the extension also never opens a non-http(s) link). They are unattended, so they never start the form agent or AI drafting, never send an answer marked for checking, stop on a sign-in page, and close only the tab they opened, after the submit attempt. Keep it that way.
 
-The AI driver controller (`src/agent/loop.js`, `src/agent/cdp.js`) runs only when the platform negotiates protocol 2. It pauses locally on repeated page states or after sixty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
+The AI-led controller (`src/agent/loop.js`, `src/agent/cdp.js`) runs only when the platform negotiates protocol 2. It pauses locally on repeated page states or after sixty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
 
-## Testing the AI driver on a live form
+## Testing the AI-led engine on a live form
 
-Unit tests (`npm test` on Node 22) do not show how the driver behaves on a real page. The platform
+Unit tests (`npm test` on Node 22) do not show how the AI-led engine behaves on a real page. The platform
 repo has a headless harness that runs the built `dist/extension` against a live form with no
 Chrome reload (`scripts/live_extension/run.sh`, see `apply-assistant/docs/development/live-extension-testing.md`).
 It spends AI credits, and it covers the agent loop and command layer only, not the panel chat:
@@ -43,8 +43,8 @@ Rebuild with `python3 scripts/build_extension.py` before either, since Chrome an
 
 `extension/src/agent/commands.js` (`CommandRunner`) is the only place that guards and runs page
 commands (stale observation, document change, user-edited or replaced control, password, unapproved
-link; verified `type`/`select`/`check`, `fill_form`, `options`, `review`, delta replies). The AI
-driver (`agent/loop.js`) and the external controller (`external-browser.js`) both call it; do not
+link; verified `type`/`select`/`check`, `fill_form`, `options`, `review`, delta replies). The AI-led
+engine (`agent/loop.js`) and the external controller (`external-browser.js`) both call it; do not
 copy its guards into a controller. Keep it in step with the platform's
 `services/browser_commands.py`.
 

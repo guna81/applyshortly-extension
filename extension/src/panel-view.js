@@ -387,7 +387,7 @@
           el("small", { class: item.read ? "read" : "" }, item.read ? "✓ Your assistant read this" : "Waiting for your assistant to read this")));
       }
       const body = el("div", { class: "body", role: "log" },
-        el("div", { class: "meta", "aria-label": "Form agent driver" }, `Controlled by: ${a.assistantName || "Your assistant"} (your own AI allowance, no ApplyShortly credits)`),
+        el("div", { class: "meta", "aria-label": "Form agent run by" }, `Run by: ${a.assistantName || "Your assistant"} (your own AI allowance, no ApplyShortly credits)`),
         (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step…"),
         sent.children.length ? sent : null);
       queueMicrotask(() => { body.scrollTop = body.scrollHeight; });
@@ -558,8 +558,8 @@
       if (ctl.agent) {
         const engine = ctl.agent.agent_engine;
         if (ctl.agent.filling_notice) p.append(el("div", { class: "sub", role: "status", style: "padding:0 16px 10px" }, ctl.agent.filling_notice));
-        const label = engine === "browser" ? "Adaptive (experimental)" : engine === "classic" ? "Standard" : "Not reported yet";
-        p.append(el("div", { class: "sub", "aria-label": "Form agent driver", style: "padding:0 16px 10px" }, "Controlled by: ApplyShortly"));
+        const label = engine === "ai_led" ? "AI-led" : engine === "rules_led" ? "Rules-led" : "Not reported yet";
+        p.append(el("div", { class: "sub", "aria-label": "Form agent run by", style: "padding:0 16px 10px" }, "Run by: ApplyShortly"));
         p.append(el("details", { class: "sub", style: "padding:0 16px 10px" },
           el("summary", {}, "Filling details"),
           el("div", { "aria-label": "Form agent engine" }, `Filling method: ${label}`)));
