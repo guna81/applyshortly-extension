@@ -42,7 +42,7 @@ test('relay authenticates in its first frame without credential URLs or AI calls
     assert.equal(controller.status().connected, true);
     const steps = controller.status().activity.map((entry) => entry.text);
     assert(steps.includes('Browser connected. Waiting for your assistant'));
-    assert(steps.includes('You approved the batch'));
+    assert(steps.includes('You approved the selected applications'));
     assert(controller.status().activity.every((entry) => !('value' in entry)));
     await controller.stop();
     assert.equal(controller.status().connected, false);

@@ -47,3 +47,9 @@
   .assistant .site-access { align-items: flex-start; flex-direction: column; gap: 12px; }
   .assistant .activity-caption { display: none; }
 }
+
+.assistant .setup h2 { margin: 0 0 12px; font-size: 16px; }
+.assistant .setup ol { padding-left: 20px; display: grid; gap: 14px; }
+.assistant .setup li { line-height: 1.6; }
+.assistant .setup code { display: block; overflow-wrap: anywhere; margin-top: 6px; user-select: all; }
+.assistant .setup p { margin: 6px 0 0; font-size: 12px; }

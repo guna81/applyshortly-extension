@@ -47,6 +47,66 @@ export function driftOf(result, field, el, elements) {
   return "";
 }
 
+const FORM_ROLES = new Set(["textbox", "textarea", "combobox", "select", "checkbox", "radio", "file"]);
+
+/**
+ * Every answerable field of an observation and the required ones still empty. A radio or checkbox
+ * group counts once and is answered when any member is chosen. Pure: it reads the observation only,
+ * so the review a controller asks for and the readiness the panel is told about cannot disagree.
+ * @param {{ elements: any[] }} observation
+ */
+export function scanFields(observation) {
+  const all = observation.elements.filter((e) => FORM_ROLES.has(e.role) && !e.disabled);
+  const groups = new Map();
+  for (const e of all) if ((e.role === "radio" || e.role === "checkbox") && e.group) {
+    groups.set(`${e.role}:${e.group}`, [...(groups.get(`${e.role}:${e.group}`) ?? []), e]);
+  }
+  const answered = (e) => {
+    if (e.role === "radio" || e.role === "checkbox") {
+      const group = e.group ? groups.get(`${e.role}:${e.group}`) : [e];
+      return group.some((member) => member.checked);
+    }
+    return String(e.value ?? "").trim() !== "";
+  };
+  const seenGroups = new Set();
+  const fields = [];
+  const missing = [];
+  for (const e of all) {
+    if (e.group && (e.role === "radio" || e.role === "checkbox")) {
+      const key = `${e.role}:${e.group}`;
+      if (seenGroups.has(key)) continue;
+      seenGroups.add(key);
+      const chosen = groups.get(key).filter((m) => m.checked).map((m) => m.name);
+      fields.push({ ref: e.ref, name: e.group, role: e.role, value: chosen.join(", "), required: Boolean(e.required) });
+    } else {
+      const shown = e.role === "checkbox" ? String(Boolean(e.checked)) : String(e.value ?? "").slice(0, 120);
+      fields.push({ ref: e.ref, name: e.name, role: e.role, value: e.input_type === "password" ? "" : shown, required: Boolean(e.required),
+        ...(e.invalid || e.error ? { error: String(e.error ?? "invalid").slice(0, 120) } : {}) });
+    }
+    if (e.required && !answered(e)) missing.push({ ref: e.ref, name: e.group || e.name, role: e.role });
+  }
+  return { fields, missing };
+}
+
+const READINESS_NAMES = 30;
+
+/**
+ * What the panel needs to judge a finished run, taken from the same merged, frame-aware observation
+ * the agent worked from. The panel's own scan reads only the top document, so an application that
+ * lives in an iframe (or is split between frames) would otherwise look empty or complete.
+ * `framed` counts fields outside the top frame; `missing` lists the required ones still empty.
+ * @param {{ elements: any[] }} observation @param {Map<string, any>} refs
+ */
+export function readinessOf(observation, refs) {
+  const { fields, missing } = scanFields(observation);
+  const inFrame = (ref) => refs.get(ref)?.frame?.isTop === false;
+  return {
+    total: fields.length,
+    framed: fields.filter((f) => inFrame(f.ref)).length,
+    missing: missing.slice(0, READINESS_NAMES).map((m) => ({ name: String(m.name ?? "").slice(0, 80), role: m.role, framed: inFrame(m.ref) })),
+  };
+}
+
 export class CommandRunner {
   /** @param {{ driver?: any, policy?: CommandPolicy }} [options] */
   constructor({ driver = null, policy = {} } = {}) {
@@ -249,7 +309,7 @@ export class CommandRunner {
   /** The choices a dropdown offers, read by opening it (retried once: the first open often races). */
   async options(action) {
     if (!this.observed) await this.observe();
-    if (this.observed.observation.blockers.length) throw new Error("Resolve the page blocker first.");
+    if (this.policy.blockers !== false && this.observed.observation.blockers.length) throw new Error("Resolve the page blocker first.");
     const o = this.observed;
     const element = this.comboView().elements.find((e) => e.ref === action.ref);
     if (!element) throw new Error("That element is no longer on the page.");
@@ -268,38 +328,9 @@ export class CommandRunner {
    */
   async review() {
     if (!this.observed) await this.observe();
-    if (this.observed.observation.blockers.length) throw new Error("Resolve the page blocker first.");
+    if (this.policy.blockers !== false && this.observed.observation.blockers.length) throw new Error("Resolve the page blocker first.");
     const o = this.observed;
-    const roles = new Set(["textbox", "textarea", "combobox", "select", "checkbox", "radio", "file"]);
-    const all = o.observation.elements.filter((e) => roles.has(e.role) && !e.disabled);
-    const groups = new Map();
-    for (const e of all) if ((e.role === "radio" || e.role === "checkbox") && e.group) {
-      groups.set(`${e.role}:${e.group}`, [...(groups.get(`${e.role}:${e.group}`) ?? []), e]);
-    }
-    const answered = (e) => {
-      if (e.role === "radio" || e.role === "checkbox") {
-        const group = e.group ? groups.get(`${e.role}:${e.group}`) : [e];
-        return group.some((member) => member.checked);
-      }
-      return String(e.value ?? "").trim() !== "";
-    };
-    const seenGroups = new Set();
-    const fields = [];
-    const missing = [];
-    for (const e of all) {
-      if (e.group && (e.role === "radio" || e.role === "checkbox")) {
-        const key = `${e.role}:${e.group}`;
-        if (seenGroups.has(key)) continue;
-        seenGroups.add(key);
-        const chosen = groups.get(key).filter((m) => m.checked).map((m) => m.name);
-        fields.push({ ref: e.ref, name: e.group, role: e.role, value: chosen.join(", "), required: Boolean(e.required) });
-      } else {
-        const shown = e.role === "checkbox" ? String(Boolean(e.checked)) : String(e.value ?? "").slice(0, 120);
-        fields.push({ ref: e.ref, name: e.name, role: e.role, value: e.input_type === "password" ? "" : shown, required: Boolean(e.required),
-          ...(e.invalid || e.error ? { error: String(e.error ?? "invalid").slice(0, 120) } : {}) });
-      }
-      if (e.required && !answered(e)) missing.push({ ref: e.ref, name: e.group || e.name, role: e.role });
-    }
+    const { fields, missing } = scanFields(o.observation);
     const needsConfirmation = [];
     const popupRefs = new Set(o.observation.elements.filter((e) => e.popup).map((e) => e.ref));
     for (const item of missing.filter((m) => m.role === "combobox" || m.role === "select" || popupRefs.has(m.ref)).slice(0, 8)) {

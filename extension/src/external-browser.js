@@ -78,6 +78,7 @@ export function externalBrowser({
   const seen = new Set();
   let batches = [];
   let pendingReview = null;
+  let submissionState = null;
   let pendingNavigation = null;
   const trustedOrigins = new Set();
   // Step log shown in the popup and control page. It records what the assistant is doing,
@@ -172,6 +173,7 @@ export function externalBrowser({
     if (action.type === "stop" || action.type === "pause") { await stop(); return { paused: true }; }
     if (userPaused) throw new Error("The user paused browser control to edit the form by hand. Wait for them to continue, then observe the page again before changing anything.");
     if (action.type === "open") {
+      submissionState = null;
       if (driver) throw new Error("An application tab is already active.");
       trustedOrigins.clear(); trustedOrigins.add(new URL(job.url).origin);
       const applicationUrl = new URL(job.url);
@@ -271,6 +273,7 @@ export function externalBrowser({
       }
       await request(`/devices/${device}/batches/${command.batch_id}/confirmation`, { application_id: application, confirmed });
       note(confirmed ? "Employer confirmation seen" : "No confirmation seen. Verify the application before retrying", confirmed ? "done" : "error");
+      submissionState = confirmed ? "submitted" : "needs_verification";
       if (confirmed) {
         await report(application, "submitted", tab.url);
         await driver.detach(); setDriver(null); runner.reset(); application = null;
@@ -445,11 +448,11 @@ export function externalBrowser({
   return {
     connect,
     resumeIfWanted,
-    async setAutoApprove(on) { autoApprove = on === true; await remember({ autoApprove }); note(autoApprove ? "Trusted assistant on: fill-only batches on sites you allowed start without asking" : "Trusted assistant off: every batch asks first"); return autoApprove; },
+    async setAutoApprove(on) { autoApprove = on === true; await remember({ autoApprove }); note(autoApprove ? "Automatic filling on: applications on approved sites start without asking" : "Automatic filling off: each selection needs approval"); return autoApprove; },
     ownsTab: (tabId) => Boolean((driver && (driver.tabId === tabId || driver.candidateTabs.has(tabId))) || released?.tabId === tabId),
     /** The application tab the assistant is working in (or let go of while idle/paused), for the panel. */
     workingTab: () => driver?.tabId ?? released?.tabId ?? null,
-    status: () => ({ device_id: device, autoApprove, wanted, batches, pendingReview, pendingNavigation, connected: timer !== null, paused: userPaused, activity: activity.slice(-60) }),
+    status: () => ({ device_id: device, autoApprove, wanted, batches, submissionState, pendingReview, pendingNavigation, connected: timer !== null, paused: userPaused, activity: activity.slice(-60) }),
     /** The user takes the form by hand: let go of the tab and refuse commands until they continue. */
     async pauseForUser() {
       if (userPaused) return true;
@@ -478,7 +481,7 @@ export function externalBrowser({
     },
     notes: () => notes.map(({ id, text, read }) => ({ id, text, read })),
     async decision(batchId, approve) {
-      note(approve ? "You approved the batch" : "You rejected the batch");
+      note(approve ? "You approved the selected applications" : "You rejected the selected applications");
       return request(`/devices/${device}/batches/${batchId}/decision`, { approve });
     },
     approveNavigation() {
@@ -502,7 +505,7 @@ export function externalBrowser({
         for (const batch of batches.filter((item) => ["pending", "active", "paused"].includes(item.state))) {
           await request(`/devices/${device}/batches/${batch.id}/decision`, { approve: false });
         }
-      } finally { await stop(); }
+      } finally { await stop(); socket?.close(); socket = null; }
     },
   };
 }

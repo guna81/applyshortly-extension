@@ -1,3 +1,4 @@
+import { connectionState, queueStatus, connectorUrl } from "./external-browser-state.js";
 import { activityList } from "./external-activity.js";
 
 const send = async (action, extra = {}) => {
@@ -12,7 +13,7 @@ const el = (tag, cls, text) => { const node = document.createElement(tag); if (c
 const act = (label, onclick, cls = "") => { const button = el("button", cls, label); button.type = "button"; button.onclick = onclick; return button; };
 
 $("connect").onclick = async () => {
-  try { await send("connect"); status.textContent = "Connected. Request a batch from your assistant."; }
+  try { await send("connect"); status.textContent = "Connected. Ask your assistant to choose applications to fill."; }
   catch (error) { status.textContent = error.message; }
 };
 trust.onchange = async () => {
@@ -26,6 +27,7 @@ $("sites").onclick = async () => {
     if (!await chrome.permissions.request(ALL_SITES)) status.textContent = "Site access was declined. New sites will still ask each time.";
   } catch (error) { status.textContent = error.message; }
 };
+$("continue").onclick = () => send("continue").catch((error) => { status.textContent = error.message; });
 $("stop").onclick = () => send("stop").catch((error) => { status.textContent = error.message; });
 
 let signature = "";
@@ -55,14 +57,14 @@ function renderAttention(data) {
     const card = el("div", "ask");
     card.append(el("b", "", `${batch.assistant} wants to fill ${batch.jobs.length} application${batch.jobs.length === 1 ? "" : "s"}`));
     for (const job of batch.jobs) card.append(el("p", "job", `${job.title} · ${job.company} · ${new URL(job.url).hostname}`));
-    if (batch.auto_submit) card.append(el("p", "hint bad", "This batch may also submit. Review every field before the countdown ends."));
+    if (batch.auto_submit) card.append(el("p", "hint bad", "You are also allowing submission for these applications. New answers still need your review before a cancellable countdown."));
     const row = el("div", "row-btns");
     row.append(
       act(batch.auto_submit ? "Approve filling and submitting" : "Approve filling", async () => {
         try {
           const origins = [...new Set(batch.jobs.map((job) => `${new URL(job.url).origin}/*`))];
           if (!await chrome.permissions.request({ origins })) {
-            status.textContent = "Application site access was declined. The batch was not approved.";
+            status.textContent = "Application site access was declined. The selected applications were not approved.";
             return;
           }
           await send("decision", { batchId: batch.id, approve: true });
@@ -80,8 +82,13 @@ async function refresh() {
   try {
     const data = await send("status");
     $("dot").className = `status-dot ${data.connected ? "good" : "bad"}`;
-    $("state").textContent = data.connected ? "Connected" : "Not connected";
+    const state = connectionState(data);
+    $("state").textContent = state.label;
+    $("recovery").textContent = state.hint;
+    $("continue").hidden = !data.paused || !data.connected;
     $("connect").hidden = data.connected;
+    $("connect").textContent = data.wanted ? "Reconnect" : "Connect browser";
+    $("stop").hidden = !data.connected && !data.wanted;
     const all = await chrome.permissions.contains(ALL_SITES).catch(() => false);
     $("sites").hidden = all;
     $("sites-state").textContent = all ? "All application sites allowed." : "";
@@ -90,10 +97,14 @@ async function refresh() {
     if (next !== signature) { signature = next; renderAttention(data); } // keep a clicked button from being rebuilt under the cursor
     const running = data.batches.filter((b) => b.state !== "pending");
     const summary = el("p", "muted", running.length
-      ? running.map((b) => `${b.assistant}: ${b.state}, application ${Math.min(b.policy.index + 1, b.jobs.length)} of ${b.jobs.length}`).join(" · ")
+      ? running.map((b) => `${b.assistant}: ${queueStatus(b)}${b.state === "complete" ? "" : ` · application ${Math.min(b.policy.index + 1, b.jobs.length)} of ${b.jobs.length}`}`).join(" · ")
       : "");
     $("activity").replaceChildren(...(running.length ? [summary] : []), activityList(data.activity ?? [], 30));
   } catch (error) { status.textContent = error.message; }
 }
+try {
+  const connection = await chrome.runtime.sendMessage({ type: "connectionSettings" });
+  if (connection?.ok && connection.data?.baseUrl) $("connector-url").textContent = connectorUrl(connection.data.baseUrl);
+} catch { /* Keep the Settings instruction when the connection is not configured. */ }
 await refresh();
 setInterval(refresh, 1500);

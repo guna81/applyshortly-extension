@@ -558,7 +558,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
       // once. Status lookups and reloads must never replay a submission choice.
       const current = await settings();
       if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) autoSubmit = false;
-      const submit = autoSubmit && message.status === "ready";
+      const submit = autoSubmit && message.status === "ready" && !message.captchaPending;
       if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
       return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
     },
@@ -630,11 +630,12 @@ async function pushAssistantSteps() {
   if (target == null) return;
   const steps = status.activity.slice(-14).map(({ id, text, state }) => ({ id, text, state }));
   const notes = externalController.notes();
-  const key = JSON.stringify([target, active, status.paused, steps, notes]);
+  const assistantName = status.batches.find((b) => ["active", "paused", "needs_verification"].includes(b.state))?.assistant;
+  const key = JSON.stringify([target, active, status.paused, steps, notes, assistantName, status.submissionState]);
   if (key === pushedKey) return;
   pushedKey = key;
   pushedTab = active ? tabId : null;
-  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes }, { frameId: 0 }).catch(() => {});
+  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes, assistantName, submissionState: status.submissionState }, { frameId: 0 }).catch(() => {});
 }
 if (typeof setInterval === "function") setInterval(() => { void pushAssistantSteps(); }, 1000);
 

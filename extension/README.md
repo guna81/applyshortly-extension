@@ -4,7 +4,7 @@
 
 [Install the Chrome extension](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [ApplyShortly website](https://applyshortly.com) · [Source and developer README](../README.md)
 
-The form agent helps with multi-step applications, pop-ups and embedded forms on pages you start it on, including forms behind your own login. Site support varies, and you handle sign-in, CAPTCHAs, consent and any fields it cannot complete. Submit on the employer's site yourself, or explicitly choose **Auto apply** to submit after required-field checks and a cancellable countdown. The form agent itself never clicks final Submit.
+The form agent helps with multi-step applications, pop-ups and embedded forms on pages you start it on, including forms behind your own login. Site support varies, and you handle sign-in, CAPTCHAs, consent and any fields it cannot complete. Submit on the employer's site yourself, or explicitly choose **Fill and submit** to submit after required-field checks and a cancellable countdown. The form agent itself never clicks final Submit.
 
 ## Quick start: autofill a job application
 
@@ -12,7 +12,7 @@ The form agent helps with multi-step applications, pop-ups and embedded forms on
 2. Save your profile, résumé and application answers in ApplyShortly, then open the extension settings to check your connection.
 3. Open a job application in Chrome. Choose **Fill this form** or press **Alt+Shift+F**.
 4. Answer remaining questions in the on-page panel, review the fields and attachments, and complete any manual steps.
-5. Click the employer's Submit button, or explicitly choose **Submit for me (Auto apply)** and use Cancel during the countdown if needed.
+5. Click the employer's Submit button, or explicitly choose **Submit for me (Fill and submit)** and use Cancel during the countdown if needed.
 
 Filling from your profile and saved answers is free with an ApplyShortly account. Optional AI features use credits or a supported personal AI provider key; provider charges may apply.
 
@@ -21,7 +21,7 @@ Filling from your profile and saved answers is free with an ApplyShortly account
 - [Extension screenshots](#screenshots)
 - [Installation and account connection](#install)
 - [Build and load an unpacked extension](#build-from-source)
-- [Autofill, form agent and Auto apply](#use)
+- [Autofill, form agent and Fill and submit](#use)
 - [How saved answers are chosen](#how-answers-are-chosen)
 - [Chrome permissions](#why-it-asks-for-these-permissions)
 - [Form compatibility and limitations](#limits)
@@ -33,9 +33,9 @@ including when using a personal AI key. See `../extension-bridge/README.md` for 
 
 ## Screenshots
 
-### Job application autofill and Auto apply
+### Job application autofill and Fill and submit
 
-![ApplyShortly filling a fictional Northstar Labs application with saved profile details, a relocation answer, AI draft options and an Auto apply countdown with Cancel](../docs/images/applyshortly-autofill-auto-apply-demo.jpg)
+![ApplyShortly filling a fictional Northstar Labs application with saved profile details, a relocation answer, AI draft options and an Fill and submit countdown with Cancel](../docs/images/applyshortly-autofill-auto-apply-demo.jpg)
 
 *The demo shows saved details filled into the application, a screening answer supplied in chat, optional AI drafting and the cancellable submission countdown. The company and applicant are fictional; no application is sent.*
 
@@ -127,7 +127,7 @@ currency matches. Instructions to change several fields go to the assistant inst
 copied into the current answer. Optional questions nothing could answer (like "Why are you a good fit?") are offered
 next: **Draft it for me** writes an AI draft from your profile and the job, **Leave it blank** skips
 it. Last, it brings up what only you can do: a consent checkbox (**I agree, tick it** ticks it only
-when you tap it, or tick it yourself) and file uploads (**Show me** highlights the field). When the
+when you tap it, or tick it yourself; it works the same after the form agent has finished a run) and file uploads (**Show me** highlights the field). When the
 page needs clicking through, the chat says so and carries on by itself (see [Stepping through a
 form](#stepping-through-a-form)): no form on the page yet (it opens after an *Apply* button or in a
 pop-up), a **Next** / **Continue** button and no Submit (a multi-step form), or a large frame and
@@ -141,7 +141,7 @@ assistant never submits.
 
 Ashby Yes/No buttons are counted as screening questions, including a selected **No**.
 Required multi-select questions count as one question and stay open until you select an option.
-Consent still asks for your explicit choice. Auto apply waits for those required answers;
+Consent still asks for your explicit choice. Fill and submit waits for those required answers;
 a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
 
 ### AI driver controller
@@ -201,12 +201,12 @@ For an extracted source archive, run `npm ci`, `npm run check` and `npm run buil
 ## Use
 
 - **From the platform:** **Apply in your browser** (row menu or after a failed run), and **Prepare & review** on a job board, open the posting with `#jobhunt-autofill=<id>`. The extension fills the form on its own.
-  **Apply** on a job board or sign-in site adds a one-time code (`&jobhunt-auto=<code>`, valid 10 minutes). The extension claims it (`POST /api/extension/applications/{id}/auto-apply`) and, once claimed, runs **⚡ Auto apply** on that page: the same checks and cancellable countdown. Reloading the page, or a link made anywhere else, only fills.
+  **Apply** on a job board or sign-in site adds a one-time code (`&jobhunt-auto=<code>`, valid 10 minutes). The extension claims it (`POST /api/extension/applications/{id}/auto-apply`) and, once claimed, runs **⚡ Fill and submit** on that page: the same checks and cancellable countdown. Reloading the page, or a link made anywhere else, only fills.
 - **On any page:** click the toolbar icon. The popup shows whether the page is a job in ApplyShortly
   (`/applications/lookup`) and offers two choices, each with a line saying what it does:
   - **Fill this form**: fills what it can, then the panel asks you the rest. You check and submit.
     On a page that isn't tracked it fills the same way, with nothing recorded.
-  - **⚡ Auto apply**: the same, then submits after a countdown (below).
+  - **⚡ Fill and submit**: the same, then submits after a countdown (below).
 
   **Alt+Shift+F** fills without the popup. You can change it at
   `chrome://extensions/shortcuts`.
@@ -216,7 +216,7 @@ The panel at the bottom right has:
 - **A headline and progress bar**, e.g. *6 things left for you · 11 of 17 answered* (the agent's
   status instead while it runs).
 - **The assistant chat** (see above), or the agent's progress, questions and step log.
-- **Submit for me** (panel footer; disabled until every required answer is in) and **⚡ Auto apply**
+- **Submit for me** (panel footer; disabled until every required answer is in) and **⚡ Fill and submit**
   (in the popup, for tracked and untracked pages alike; it fills the form straight away first): click the
   form's own Submit button after a 3-second countdown with **Cancel**. It refuses, and
   says why, when a required field (including a consent checkbox or an upload) still needs you,
@@ -256,8 +256,8 @@ Inside, this is the form agent (`src/agent/`); to you it is the same chat.
   you've done it), and on job boards for the posting's own **Apply / Easy Apply** click, because
   there that can apply in one click. It never solves CAPTCHAs.
 - The form agent never submits. When it has been through the form, the chat picks up anything
-  still open. If you started with **Auto apply** or **Apply with extension**, the panel resumes
-  Auto apply with the same required-field checks and cancellable countdown. Otherwise, review
+  still open. If you started with **Fill and submit** or **Apply with extension**, the panel resumes
+  Fill and submit with the same required-field checks and cancellable countdown. Otherwise, review
   and submit yourself or choose **Submit for me**. Stopping the agent cancels that continuation;
   reloading or checking its status never replays approval.
 - **Pause** and **Stop and take over** are always available. Chrome shows a "started debugging
@@ -271,10 +271,10 @@ session lapsed before the night's submit, are handed to the extension. About onc
 service worker (an alarm, the `alarms` permission) asks `POST /api/extension/autopilot/next`. When
 a job is due, the reply carries its link and a one-time code, and the extension opens the link in
 its own unfocused window (`#jobhunt-autofill=<id>&jobhunt-auto=<code>`, http(s) only). From there
-it is the usual Auto apply: the code is claimed once, every required field must be answered, there
+it is the usual Fill and submit: the code is claimed once, every required field must be answered, there
 must be one Submit button, and the countdown still runs.
 
-The window has nobody watching, so it is stricter than Auto apply you start yourself: it never
+The window has nobody watching, so it is stricter than Fill and submit you start yourself: it never
 starts the form agent (which would attach the debugger), never drafts answers with AI, and
 doesn't submit while an answer is marked **Check**. It also stops on a sign-in page (a visible
 password box or a `/login` path) and says so in the panel. Eight seconds after the click the
@@ -347,7 +347,7 @@ not need additional extension resource permissions. Keep these copies in sync wh
 | `src/background.js` | Service worker. Holds the API key and makes every platform request, so job sites never see the key or hit CORS. Tracks which application each tab is filling. |
 | `src/bridge.js` | JS port of `extension-bridge/client.ts`. Keep the two in sync. |
 | `src/fill.js` | Field discovery, labels, profile answers, writing values (pure DOM, tested in jsdom) |
-| `src/content.js` | Runs the fill on the page, the Assistant tab's logic, live re-check, Auto apply, submit detection |
+| `src/content.js` | Runs the fill on the page, the Assistant tab's logic, live re-check, Fill and submit, submit detection |
 | `src/panel-view.js` | The review panel (closed shadow DOM): draws `content.js`'s state and calls back for actions |
 | `src/panel-model.js` | Pure helpers shared by the panel and popup: checklist and counts, friendly error messages |
 | `src/agent/loop.js` | The form agent's loop in the service worker: observe every frame, ask `/agent/step`, act, settle |
@@ -389,7 +389,7 @@ not need additional extension resource permissions. Keep these copies in sync wh
 
 ### Automatic application tracking
 
-Starting Fill this form, Auto apply or the form agent registers that posting in the connected
+Starting Fill this form, Fill and submit or the form agent registers that posting in the connected
 account's web app, including pages opened directly on an employer's site. Repeated starts on the
 same posting reuse its application. The extension sends the page URL, title and company for
 tracking; it does not fetch job boards or submit just by registering a page.
@@ -402,7 +402,7 @@ Signing out discards this queue so it cannot sync to another account.
 
 ## External AI assistant control (pilot)
 
-Compatible servers can enable application-only MCP control. Open **Connect ChatGPT or Claude**
+Compatible servers can enable application-only MCP control. Open **Let your assistant fill applications**
 from the popup, connect the browser, and approve the assistant's exact batch locally. Keep the
 control page open. New answers require review; submission needs explicit batch submission
 permission, validation and a cancellable countdown. Stop ends browser control. Login, CAPTCHA,
@@ -422,3 +422,22 @@ of general ATS or native ChatGPT/Claude connector compatibility. The local HTTP 
 client supplied decisions without platform AI calls. Production release remains separate.
 Idle/disconnect detaches the driver; it does not resume an already filled tab. Inspect that
 tab for an existing submission before starting again.
+
+### Assistant connection and filling methods
+
+Choose **Let your assistant fill applications** in the popup for the guided setup. Add the
+connector URL shown there to your assistant, connect Chrome, choose applications with your
+assistant, then review the selection and site permissions. A single online browser is selected
+automatically. Closing the setup page keeps the connection active; **Stop access** ends it.
+
+**Controlled by** identifies ApplyShortly or your connected assistant. Platform runs expose
+**Standard** and **Adaptive (experimental)** under **Filling details**; change them in website
+Settings → Advanced settings → Form filling method. Connected assistants use their own allowance.
+**Fill and submit** is an explicit submission choice with the existing completion checks and
+cancellable countdown. **Submission needs verification** requires checking the employer result
+and resolving the attempt in ApplyShortly before retrying.
+
+
+Embedded CAPTCHA widgets do not pause the form agent before filling accessible application
+fields. Complete any verification the site requires at final review and submit on the page.
+A challenge-only page that prevents access to the form still asks for your help immediately.

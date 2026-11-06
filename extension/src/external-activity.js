@@ -11,7 +11,7 @@ export function activityList(entries, limit = 8) {
   if (!entries.length) {
     const empty = document.createElement("li");
     empty.className = "step empty";
-    empty.textContent = "No activity yet. Ask your assistant to request a batch.";
+    empty.textContent = "No activity yet. Ask your assistant to choose applications to fill.";
     list.append(empty);
     return list;
   }

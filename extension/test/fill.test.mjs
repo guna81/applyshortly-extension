@@ -948,3 +948,51 @@ test("a starred group heading makes each sub-field required", () => {
   const fields = F.collectFields(doc, { checkLayout: false });
   assert.deepEqual(plain(fields.map((f) => f.required)), [true, true, false, false]);
 });
+
+test("application scan excludes footer newsletter and navigation search inputs", () => {
+  const { doc, F } = page(`<form><label>Name<input required></label><label>Resume<input type="file"></label></form>
+    <footer><form><label>Email address<input type="email" required></label><button>Subscribe</button></form></footer>
+    <nav><input aria-label="Search"></nav>`);
+  assert.deepEqual(plain(F.collectFields(doc, { checkLayout: false }).map((f) => f.label)), ["Name", "Resume"]);
+});
+
+test("checkbox alternatives count once and retain the selected answer", () => {
+  const { doc, F } = page(`<form><fieldset aria-required="true"><legend>Desired annual compensation?</legend>
+    <label><input type="checkbox" name="salary[]">Band A</label>
+    <label><input type="checkbox" name="salary[]" checked>Band B</label></fieldset>
+    <label><input type="checkbox" required>I agree</label></form>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields.length, 2);
+  assert.equal(fields[0].label, "Desired annual compensation?");
+  assert.equal(fields[0].required, true);
+  assert.equal(fields[0].options.length, 2);
+  assert.equal(fields[0].options[1].el.checked, true);
+  assert.equal(fields[1].options, undefined);
+});
+
+test("selected searchable combobox is answered while its search input stays empty", () => {
+  const { doc, F } = page(`<label for="experience">Experience</label><div><span class="select__single-value">3–4 years</span>
+    <input id="experience" role="combobox" type="text" value="" required></div>`);
+  const field = F.collectFields(doc, { checkLayout: false })[0];
+  assert.equal(F.widgetPick(field.el), "3–4 years");
+  assert.equal(F.isEmpty(field), false);
+});
+
+test("named checkbox alternatives use the caption outside their shared wrapper", () => {
+  const { doc, F } = page(`<form><label>Current annual compensation *</label><div class="choices">
+    <label><input type="checkbox" name="answers[7][]">Band A</label>
+    <label><input type="checkbox" name="answers[7][]" checked>Band B</label></div></form>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields.length, 1);
+  assert.equal(fields[0].label, "Current annual compensation");
+  assert.equal(fields[0].options.length, 2);
+});
+
+test("a legal fieldset retains independent required acknowledgements", () => {
+  const { doc, F } = page(`<fieldset><legend>Legal</legend>
+    <label><input type="checkbox" required>I agree to the terms</label>
+    <label><input type="checkbox" required>I confirm accuracy</label></fieldset>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields.length, 2);
+  assert.ok(fields.every((f) => f.required && !f.options));
+});

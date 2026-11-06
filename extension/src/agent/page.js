@@ -23,7 +23,7 @@
     "iframe[src*='recaptcha'][title*='challenge' i]",
     "iframe[src*='hcaptcha.com'][title*='challenge' i]",
     ".g-recaptcha:not([data-size='invisible'])",
-    ".h-captcha",
+    ".h-captcha:not([data-size='invisible'])",
     "iframe[src*='challenges.cloudflare.com']",
     "input:not([type='hidden'])[name='captcha' i]",
     "input:not([type='hidden'])[id='captcha' i]",
@@ -373,7 +373,7 @@
 
   // AX finds accessible controls that the form mapper does not yet recognize.
   function describeAccessible(el, role, name, observed) {
-    if (!el || !isVisible(el, true) || observed.includes(el.getAttribute(REF))) return null;
+    if (!el || !F.applicationControl(el) || !isVisible(el, true) || observed.includes(el.getAttribute(REF))) return null;
     const dialog = activeDialog(document, true);
     if (dialog && !contains(dialog, el)) return null;
     const roles = { textField: "textbox", searchbox: "textbox", textfield: "textbox", popUpButton: "combobox" };
@@ -381,6 +381,9 @@
     if (!["textbox", "textarea", "combobox", "listbox", "option", "button", "link", "radio", "checkbox"].includes(role)) return null;
     return base(el, {
       ...contextOf(el), role, name: clip(clean(name || F.labelOf(el)), 500),
+      // AX-only controls still need their native type: otherwise a search or password input
+      // becomes an ordinary textbox when the platform extracts application questions.
+      ...(el.tagName === "INPUT" ? { input_type: el.type } : {}),
       // A rich-text box (a div with contenteditable) has no `value`: it holds its text.
       value: clip(el.isContentEditable ? clean(el.textContent) : String(el.value ?? el.getAttribute("aria-valuetext") ?? shownChoice(el)), 2000),
       checked: el.checked ?? (el.getAttribute("aria-checked") === "true"),

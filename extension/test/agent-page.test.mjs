@@ -34,6 +34,16 @@ function page(html, url = "https://careers.example.com/apply") {
 
 const byName = (obs, name) => obs.elements.find((e) => e.name === name);
 
+test("AX fallback preserves native input types for excluded search and password controls", () => {
+  const { doc, A } = page('<input type="search" aria-label="Search"><input type="password" aria-label="Password">');
+  for (const input of doc.querySelectorAll("input")) {
+    input.getClientRects = () => [{ width: 100, height: 20 }];
+    const result = A.describeAccessible(input, input.type === "search" ? "searchbox" : "textbox", input.getAttribute("aria-label"), []);
+    assert.equal(result.role, "textbox");
+    assert.equal(result.input_type, input.type);
+  }
+});
+
 test("observe: fields, radio options, buttons and the site's errors", () => {
   const { observe } = page(`
     <h1>Senior Engineer</h1>
@@ -537,4 +547,12 @@ test("a drop counts when the site's upload dialog from an earlier drop already l
   const other = page(`<div id="zone"><span>Drop files here</span></div><p>Ada_Resume.pdf was uploaded last year</p>`);
   other.doc.getElementById("zone").setAttribute("data-applyshortly-ref", "zone");
   assert.equal((await other.A.attach("zone", b64, "Ada_Resume.pdf", "application/pdf")).ok, false);
+});
+
+
+test("observe: invisible CAPTCHA containers are not visible challenges", () => {
+  const { observe } = page(`<label>Email<input type="email"></label>
+    <div class="g-recaptcha" data-size="invisible"></div>
+    <div class="h-captcha" data-size="invisible"></div>`);
+  assert.deepEqual(observe().blockers, []);
 });

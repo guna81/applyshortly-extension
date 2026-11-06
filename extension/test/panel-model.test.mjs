@@ -265,3 +265,27 @@ test('a sign-in page is recognised by its password box or its path', () => {
   assert.equal(P.loginWall('/careers/apply', false), false);
   assert.equal(P.loginWall('/blogin-tips', false), false);
 });
+
+
+test("autoApplyBlockers: the agent's frame-aware readiness and a pending CAPTCHA stop Auto apply", () => {
+  const complete = [row("text", "filled")];
+  assert.deepEqual(plain(P.autoApplyBlockers(complete, null, { total: 1, framed: 0, missing: [] }, false)), []);
+  assert.deepEqual(plain(P.autoApplyBlockers([], null, { total: 2, framed: 2, missing: [] }, false)), [
+    "This form is embedded in the page, so I can't check all of it from here. Review it and submit it yourself",
+  ], "a form that is entirely in a frame is not 'no fields', but it is not sent from here");
+  assert.deepEqual(plain(P.autoApplyBlockers(complete, null, { total: 2, framed: 1, missing: [{ name: "Email", framed: true }] }, false)), [
+    "1 required field in the embedded form still needs you",
+    "This form is embedded in the page, so I can't check all of it from here. Review it and submit it yourself",
+  ]);
+  assert.deepEqual(plain(P.autoApplyBlockers(complete, null, null, true)), [
+    "The site still needs you to complete its CAPTCHA. Do that, then submit it yourself",
+  ]);
+  assert.deepEqual(plain(P.autoApplyBlockers([], null, null, false)), ["No form fields found on this page"], "no readiness: unchanged");
+});
+
+test("readinessNote: names the first required fields left empty", () => {
+  assert.equal(P.readinessNote(null), "");
+  assert.equal(P.readinessNote({ missing: [] }), "");
+  assert.equal(P.readinessNote({ missing: [{ name: "Email" }] }), "Still empty and required: “Email”.");
+  assert.equal(P.readinessNote({ missing: ["A", "B", "C", "D", "E"].map((name) => ({ name })) }), "Still empty and required: “A”, “B”, “C” and 2 more.");
+});

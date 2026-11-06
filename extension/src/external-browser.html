@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Connected AI assistant</title>
+  <title>Let your assistant fill applications</title>
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="external-browser.css">
 </head>
@@ -13,23 +13,36 @@
       <img class="mark lg" src="../icons/logo.svg" width="48" height="48" alt="" aria-hidden="true">
       <div class="grow">
         <div class="eyebrow">ApplyShortly · Browser connection</div>
-        <h1>Connected AI assistant</h1>
+        <h1>Let your assistant fill applications</h1>
         <p class="muted">Let ChatGPT, Claude or Codex fill the application tabs you approve.</p>
       </div>
     </div>
+
+    <section class="card setup" aria-label="Assistant setup">
+      <h2>Get started</h2>
+      <ol>
+        <li><strong>Connect your assistant.</strong> Add this connector URL in ChatGPT, Claude or Codex: <code id="connector-url">Open ApplyShortly Settings for your connector URL.</code>
+          <p class="muted">If you previously connected through applyshortly.com and authorization fails, reconnect using the product URL shown here.</p></li>
+        <li><strong>Connect this browser.</strong> Use the button below. Keep Chrome open while your assistant works.</li>
+        <li><strong>Choose applications.</strong> Tell your assistant which jobs to fill. If only one browser is online, it is selected automatically.</li>
+        <li><strong>Review permissions and start.</strong> Approve the selected applications and their sites below. Submission requires separate approval.</li>
+      </ol>
+    </section>
 
     <section class="card connection" aria-label="Connection and permissions">
       <div class="conn-card">
         <span class="status-dot" id="dot"></span>
         <div class="grow"><b id="state">Not connected</b><small class="muted">Your assistant’s access to this browser</small></div>
         <button id="connect" class="primary" type="button">Connect browser</button>
-        <button id="stop" type="button">Disconnect</button>
+        <button id="stop" type="button">Stop access</button>
       </div>
+      <p class="connection-message muted" id="recovery" role="status" aria-live="polite"></p>
+      <button id="continue" type="button" hidden>Continue</button>
       <p class="connection-message muted" id="status" role="status" aria-live="polite"></p>
       <div class="permissions">
         <h2>Permissions</h2>
         <label class="trust-row" for="trust">
-          <span><span class="permission-title">Allow trusted filling</span><small class="muted">Let your assistant start fill-only batches on sites you’ve already allowed.</small></span>
+          <span><span class="permission-title">Automatically allow filling on approved sites</span><small class="muted">Start selected applications without another approval when they only fill forms on sites you have already allowed.</small></span>
           <input class="switch" type="checkbox" id="trust">
         </label>
         <div class="site-access" id="sites-row">
@@ -38,7 +51,7 @@
         </div>
       </div>
       <div class="safety-note"><span class="safety-icon" aria-hidden="true">✓</span><div><b>You stay in control</b><p>New sites and anything that may submit still ask you first. Submission requires reviewed answers, complete fields and a cancellable countdown.</p></div></div>
-      <p class="reconnect-note muted">This browser reconnects automatically until you disconnect.</p>
+      <p class="reconnect-note muted">Closing this page keeps the browser connected. It reconnects automatically until you choose Stop access.</p>
     </section>
 
     <section class="card attn" id="attn" hidden>

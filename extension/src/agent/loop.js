@@ -5,7 +5,7 @@
 // final submit button (page.js clickable()), and it stops whenever the platform says
 // ready_for_review: the user reviews the form and submits it themselves.
 
-import { CommandRunner } from "./commands.js";
+import { CommandRunner, readinessOf } from "./commands.js";
 
 const MAX_OBSERVED = 400; // the API's limit on elements per observation
 const TEXT_LIMIT = 12000;
@@ -16,6 +16,15 @@ const OPTION_SCROLL_WAIT_MS = 120;
 const MAX_OPTION_PAGES = 80;
 const ACTION_PAUSE_MS = 120;
 const CAPTCHA_HANDOFF = "There's a CAPTCHA on this page. Please solve it yourself.";
+// An embedded verification widget must not prevent filling the accessible application.
+// Challenge-only pages still need the user's intervention before any work can continue.
+export function hasApplicationFields(observation) {
+  return observation.elements.some((e) =>
+    ["textbox", "textarea", "combobox", "select", "radio", "checkbox", "file"].includes(e.role) &&
+    !e.disabled && !["password", "hidden", "search"].includes(e.input_type) &&
+    !/captcha|recaptcha|hcaptcha|security code|verification code|i.?m not a robot/i.test(`${e.name ?? ""} ${e.identity ?? ""}`));
+}
+
 const LOAD_WAIT_MS = 10_000;
 const WAIT_FOR_POLL_MS = 250;
 // A state seen this often among the recent ones is a loop (one state, or two alternating, as
@@ -594,10 +603,11 @@ export class Agent {
     this.waiting = null; // resolves with the user's input while status is ask_user / paused
     this.log = [];
     this.last = null;
+    this.fillingNotice = null;
     driver.onDetached = () => this.stop("You closed the debugging bar, so the agent stopped.");
     // The same guarded, verified commands a host assistant gets; this controller never submits.
     this.runner = new CommandRunner({ driver, policy: {
-      blockers: false, // a CAPTCHA or sign-in is handed to the user before any action runs
+      blockers: false, // blocker handoffs are handled by this loop and the platform policy
       allowHref: (href, origin) => { if (/^https?:/.test(href)) this.trustedOrigins.add(origin); return true; },
       isPaused: () => this.paused,
       files: (kind) => this.files(kind),
@@ -606,7 +616,7 @@ export class Agent {
   }
 
   emit(extra = {}) {
-    const message = { type: "agentUpdate", controller_version: this.controllerVersion, status: this.status, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
+    const message = { type: "agentUpdate", controller_version: this.controllerVersion, status: this.status, filling_notice: this.fillingNotice, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
     void this.notify(message);
   }
 
@@ -680,7 +690,7 @@ export class Agent {
     let wantScreenshot = this.controllerVersion === 2;
     let annotateScreenshot = false;
     let focusQuery = "";
-    let captchaCleared = false;
+    let captchaClearedFor = ""; // the document whose CAPTCHA the user cleared; another page or a new challenge starts over
     try {
       await this.driver.attach();
       this.status = "running";
@@ -727,11 +737,11 @@ export class Agent {
             continue;
           }
         }
-        // A CAPTCHA is never ours to solve or to plan around: hand the form to the user right away,
-        // without asking the platform. After they say it's done, one pass runs even if a solved
-        // widget stays on the page.
-        if (!observation.blockers.includes("captcha")) captchaCleared = false;
-        else if (!captchaCleared) {
+        // Fill accessible application fields first. Only a challenge without an accessible
+        // form blocks the run here; embedded widgets are left for the user at submission.
+        const documentKey = observation.document_id ?? observation.url;
+        if (!observation.blockers.includes("captcha") || captchaClearedFor !== documentKey) captchaClearedFor = "";
+        if (observation.blockers.includes("captcha") && !captchaClearedFor && !hasApplicationFields(observation)) {
           this.say("There's a CAPTCHA on this page. Solve it yourself; I haven't touched it.");
           this.last = { agent_engine: this.last?.agent_engine, question: { kind: "blocker", text: CAPTCHA_HANDOFF }, filled: this.last?.filled, unresolved: this.last?.unresolved };
           this.status = "waiting";
@@ -739,7 +749,7 @@ export class Agent {
           const input = await this.waitForUser();
           if (input.kind === "stop") break;
           this.status = "running";
-          captchaCleared = true;
+          captchaClearedFor = documentKey;
           extra = { resumed: true };
           this.say("Continuing…");
           continue;
@@ -810,6 +820,7 @@ export class Agent {
         focusQuery = res.focus_query || "";
         wantScreenshot = Boolean(res.want_screenshot);
         annotateScreenshot = Boolean(res.annotate_screenshot);
+        if (res.message?.startsWith("Using Standard: Adaptive is unavailable")) this.fillingNotice = res.message.split(".")[0] + ".";
         this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code };
         if (res.message && res.status !== "continue") this.say(res.message);
         for (const [index, action] of (res.actions ?? []).entries()) {
@@ -859,8 +870,12 @@ export class Agent {
         this.progressGuard.noteFailures(results.filter((r) => !r.ok).map((r) => String(res.actions?.[r.index]?.label || res.actions?.[r.index]?.type || "a field").replace(/^(?:Filled|Filling|Chose|Typed|Selected)\s+/i, "")));
         if (res.status === "ready_for_review") {
           this.status = "ready";
-          this.say("Everything I could fill is done. Review the form and submit it yourself.");
-          this.emit();
+          const captchaPending = observation.blockers.includes("captcha") && !captchaClearedFor;
+          this.say(captchaPending
+            ? "Everything I could fill is done. Review the form, complete any CAPTCHA the site requires, then submit it yourself."
+            : "Everything I could fill is done. Review the form and submit it yourself.");
+          // The panel only sees the top document; tell it what this frame-aware observation found.
+          this.emit({ captchaPending, readiness: readinessOf(observation, refs) });
           await this.report("filled", res, this.url);
           if (this.controllerVersion !== 2) break;
           const input = await this.waitForUser();

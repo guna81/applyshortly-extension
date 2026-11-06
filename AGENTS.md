@@ -30,6 +30,15 @@ Autopilot windows (`src/background.js`, `autopilot*`) open only a link the platf
 
 The AI driver controller (`src/agent/loop.js`, `src/agent/cdp.js`) runs only when the platform negotiates protocol 2. It pauses locally on repeated page states or after sixty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
 
+## Testing the AI driver on a live form
+
+Unit tests (`npm test` on Node 22) do not show how the driver behaves on a real page. The platform
+repo has a headless harness that runs the built `dist/extension` against a live form with no
+Chrome reload (`scripts/live_extension/run.sh`, see `apply-assistant/docs/development/live-extension-testing.md`).
+It spends AI credits, and it covers the agent loop and command layer only, not the panel chat:
+panel behaviour (quick replies, message routing) is checked by `extension/test/panel-assistant.test.mjs`.
+Rebuild with `python3 scripts/build_extension.py` before either, since Chrome and the harness run `dist/`.
+
 ## One command layer for both AI controllers
 
 `extension/src/agent/commands.js` (`CommandRunner`) is the only place that guards and runs page

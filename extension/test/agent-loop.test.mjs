@@ -406,7 +406,7 @@ test("questionChoices: checkboxes listed under one question are its choices; a l
 
 test("Agent: a CAPTCHA hands the form to the user without asking the platform, then continues once", async () => {
   let captcha = true;
-  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Email" }], { blockers: captcha ? ["captcha"] : [] }) });
+  const driver = new FakeDriver({ top: () => frameObs([], { blockers: captcha ? ["captcha"] : [] }) });
   const bodies = [];
   const updates = [];
   let agent;
@@ -433,6 +433,37 @@ test("Agent: a CAPTCHA hands the form to the user without asking the platform, t
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].resumed, true);
   assert.equal(agent.status, "ready");
+});
+
+test("Agent: clearing one page's CAPTCHA does not clear the next page's", async () => {
+  let page = "step-1";
+  const driver = new FakeDriver({ top: () => frameObs([], { blockers: ["captcha"], url: `https://careers.example.com/apply/${page}` }) });
+  const bodies = [];
+  const updates = [];
+  let agent;
+  agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async (body) => {
+      bodies.push(structuredClone(body));
+      return { session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] };
+    },
+    files: async () => null,
+    notify: async (m) => {
+      updates.push(m);
+      if (m.status === "waiting") {
+        // The user clears this challenge; the site then moves on to a page with another one.
+        const first = updates.filter((u) => u.status === "waiting").length === 1;
+        if (first) page = "step-2";
+        setTimeout(() => agent.resume(), 10);
+      }
+    },
+    report: async () => {},
+  });
+  await agent.run();
+  assert.equal(updates.filter((u) => u.status === "waiting").length, 2, "each page's challenge is handed to the user");
+  assert.equal(bodies.length, 1, "the platform is reached only once the second page is cleared too");
+  assert.equal(agent.status, "ready");
+  assert.equal(updates.find((u) => u.status === "ready").captchaPending, false, "the second page was cleared by the user");
 });
 
 test("takeover discards a pending plan even if resumed before it returns", async () => {
@@ -797,4 +828,67 @@ test("a busy 409 is sent again with the same request_id; other errors are not", 
   const stuck = async () => { tries++; throw new BridgeError(409, "An agent decision is already running."); };
   await assert.rejects(stepWithRetry(stuck, { request_id: "r3" }, [0, 0]), /already running/);
   assert.equal(tries, 3);
+});
+
+
+test("Agent: a form that lives only in a child frame reports its required fields when ready", async () => {
+  const driver = new FakeDriver({
+    top: () => frameObs([]),
+    child: () => frameObs([
+      { ref: "1", role: "textbox", name: "Full name", required: true, value: "Ada Lovelace" },
+      { ref: "2", role: "textbox", name: "Email", required: true, value: "" },
+    ]),
+  });
+  const updates = [];
+  const agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async () => ({ session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] }),
+    files: async () => null,
+    notify: (m) => updates.push(m), report: async () => {},
+  });
+  await agent.run();
+  const ready = updates.find((u) => u.status === "ready");
+  assert.deepEqual(ready.readiness, { total: 2, framed: 2, missing: [{ name: "Email", role: "textbox", framed: true }] });
+});
+
+test("Agent: a form split between the page and a frame counts both parts as the agent saw them", async () => {
+  const driver = new FakeDriver({
+    top: () => frameObs([{ ref: "1", role: "textbox", name: "Full name", required: true, value: "" }]),
+    child: () => frameObs([{ ref: "1", role: "textbox", name: "Email", required: true, value: "ada@example.com" }]),
+  });
+  const updates = [];
+  const agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async () => ({ session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] }),
+    files: async () => null,
+    notify: (m) => updates.push(m), report: async () => {},
+  });
+  await agent.run();
+  const ready = updates.find((u) => u.status === "ready");
+  assert.equal(ready.readiness.total, 2);
+  assert.equal(ready.readiness.framed, 1);
+  assert.deepEqual(ready.readiness.missing, [{ name: "Full name", role: "textbox", framed: false }]);
+});
+
+test("Agent: an embedded CAPTCHA does not interrupt accessible application fields", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([
+    { ref: "1", role: "textbox", name: "Email" },
+  ], { blockers: ["captcha"] }) });
+  const updates = [];
+  let calls = 0;
+  const agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async () => {
+      calls++;
+      return { session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] };
+    },
+    files: async () => null,
+    notify: (m) => updates.push(m), report: async () => {},
+  });
+  await agent.run();
+  assert.equal(calls, 1);
+  assert.equal(updates.some((u) => u.status === "waiting"), false);
+  assert.equal(agent.status, "ready");
+  assert.match(agent.log.at(-1), /complete any CAPTCHA/);
+  assert.equal(updates.find((u) => u.status === "ready").captchaPending, true);
 });

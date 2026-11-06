@@ -320,7 +320,7 @@
         if (!quiet) await report("opened");
       }
       if (!quiet && state.ctx.controllerVersion === 2) { panel.idle(); return true; }
-      if (quiet && state.ctx.controllerVersion === 2) {
+      if (quiet) {
         // Readback only: the controller owns writes, including during completion refresh.
         state.results = F.collectFields(document).map((field) => {
           const native = agent?.filled?.find((f) => f.label === field.label);
@@ -499,16 +499,23 @@
       if (ask) chat.lines.push({ role: "assistant", local: true, ...ask });
       return panel.agent(true);
     }
-    if (!["ready", "failed", "stopped"].includes(next.status)) return panel.agent(previous == null);
+    if (!["ready", "failed", "stopped"].includes(next.status)) {
+      // The agent is working again: what it reported at the last "ready" no longer holds.
+      if (state) { state.readiness = null; state.captchaPending = false; }
+      return panel.agent(previous == null);
+    }
     // Done driving: read the page as it is now, so the chat can follow up and Submit knows the state.
-    const lead = next.status === "ready" ? "I've been through the form." : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
+    const lead = next.status === "ready" ? (next.captchaPending ? "I've been through the form. Complete any CAPTCHA the site requires, then submit the application on the page." : "I've been through the form.") : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
     const refreshed = await run(state?.appId ?? next.appId ?? null, { quiet: true });
+    // The panel's scan covers this document only; keep the agent's frame-aware view beside it.
+    if (state) { state.readiness = next.status === "ready" ? next.readiness ?? null : null; state.captchaPending = next.status === "ready" && next.captchaPending === true; }
+    const framedNote = next.status === "ready" ? P.readinessNote({ missing: (next.readiness?.missing ?? []).filter((m) => m.framed) }) : "";
     const follow = next.status === "ready" && state ? P.nextPrompt(state.results) : null;
-    chat.lines.push({ role: "assistant", local: true, ...(next.status === "ready" ? followedBy(lead, follow) : { text: lead, choices: [] }) });
+    chat.lines.push({ role: "assistant", local: true, ...(next.status === "ready" ? followedBy(framedNote ? `${lead} ${framedNote}` : lead, follow) : { text: lead, choices: [] }) });
     panel.agent(true);
     // The agent never submits. Resume only this run's explicit Auto apply choice,
     // through the same required-field checks and cancellable countdown as a single page.
-    if (refreshed && next.status === "ready" && next.autoSubmit === true && next.appId === state?.appId) await autoApply();
+    if (refreshed && next.status === "ready" && next.autoSubmit === true && !next.captchaPending && next.appId === state?.appId) await autoApply();
   }
 
   /** One chat turn. Like the web app's review assistant: it fills fields, the user submits. */
@@ -613,7 +620,7 @@
   }
 
   function currentValue(field) {
-    if (field.kind === "text") return field.el.value;
+    if (field.kind === "text") return field.el.value || F.widgetPick(field.el);
     if (field.kind === "select") return field.el.selectedOptions[0]?.text ?? "";
     if (field.kind === "dropdown" && field.custom) return F.dropdownValue(field);
     return null;
@@ -710,7 +717,7 @@
           el.getAttribute("data-highlight") === "positive" &&
           [...el.querySelectorAll("h2")].some((h) => F.cleanLabel(h.textContent) === "Success")) return true;
       return text.length <= 600 && !/\b(not|unable|failed|error|already|cannot|couldn.t)\b/i.test(text) &&
-        /\b(?:your application (?:has been |was )?(?:successfully )?(?:submitted|received)|application (?:submitted|received) successfully|thank you for applying|we (?:have )?received your application)\b/i.test(text);
+        /\b(?:your application (?:has been |was )?(?:successfully )?(?:submitted|received)|application (?:submitted|received) successfully|thank you for applying|thank you\s*[—–-]\s*our talent team will review your application|we (?:have )?received your application)\b/i.test(text);
     }).map((el) => F.cleanLabel(el.textContent ?? ""));
   }
 
@@ -779,7 +786,7 @@
       return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Submit for me”.");
     }
     recheck();
-    const blocked = P.autoApplyBlockers(state.results, state.ctx.app);
+    const blocked = P.autoApplyBlockers(state.results, state.ctx.app, state.readiness, state.captchaPending);
     if (blocked.length) return panel.stop(`Not submitted: ${blocked.join(". ")}.`);
     // Autopilot's window sends only what is certain: a guessed or drafted answer is for the user to check.
     const unchecked = unattended ? state.results.filter((r) => r.status === "filled" && r.needsReview && !r.reviewed) : [];
@@ -798,7 +805,7 @@
     recheck();
     const currentFields = F.collectFields(document);
     const currentButton = F.findSubmitButton(document, currentFields, { includeDisabled: true });
-    if (P.autoApplyBlockers(state.results, state.ctx.app).length ||
+    if (P.autoApplyBlockers(state.results, state.ctx.app, state.readiness, state.captchaPending).length ||
         currentFields.some((field) => (field.required && !answeredNow(field)) || F.isInvalid(field)) ||
         currentButton !== button || !button.isConnected || button.disabled ||
         button.getAttribute("aria-disabled") === "true" || (form && !form.checkValidity())) {
@@ -926,7 +933,7 @@
     }
     if (msg?.type === "assistantUpdate") {
       // The connected assistant is filling this page: show its steps in this panel.
-      panel.assistant({ active: msg.active === true, paused: msg.paused === true, steps: Array.isArray(msg.steps) ? msg.steps : [], notes: Array.isArray(msg.notes) ? msg.notes : [] });
+      panel.assistant({ submissionState: msg.submissionState, assistantName: typeof msg.assistantName === "string" ? msg.assistantName : null, active: msg.active === true, paused: msg.paused === true, steps: Array.isArray(msg.steps) ? msg.steps : [], notes: Array.isArray(msg.notes) ? msg.notes : [] });
       sendResponse({ ok: true });
       return;
     }
