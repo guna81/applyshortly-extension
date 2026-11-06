@@ -1,6 +1,7 @@
 // Tests for src/agent/commands.js: the guarded, verified commands every controller shares.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { PAGE, isPageRule } from "./page-rules.mjs";
 import { CommandRunner, driftOf, readinessOf, scanFields } from "../src/agent/commands.js";
 import { Agent } from "../src/agent/loop.js";
 
@@ -34,7 +35,7 @@ function makeDriver({ names = ["First", "Last", "Email"], blockers = [], userEdi
         case "settle": return "complete";
         case "hitTest": return true;
         case "snapshotState": case "executionState": return undefined;
-        default: throw new Error(`unexpected ${name}`);
+        default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     },
   };

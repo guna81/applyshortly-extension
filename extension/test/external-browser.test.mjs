@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { PAGE, isPageRule } from './page-rules.mjs';
 import { externalBrowser, waitForApplicationTab } from '../src/external-browser.js';
 
 test('opening waits for Chrome to commit the URL and complete navigation', async () => {
@@ -245,7 +246,7 @@ test('fill_form follows fields across a re-render that renumbers every ref', asy
         case 'setDirect': values[this.map.get(args[0])] = args[1]; typed.push([this.map.get(args[0]), args[1]]); return { ok: true };
         case 'committedValue': return values[this.map.get(args[0])] ?? '';
         case 'blur': return true;
-        default: throw new Error(`unexpected ${name}`);
+        default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     }
   }
@@ -326,7 +327,7 @@ test('pause for me releases the tab, refuses commands, and continue re-reads the
         case 'setDirect': values[names[Number(args[0]) - 1]] = args[1]; return { ok: true };
         case 'committedValue': return values[names[Number(args[0]) - 1]] ?? '';
         case 'blur': return true;
-        default: throw new Error(`unexpected ${name}`);
+        default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     }
   }
@@ -509,7 +510,7 @@ test('fill_form chooses from a dropdown instead of typing into it, and reports a
         case 'focusForTyping': return { ok: true, mode: 'direct' };
         case 'setDirect': return { ok: true };
         case 'blur': return true;
-        default: throw new Error(`unexpected ${name}`);
+        default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     }
   }

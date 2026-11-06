@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
-import { ProgressGuard, Agent, execute, explain, holdsTyped, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
+import { PAGE } from "./page-rules.mjs";
+import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
 
 test("recovery commands allow edits while questions and negations remain read-only", () => {
   for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year"]) {
@@ -47,6 +48,21 @@ class FakeDriver {
       case "noteShown": return true;
       case "phoneTypePlan": return this.phonePlans?.shift() ?? null;
       case "committedValue": return this.committed ?? "Bengaluru, India";
+      case "holdsTyped": return PAGE.holdsTyped(...args);
+      case "showsChoice": return PAGE.showsChoice(...args);
+      // The page's key-commit decisions, over this fake's simulated typedText/committedValue.
+      case "keyCommitStart": {
+        if (!PAGE.showsChoice(await this.call(frame, "typedText", args[0]).catch(() => ""), args[1])) return { ok: false, before: "" };
+        const first = await this.call(frame, "firstOptionMatches", args[0], args[1]).catch(() => null);
+        if (first?.known && !first.matches) return { ok: false, before: "" };
+        return { ok: true, before: (await this.call(frame, "committedValue", args[0], true).catch(() => "")) ?? "" };
+      }
+      case "keyCommitCheck": {
+        const committed = (await this.call(frame, "committedValue", args[0], true)) ?? "";
+        const shown = committed.toLowerCase().trim();
+        const was = String(args[2] ?? "").toLowerCase().trim();
+        return { committed, verified: PAGE.showsChoice(committed, args[1]), wrong: Boolean(shown) && shown !== was, undone: !shown || shown === was };
+      }
       case "typedSuggestion": return this.suggestion ?? { ok: false };
       case "matchOption": return { ok: true, ref: "opt", text: "Bengaluru, India" };
       case "attach": this.calls.push(["attach-file", args[0], args[2]]); return { ok: true, value: args[2] };
@@ -259,14 +275,6 @@ test("execute: a masked input that drops inserted text is cleared and typed key 
   assert.equal(kept.calls.some(([n]) => n === "typeKeys"), false);
 });
 
-test("holdsTyped reads through masks, separators and case", () => {
-  assert.equal(holdsTyped("+91 63818-68258", "+91 6381868258"), true);
-  assert.equal(holdsTyped("₹19,00,000", "1900000"), true);
-  assert.equal(holdsTyped("+91 ", "+91 6381868258"), false);
-  assert.equal(holdsTyped("+90 000 000 03", "+91 9000000003"), false);
-  assert.equal(holdsTyped("Bengaluru ", "bengaluru"), true);
-  assert.equal(holdsTyped("", "Ada"), false);
-});
 
 test("Agent: acts, asks the user, and stops at review without submitting", async () => {
   const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Notice period" }, { ref: "2", role: "button", name: "Next" }]) });

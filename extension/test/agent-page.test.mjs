@@ -556,3 +556,20 @@ test("observe: invisible CAPTCHA containers are not visible challenges", () => {
     <div class="h-captcha" data-size="invisible"></div>`);
   assert.deepEqual(observe().blockers, []);
 });
+
+test("holdsTyped reads through masks, separators and case", () => {
+  const { A } = page("<input>");
+  assert.equal(A.holdsTyped("+91 63818-68258", "+91 6381868258"), true);
+  assert.equal(A.holdsTyped("₹19,00,000", "1900000"), true);
+  assert.equal(A.holdsTyped("+91 ", "+91 6381868258"), false);
+  assert.equal(A.holdsTyped("+90 000 000 03", "+91 9000000003"), false);
+  assert.equal(A.holdsTyped("Bengaluru ", "bengaluru"), true);
+  assert.equal(A.holdsTyped("", "Ada"), false);
+});
+
+test("showsChoice matches the option or the answer, ignoring case and punctuation", () => {
+  const { A } = page("<input>");
+  assert.equal(A.showsChoice("Bengaluru, India", "bengaluru"), true);
+  assert.equal(A.showsChoice("", "Yes"), false);
+  assert.equal(A.showsChoice("No", "Yes"), false);
+});

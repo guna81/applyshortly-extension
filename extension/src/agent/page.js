@@ -850,6 +850,57 @@
     return widgetOnly ? "" : rich ? clean(el.textContent) : el.value ?? "";
   }
 
+  const squashText = (t) => String(t ?? "").toLowerCase().replace(/[^\p{L}\p{N}+]+/gu, " ").trim();
+
+  /**
+   * Whether a field shows what was typed (a mask may add spaces, dashes or separators). Shared by
+   * the extension's loop and the platform's server driver, so both judge a write the same way.
+   */
+  function holdsTyped(value, text) {
+    const digits = (t) => String(t ?? "").replace(/\D/g, "");
+    const words = (t) => String(t ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (/^[\d\s+()\-.,]+$/.test(text) && digits(text).length >= 3) {
+      return digits(value).endsWith(digits(text).replace(/^0+/, "")) || digits(value).includes(digits(text));
+    }
+    return words(value).includes(words(text));
+  }
+
+  /** Does what a widget shows correspond to the option picked or the answer asked for? */
+  function showsChoice(shown, ...wanted) {
+    const seen = squashText(shown);
+    return Boolean(seen) && wanted.some((w) => {
+      const want = squashText(w);
+      return want && (seen === want || seen.includes(want) || want.includes(seen));
+    });
+  }
+
+  /**
+   * Before committing a typeahead's highlighted entry with ArrowDown + Enter: the first entry is the
+   * answer only when the typed search text has narrowed the list to it, so refuse otherwise.
+   * { ok, before } where `before` is what the widget showed as chosen.
+   */
+  function keyCommitStart(ref, answer) {
+    if (!showsChoice(typedText(ref), answer)) return { ok: false, before: "" };
+    const first = firstOptionMatches(ref, answer);
+    if (first?.known && !first.matches) return { ok: false, before: "" };
+    return { ok: true, before: committedValue(ref, true) ?? "" };
+  }
+
+  /**
+   * After Enter: did the widget take the answer? `wrong` is a different entry having taken the
+   * Enter (to be taken back); `undone` says the widget is back to what it showed before.
+   */
+  function keyCommitCheck(ref, answer, before) {
+    const committed = committedValue(ref, true) ?? "";
+    const shown = squashText(committed);
+    return {
+      committed,
+      verified: showsChoice(committed, answer),
+      wrong: Boolean(shown) && shown !== squashText(before),
+      undone: !shown || shown === squashText(before),
+    };
+  }
+
   /**
    * For a phone box that has a country selector (intl-tel-input and friends): what to type, or
    * which country to pick first. null when the box has no selector, so plain typing applies.
@@ -936,6 +987,10 @@
     blur,
     selectNative,
     committedValue,
+    holdsTyped,
+    showsChoice,
+    keyCommitStart,
+    keyCommitCheck,
     typedText,
     activate,
     phoneTypePlan,

@@ -207,14 +207,6 @@ async function waitForResult(probe, ready, timeout = 2500) {
   return result;
 }
 
-/** Whether a field shows what was typed (a mask may add spaces, dashes or separators). */
-export function holdsTyped(value, text) {
-  const digits = (t) => String(t ?? "").replace(/\D/g, "");
-  const words = (t) => String(t ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (/^[\d\s+()\-.,]+$/.test(text) && digits(text).length >= 3) return digits(value).endsWith(digits(text).replace(/^0+/, "")) || digits(value).includes(digits(text));
-  return words(value).includes(words(text));
-}
-
 async function typeInto(driver, target, frames, text, adaptive = false) {
   await clickRef(driver, target, frames);
   const focus = await driver.call(target.frame, "focusForTyping", target.local);
@@ -227,7 +219,7 @@ async function typeInto(driver, target, frames, text, adaptive = false) {
     await driver.insertText(text);
     if (text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
       const now = await driver.call(target.frame, "state", target.local);
-      if (typeof now?.value === "string" && !holdsTyped(now.value, text)) {
+      if (typeof now?.value === "string" && !(await driver.call(target.frame, "holdsTyped", now.value, text))) {
         // A masked input dropped the inserted string: clear it and type key by key instead.
         await driver.call(target.frame, "focusForTyping", target.local);
         await driver.press("Backspace");
@@ -306,38 +298,25 @@ async function choose(driver, target, frames, answer, adaptive = false) {
   return { matched: match.text, ...readback };
 }
 
-const squash = (text) => String(text ?? "").toLowerCase().replace(/[^\p{L}\p{N}+]+/gu, " ").trim();
-
-/** Does what the widget shows correspond to the option we picked or the answer we asked for? */
-function showsChoice(committed, ...wanted) {
-  const shown = squash(committed);
-  return Boolean(shown) && wanted.some((w) => {
-    const want = squash(w);
-    return want && (shown === want || shown.includes(want) || want.includes(shown));
-  });
-}
-
 /** Reads the widget's value after a pick, giving React a moment to re-render. */
 async function readCommitted(driver, target, wanted, widgetOnly = false) {
   let committed = null;
+  let verified = false;
   for (let i = 0; i < 4; i++) {
     await sleep(i === 0 ? 150 : 250);
     committed = await driver.call(target.frame, "committedValue", target.local, widgetOnly).catch(() => null);
-    if (showsChoice(committed, ...wanted)) break;
+    verified = Boolean(await driver.call(target.frame, "showsChoice", committed, ...wanted));
+    if (verified) break;
   }
-  return { committed: committed ?? "", verified: showsChoice(committed, ...wanted) };
+  return { committed: committed ?? "", verified };
 }
 
 async function commitByKeys(driver, target, answer) {
-  // ArrowDown + Enter takes the first entry of whatever list is open. That is the answer only when
-  // the typed search text has narrowed the list to it: with no such text the first entry is
-  // arbitrary (the first of an unfiltered menu), so nothing is pressed.
-  const typed = await driver.call(target.frame, "typedText", target.local).catch(() => "");
-  if (!showsChoice(typed, answer)) return { committed: "", verified: false };
-  const before = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
-  // A list that shows its options must show the answer first: the highlighted entry is what Enter takes.
-  const first = await driver.call(target.frame, "firstOptionMatches", target.local, answer).catch(() => null);
-  if (first?.known && !first.matches) return { committed: "", verified: false };
+  // ArrowDown + Enter takes the first entry of whatever list is open. The page decides whether that
+  // entry is the answer (the typed search text has narrowed the list to it); nothing is pressed
+  // otherwise. The page script is shared with the platform's server driver.
+  const start = await driver.call(target.frame, "keyCommitStart", target.local, answer).catch(() => null);
+  if (!start?.ok) return { committed: "", verified: false };
   try {
     // Enter on a plain input, or a combobox whose list closed, submits the form: check again right
     // before Enter, after ArrowDown, that the list is still open.
@@ -349,15 +328,21 @@ async function commitByKeys(driver, target, answer) {
     return { committed: "", verified: false };
   }
   // Strict: the typed search text sitting in the input must not count as a pick.
-  const result = await readCommitted(driver, target, [answer], true);
-  if (!result.verified && squash(result.committed) && squash(result.committed) !== squash(before)) {
+  let check = null;
+  for (let i = 0; i < 4; i++) {
+    await sleep(i === 0 ? 150 : 250);
+    check = await driver.call(target.frame, "keyCommitCheck", target.local, answer, start.before).catch(() => null);
+    if (check?.verified) break;
+  }
+  if (check?.verified) return { committed: check.committed, verified: true };
+  if (check?.wrong) {
     // A wrong entry took the Enter: take it back (Backspace clears a single-value widget), and
     // say so rather than leave an answer nobody chose.
     await driver.press("Backspace").catch(() => {});
-    const now = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
-    return { committed: now ?? "", verified: false, undone: !squash(now) || squash(now) === squash(before) };
+    const now = await driver.call(target.frame, "keyCommitCheck", target.local, answer, start.before).catch(() => null);
+    return { committed: now?.committed ?? "", verified: false, undone: now?.undone ?? false };
   }
-  return result;
+  return { committed: check?.committed ?? "", verified: false };
 }
 
 /**
@@ -461,7 +446,7 @@ export async function execute(driver, refs, frames, action, files) {
         const shown = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
         if (shown == null) return null;
         const loose = ["date", "datetime-local", "month", "time", "week", "number", "range", "color"].includes(target.inputType);
-        return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : holdsTyped(shown, text) };
+        return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : await driver.call(target.frame, "holdsTyped", shown, text) };
       }
       const committed = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
       return { matched: text, committed: committed ?? "", verified: String(committed ?? "").replace(/\D/g, "").endsWith(text.replace(/\D/g, "")),
