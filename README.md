@@ -2,7 +2,7 @@
 
 # ApplyShortly
 
-### Open-source Chrome extension for job application autofill, AI-assisted answers and application tracking.
+### 100% Free & Open-source Chrome extension for job application autofill, AI-assisted answers and application tracking.
 
 Stop retyping the same details. Fill **job applications** from your saved profile and answers, review the form, then submit with confidence.
 
@@ -28,7 +28,7 @@ Stop retyping the same details. Fill **job applications** from your saved profil
 
 **Apply Shortly Form Assistant** is an MIT-licensed **job application autofill Chrome extension**. It fills contact details, work experience, education, links and screening questions from your ApplyShortly profile and saved answer bank. Use it as a **job application form filler**, an **AI application assistant**, and a way to track supported applications in your account.
 
-Profile and saved-answer fills are free. Optional AI drafts use ApplyShortly credits or your own supported provider key. A compatible ApplyShortly server and an account are required; the backend and website are maintained separately.
+Profile and saved-answer fills are 100% free forever with no credit card required. Optional AI drafts use ApplyShortly credits, a connected assistant (ChatGPT, Claude or Gemini via MCP), or your own supported provider key. A compatible ApplyShortly server and an account are required; the backend and website are maintained separately.
 
 > Today: **autofill, multi-step forms, on-page chat and application tracking**. Review answers and submit yourself, or explicitly choose Auto apply with a cancellable countdown. Form support varies by website.
 
@@ -118,7 +118,7 @@ Custom builds support compatible self-hosted servers. This public repository con
 
 **Is ApplyShortly autofill free?**
 
-Yes. Profile and saved-answer fills are free with an ApplyShortly account. Optional AI features use credits or a supported personal provider key; provider charges may apply.
+Yes. Profile and saved-answer fills are 100% free forever with an ApplyShortly account; no credit card is required. Optional AI features can use ApplyShortly credits, a connected assistant (ChatGPT, Claude or Gemini via MCP), or a supported personal provider key.
 
 **Do I need an AI API key or Claude Code?**
 
