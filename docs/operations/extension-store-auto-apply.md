@@ -6,7 +6,7 @@ Pending review, with automatic publication after approval enabled.
 
 ## Title (manifest name)
 
-Apply Shortly Form Assistant
+Apply Shortly Form Agent
 
 ## Summary (manifest description)
 
@@ -14,7 +14,7 @@ Fills job application forms from your ApplyShortly profile and answer bank. It s
 
 ## Description
 
-Apply Shortly Form Assistant helps you fill job application forms from your saved ApplyShortly profile and answer bank. Review your answers and attachments, then submit yourself or explicitly choose Auto apply.
+Apply Shortly Form Agent helps you fill job application forms from your saved ApplyShortly profile and answer bank. Review your answers and attachments, then submit yourself or explicitly choose Auto apply.
 
 Features
 - Fill contact details, experience, education, links and saved application answers.
@@ -75,7 +75,7 @@ Productivity / Tools. English.
 
 ### Description
 
-Stop retyping the same details into every job application. Apply Shortly Form Assistant fills application forms from your ApplyShortly profile and saved answers: contact details, work history, education, links, work authorisation and the screening questions you have answered before. It handles multi-step applications, pop-ups and embedded forms too, and you stay in control of what gets submitted.
+Stop retyping the same details into every job application. Apply Shortly Form Agent fills application forms from your ApplyShortly profile and saved answers: contact details, work history, education, links, work authorisation and the screening questions you have answered before. It handles multi-step applications, pop-ups and embedded forms too, and you stay in control of what gets submitted.
 
 HOW IT WORKS
 1. Open a job application and click Fill this form (or press Alt+Shift+F).

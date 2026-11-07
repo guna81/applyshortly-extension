@@ -26,7 +26,7 @@ Stop retyping the same details. Fill **job applications** from your saved profil
 
 ## What is ApplyShortly?
 
-**Apply Shortly Form Assistant** is an MIT-licensed **job application autofill Chrome extension**. It fills contact details, work experience, education, links and screening questions from your ApplyShortly profile and saved answer bank. Use it as a **job application form filler**, an **AI application assistant**, and a way to track supported applications in your account.
+**Apply Shortly Form Agent** is an MIT-licensed **job application autofill Chrome extension**. It fills contact details, work experience, education, links and screening questions from your ApplyShortly profile and saved answer bank. Use it as a **job application form filler**, an **AI application assistant**, and a way to track supported applications in your account.
 
 Profile and saved-answer fills are 100% free forever with no credit card required. Optional AI drafts use ApplyShortly credits, a connected assistant (ChatGPT, Claude or Gemini via MCP), or your own supported provider key. A compatible ApplyShortly server and an account are required; the backend and website are maintained separately.
 
@@ -45,7 +45,7 @@ Profile and saved-answer fills are 100% free forever with no credit card require
 
 ## Quick start
 
-1. [Install Apply Shortly Form Assistant](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) from the Chrome Web Store.
+1. [Install Apply Shortly Form Agent](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) from the Chrome Web Store.
 2. Sign in to [ApplyShortly](https://applyshortly.com), save your profile, résumé and application answers, then check your connection in extension settings.
 3. Open a job application and choose **Fill this form**, or press **Alt+Shift+F**.
 4. Answer remaining questions, review the form and attachments, then submit yourself or choose **Submit for me (Auto apply)**.

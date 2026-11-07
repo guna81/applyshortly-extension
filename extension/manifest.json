@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Apply Shortly Form Assistant",
+  "name": "Apply Shortly Form Agent",
   "version": "0.4.0",
   "description": "Fills job applications from your ApplyShortly profile and answers, even multi-step forms. Submits only when you choose Fill and submit.",
   "minimum_chrome_version": "125",
@@ -15,7 +15,7 @@
       "run_at": "document_idle"
     }
   ],
-  "action": { "default_title": "Apply Shortly Form Assistant", "default_popup": "src/popup.html", "default_icon": "icons/icon-48.png" },
+  "action": { "default_title": "Apply Shortly Form Agent", "default_popup": "src/popup.html", "default_icon": "icons/icon-48.png" },
   "commands": {
     "autofill": { "suggested_key": { "default": "Alt+Shift+F" }, "description": "Autofill this page" }
   },
