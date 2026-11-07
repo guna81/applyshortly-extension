@@ -1,3 +1,4 @@
+import { queueDiagnostic, flushDiagnostics } from "./diagnostics.js";
 // Client for the platform's extension bridge (/api/extension/*).
 // A plain-JS port of extension-bridge/client.ts; keep the two in sync.
 // Only the background service worker imports this: requests to the platform origin from there
@@ -190,8 +191,28 @@ export class JobHuntBridge {
     return this.request("/api/extension/agent/capabilities");
   }
 
-  agentStep(body) {
-    return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
+  diagnostic(body) {
+    return this.request("/api/extension/agent/diagnostic", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  async agentStep(body) {
+    body = { ...body, runtime_version: globalThis.chrome?.runtime?.getManifest?.().version };
+    void flushDiagnostics(this);
+    try {
+      return await this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
+    } catch (error) {
+      // Record only operational errors here. Successful turns are captured on the server.
+      if (!error.status || error.status >= 500) {
+        void queueDiagnostic(this, {
+          session_key: `agent:${body.session_id || body.request_id || crypto.randomUUID()}`,
+          application_id: body.application_id ?? null, runtime: "extension", status: "interrupted",
+          page_url: body.observation?.url || "", failure_code: "network_error", stage: "transport",
+          version: globalThis.chrome?.runtime?.getManifest?.().version,
+          events: [{ id: crypto.randomUUID(), sequence: 0, kind: "error", data: { code: "network_error" } }],
+        });
+      }
+      throw error;
+    }
   }
 
   report(event) {

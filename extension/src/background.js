@@ -254,7 +254,7 @@ async function pairingPoll() {
 
 async function clearConnection() {
   await externalController.stop();
-  await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue"]);
+  await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue", "browserDiagnosticQueue"]);
   await chrome.storage.session.clear();
   profileCache = null;
 }

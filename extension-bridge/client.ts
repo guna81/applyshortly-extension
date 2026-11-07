@@ -200,6 +200,7 @@ export interface AgentActionResult {
 }
 
 export interface AgentStepRequest {
+  runtime_version?: string;
   controller_version?: 1 | 2;
   request_id?: string | null;
   user_message?: string | null;
@@ -418,6 +419,16 @@ export class JobHuntBridge {
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
   agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "rules_led" | "ai_led"; verified_commands?: boolean}> {
     return this.request("/api/extension/agent/capabilities");
+  }
+
+  diagnostic(body: {
+    session_key: string; application_id?: number | null; runtime: 'extension';
+    status?: 'running' | 'waiting' | 'failed' | 'submitted' | 'ready_for_review' | 'cancelled' | 'submission_unconfirmed' | 'interrupted';
+    page_url?: string; failure_code?: string; stage?: string; version?: string;
+    events?: Array<{ id: string; sequence: number; kind: 'message' | 'action' | 'result' | 'error' | 'state' | 'heartbeat'; data?: Record<string, unknown> }>;
+    screenshot?: string;
+  }): Promise<{ id: number }> {
+    return this.request('/api/extension/agent/diagnostic', { method: 'POST', body: JSON.stringify(body) });
   }
 
   agentStep(body: AgentStepRequest): Promise<AgentStepResponse> {
