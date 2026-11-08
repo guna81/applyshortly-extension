@@ -196,19 +196,37 @@ export class JobHuntBridge {
   }
 
   async agentStep(body) {
-    body = { ...body, runtime_version: globalThis.chrome?.runtime?.getManifest?.().version };
+    const version = globalThis.chrome?.runtime?.getManifest?.().version;
+    body = { ...body, runtime_version: version };
     void flushDiagnostics(this);
+    const send = (b) => this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(b) });
     try {
-      return await this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
+      try {
+        return await send(body);
+      } catch (error) {
+        // An older platform rejects the newer `runtime_version` field (extra="forbid"): retry once
+        // without it so version skew never blocks a run.
+        if (error.status !== 422 || !/runtime_version/.test(error.message)) throw error;
+        const { runtime_version: _skipped, ...legacy } = body;
+        body = legacy;
+        return await send(body);
+      }
     } catch (error) {
-      // Record only operational errors here. Successful turns are captured on the server.
-      if (!error.status || error.status >= 500) {
+      // Record operational errors and request rejections (4xx other than auth) so the admin
+      // failure list shows them. Successful turns are captured on the server.
+      const rejected = error.status >= 400 && error.status < 500 && error.status !== 401 && error.status !== 403;
+      if (!error.status || error.status >= 500 || rejected) {
+        const code = rejected ? "request_rejected" : "network_error";
         void queueDiagnostic(this, {
           session_key: `agent:${body.session_id || body.request_id || crypto.randomUUID()}`,
-          application_id: body.application_id ?? null, runtime: "extension", status: "interrupted",
-          page_url: body.observation?.url || "", failure_code: "network_error", stage: "transport",
-          version: globalThis.chrome?.runtime?.getManifest?.().version,
-          events: [{ id: crypto.randomUUID(), sequence: 0, kind: "error", data: { code: "network_error" } }],
+          application_id: body.application_id ?? null, runtime: "extension",
+          status: rejected ? "failed" : "interrupted",
+          page_url: body.observation?.url || "", failure_code: code, stage: "transport",
+          version,
+          events: [{
+            id: crypto.randomUUID(), sequence: 0, kind: "error",
+            data: { code, http_status: error.status || 0, message: String(error.message || "").slice(0, 500) },
+          }],
         });
       }
       throw error;
