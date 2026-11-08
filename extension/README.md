@@ -82,6 +82,8 @@ Otherwise, click **Sign in with ApplyShortly** to open sign-in. There is no Plat
 the package contains the public `FRONTEND_URL` selected at build time (explicit `--platform-url`,
 environment, root `.env`, then localhost development default). Rebuild after changing this value.
 The package includes permission for that origin; `.env` and its other values are never packaged.
+Changing the packaged origin clears the previous server's connection once. Sign in again to
+connect to the new server; subsequent checks preserve an in-progress code pairing.
 The extension shows **Connected as**, your plan and credits, and never
 displays the generated connection credential.
 Use **Open ApplyShortly** to open the website with your extension account. A different website

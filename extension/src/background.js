@@ -41,6 +41,8 @@ async function settings() {
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
     await clearConnection();
+    // Complete the deployment reset once; repeated checks must not erase a new pairing.
+    await chrome.storage.local.set({ baseUrl });
     stored.token = "";
   }
   return { ...DEFAULT_SETTINGS, ...stored, baseUrl };

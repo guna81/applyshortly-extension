@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Apply Shortly Form Agent",
-  "version": "0.4.0",
-  "description": "Fills job applications from your ApplyShortly profile and answers, even multi-step forms. Submits only when you choose Fill and submit.",
+  "version": "0.4.1",
+  "description": "Fills multi-step job applications from your ApplyShortly profile and answers. Submits only when you choose Fill and submit.",
   "minimum_chrome_version": "125",
   "background": { "service_worker": "src/background.js", "type": "module" },
   "permissions": ["storage", "scripting", "activeTab", "identity", "debugger", "alarms"],
