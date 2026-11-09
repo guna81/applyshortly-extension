@@ -10,6 +10,17 @@ test('opening waits for Chrome to commit the URL and complete navigation', async
   assert.equal(states.length, 0);
 });
 
+test('a slow page that has an address but never finishes loading is still usable; one with no address is not', async () => {
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => (clock += 8_000);
+  try {
+    const slow = await waitForApplicationTab(7, { get: async () => ({ url: 'https://slow.example/job', status: 'loading' }) });
+    assert.equal(slow.url, 'https://slow.example/job');
+    await assert.rejects(waitForApplicationTab(7, { get: async () => ({ url: '', status: 'loading' }) }), /did not finish opening/);
+  } finally { Date.now = realNow; }
+});
+
 test('relay authenticates in its first frame without credential URLs or AI calls', async () => {
   const previous = globalThis.WebSocket;
   const sent = [], urls = [];
@@ -246,6 +257,7 @@ test('fill_form follows fields across a re-render that renumbers every ref', asy
         case 'setDirect': values[this.map.get(args[0])] = args[1]; typed.push([this.map.get(args[0]), args[1]]); return { ok: true };
         case 'committedValue': return values[this.map.get(args[0])] ?? '';
         case 'blur': return true;
+        case 'executionState': return undefined;
         default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     }
@@ -327,6 +339,7 @@ test('pause for me releases the tab, refuses commands, and continue re-reads the
         case 'setDirect': values[names[Number(args[0]) - 1]] = args[1]; return { ok: true };
         case 'committedValue': return values[names[Number(args[0]) - 1]] ?? '';
         case 'blur': return true;
+        case 'executionState': return undefined;
         default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     }
@@ -510,6 +523,7 @@ test('fill_form chooses from a dropdown instead of typing into it, and reports a
         case 'focusForTyping': return { ok: true, mode: 'direct' };
         case 'setDirect': return { ok: true };
         case 'blur': return true;
+        case 'executionState': return undefined;
         default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     }
@@ -617,4 +631,23 @@ test('a message cannot be sent when no application is open for the assistant', a
     await controller.connect();
     await assert.rejects(controller.sendNote('hello'), /no approved application/);
   } finally { await controller.stop(); globalThis.WebSocket = previous; }
+});
+
+test('standing approval is off until the user turns it on, and Stop access turns it off', async () => {
+  const calls = [];
+  const http = async (url, init = {}) => {
+    calls.push([init.method ?? 'GET', url, init.body ? JSON.parse(init.body) : null]);
+    return { ok: true, json: async () => ({ enabled: init.method === 'PUT' ? JSON.parse(init.body).enabled : false }) };
+  };
+  const controller = externalBrowser({
+    settings: async () => ({ baseUrl: 'https://fixture.example', token: 'fixture-secret' }),
+    sources: async () => '', resume: async () => null, report: async () => {}, http,
+  });
+  assert.equal(controller.status().standing, false);
+  assert.equal(await controller.setStanding(true), true);
+  assert.equal(controller.status().standing, true);
+  assert.deepEqual(calls.at(-1), ['PUT', 'https://fixture.example/api/extension/browser/standing-approval', { enabled: true }]);
+  await controller.stop();
+  assert.equal(controller.status().standing, false);
+  assert.deepEqual(calls.at(-1), ['PUT', 'https://fixture.example/api/extension/browser/standing-approval', { enabled: false }]);
 });

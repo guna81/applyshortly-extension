@@ -41,6 +41,10 @@
       <p class="connection-message muted" id="status" role="status" aria-live="polite"></p>
       <div class="permissions">
         <h2>Permissions</h2>
+        <label class="trust-row" for="standing">
+          <span><span class="permission-title">Let my assistant apply for me without asking each time</span><small class="muted">Off by default. When on, batches from your connected assistant start approved and submit once every required field is answered, with no countdown. It still stops at CAPTCHAs, emailed codes and sign-in pages, and new domains still ask. Stop access ends it.</small></span>
+          <input class="switch" type="checkbox" id="standing">
+        </label>
         <label class="trust-row" for="trust">
           <span><span class="permission-title">Automatically allow filling on approved sites</span><small class="muted">Start selected applications without another approval when they only fill forms on sites you have already allowed.</small></span>
           <input class="switch" type="checkbox" id="trust">

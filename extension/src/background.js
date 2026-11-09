@@ -654,6 +654,7 @@ const handlers = {
   externalBrowser: async (msg) => {
     if (msg.action === "connect") return externalController.connect();
     if (msg.action === "autoApprove") return externalController.setAutoApprove(msg.on === true);
+    if (msg.action === "standing") return externalController.setStanding(msg.on === true);
     if (msg.action === "approveNavigation") return externalController.approveNavigation();
     if (msg.action === "reviewAnswers") return externalController.reviewAnswers();
     if (msg.action === "status") return externalController.status();

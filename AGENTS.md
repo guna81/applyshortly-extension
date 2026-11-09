@@ -55,3 +55,11 @@ extension, then accept application-only MCP commands sequentially. It makes no A
 Submission is a separate guarded operation with submission scope, local batch approval,
 reviewed answers, complete fields and a cancellable countdown. It never retries an uncertain
 submission or solves a CAPTCHA. Other form agents and Autopilot retain the restrictions above.
+
+## Standing approval for a connected assistant
+
+`external-browser.js` keeps the account's standing approval (`setStanding`, `loadStanding`; the server is the
+source of truth, `PUT /api/extension/browser/standing-approval`). While on, a `submit` treats changed answers as
+reviewed and skips the countdown, and **Stop access** turns it off. Do not extend it to skip validation,
+blockers, the existing-confirmation check, new-domain approval or unconfirmed-attempt locking, and never to job
+boards beyond one job at a time or to CAPTCHA/sign-in pages.

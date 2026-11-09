@@ -10,6 +10,8 @@ export const FILL_LIMIT = 25;
 /**
  * @typedef {object} CommandPolicy
  * @property {boolean} [blockers] refuse to change a page that shows a blocker (CAPTCHA, sign-in)
+ * @property {boolean} [captchaFillable] a visible CAPTCHA alone does not stop filling the rest of the form
+ *   (the person solves it; the controller still refuses to submit while it shows). Sign-in still stops everything.
  * @property {(href: string, origin: string) => boolean} [allowHref] called for a link to an origin this run has not
  *   trusted; true lets the click through, false refuses it (the controller asks the user)
  * @property {(name: string, committed: string) => void} [onCommitted] what a field shows after a write
@@ -138,6 +140,12 @@ export class CommandRunner {
     return comboView(this.observed.observation);
   }
 
+  /** The blockers that stop a write on this page. A CAPTCHA only counts when the controller did not allow filling around it. */
+  blocking(observation) {
+    if (this.policy.blockers === false) return [];
+    return observation.blockers.filter((b) => !(b === "captcha" && this.policy.captchaFillable));
+  }
+
   /**
    * Everything that must still hold before a command touches the page: this observation is current,
    * no blocker, same document, the control was not edited by the user or replaced, not a password,
@@ -146,7 +154,7 @@ export class CommandRunner {
   async guard(action) {
     const o = this.observed;
     if (!this.current(action.observation_id)) throw new Error("Observe again before changing the page.");
-    if (this.policy.blockers !== false && o.observation.blockers.length) throw new Error("Resolve the page blocker first.");
+    if (this.blocking(o.observation).length) throw new Error("Resolve the page blocker first.");
     const target = o.refs.get(action.ref);
     const top = o.frames.find((frame) => frame.isTop);
     const currentDocument = await this.driver.call(top, "freshState", "");
@@ -309,7 +317,7 @@ export class CommandRunner {
   /** The choices a dropdown offers, read by opening it (retried once: the first open often races). */
   async options(action) {
     if (!this.observed) await this.observe();
-    if (this.policy.blockers !== false && this.observed.observation.blockers.length) throw new Error("Resolve the page blocker first.");
+    if (this.blocking(this.observed.observation).length) throw new Error("Resolve the page blocker first.");
     const o = this.observed;
     const element = this.comboView().elements.find((e) => e.ref === action.ref);
     if (!element) throw new Error("That element is no longer on the page.");
@@ -328,7 +336,7 @@ export class CommandRunner {
    */
   async review() {
     if (!this.observed) await this.observe();
-    if (this.policy.blockers !== false && this.observed.observation.blockers.length) throw new Error("Resolve the page blocker first.");
+    if (this.blocking(this.observed.observation).length) throw new Error("Resolve the page blocker first.");
     const o = this.observed;
     const { fields, missing } = scanFields(o.observation);
     const needsConfirmation = [];

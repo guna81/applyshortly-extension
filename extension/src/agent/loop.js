@@ -546,7 +546,7 @@ export async function settle(driver) {
 }
 
 /** Page actions of protocol 2 run with the page told to let the agent's clicks through the panel. */
-async function executing(driver, frames, run) {
+export async function executing(driver, frames, run) {
   for (const frame of frames) await driver.call(frame, "executionState", true);
   try { return await run(); } finally {
     for (const frame of frames) await driver.call(frame, "executionState", false).catch(() => {});

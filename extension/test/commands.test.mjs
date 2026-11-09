@@ -193,6 +193,18 @@ test("a controller that hands blockers to the user itself can turn the blocker r
   assert.deepEqual(driver.typed, [["First", "x"]]);
 });
 
+test("a controller can fill around a CAPTCHA, but a sign-in still stops every write", async () => {
+  const driver = makeDriver({ blockers: ["captcha"] });
+  const runner = await read(driver, { blockers: true, captchaFillable: true });
+  const refs = refsOf(runner);
+  await runner.mutate({ type: "type", ref: refs.First, text: "x", observation_id: runner.observed.observation.observation_id }, "c");
+  assert.deepEqual(driver.typed, [["First", "x"]]);
+  await runner.review();
+  runner.observed.observation.blockers = ["captcha", "login"];
+  await assert.rejects(runner.mutate({ type: "type", ref: refs.First, text: "y", observation_id: runner.observed.observation.observation_id }, "c"), /blocker/);
+  await assert.rejects(runner.review(), /blocker/);
+});
+
 test("reply returns only what changed with delta, keeps the full refs valid, and never returns a password", async () => {
   const driver = makeDriver({ names: ["First", "Secret"], remount: false });
   const runner = await read(driver);

@@ -21,6 +21,16 @@ trust.onchange = async () => {
   catch (error) { status.textContent = error.message; trust.checked = !trust.checked; }
 };
 const ALL_SITES = { origins: ["https://*/*", "http://*/*"] };
+const standing = /** @type {HTMLInputElement} */ (document.getElementById("standing"));
+standing.onchange = async () => {
+  // Turning it on also asks for Chrome's all-sites access in this same click (Chrome only grants it
+  // from a user click), so the first hands-off batch is not stopped by a site prompt.
+  const on = standing.checked;
+  try {
+    if (on) await chrome.permissions.request(ALL_SITES).catch(() => false);
+    await send("standing", { on });
+  } catch (error) { status.textContent = error.message; standing.checked = !on; }
+};
 $("sites").onclick = async () => {
   // Chrome only grants site access from a click on this page, so this is the one manual step.
   try {
@@ -93,6 +103,7 @@ async function refresh() {
     $("sites").hidden = all;
     $("sites-state").textContent = all ? "All application sites allowed." : "";
     if (document.activeElement !== trust) trust.checked = data.autoApprove === true;
+    if (document.activeElement !== standing) standing.checked = data.standing === true;
     const next = JSON.stringify([data.pendingNavigation, data.pendingReview, data.batches.filter((b) => b.state === "pending")]);
     if (next !== signature) { signature = next; renderAttention(data); } // keep a clicked button from being rebuilt under the cursor
     const running = data.batches.filter((b) => b.state !== "pending");

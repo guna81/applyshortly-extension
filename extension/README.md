@@ -412,6 +412,15 @@ and new domains require your intervention. No ApplyShortly AI calls or preparati
 used in this mode; your assistant's plan limits still apply. General browser control and
 screenshots are not exposed. This pilot is disabled by default on the server.
 
+**Standing approval (optional, per account, off by default).** The connection page has "Let my
+assistant apply for me without asking each time" (the same switch is in website Settings). While it is on,
+your assistant's batches start approved, and a submit skips the answer-review prompt and the countdown;
+the form must still validate with every required field answered. When a page shows a CAPTCHA, your
+assistant still fills and reviews every other field, then asks you to complete the CAPTCHA and click the
+site's own Submit; it never solves one, and a submit command is refused while it shows. It also stops at
+emailed codes and sign-in pages, and a new domain still asks. Turning it on also requests Chrome all-sites
+access in the same click. **Stop access** turns it off.
+
 Batch approval requests Chrome access to the exact employer origins; approve new origins
 separately if the application redirects. Check uploaded-resume parsing and entered answers
 before local review. Required checked consent is validated alongside native form validity
