@@ -361,16 +361,20 @@
         el("div", { class: "box" }, input,
           btn(icon(SEND), () => void send(), "primary send", { "aria-label": "Send", title: "Send" })),
         view.noteError ? el("div", { class: "note-error", role: "alert" }, view.noteError)
-          : el("small", { class: "hint" }, "Your assistant reads this with its next step. It can't submit for you."));
+          : el("small", { class: "hint" }, "Your assistant reads this with its next step. A message does not approve submission."));
     }
 
     function assistantSection(a) {
       const control = (action) => void ctl.send({ type: "assistantControl", action }).catch(() => {});
+      const submitted = a.submissionState === "submitted";
+      const uncertain = a.submissionState === "needs_verification";
       const hero = el("div", { class: "hero" },
-        el("strong", {}, a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form…" : "Your assistant has finished"),
-        el("div", { class: "meta" }, a.paused
+        el("strong", {}, uncertain ? "Submission needs verification" : submitted ? "Submitted" : a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form…" : "Browser control stopped"),
+        el("div", { class: "meta" }, uncertain
+          ? "Check the employer’s confirmation and resolve the attempt in ApplyShortly. Do not submit again."
+          : submitted ? "The employer confirmed receipt of this application." : a.paused
           ? "Edit anything you like. Click Continue and the assistant reads the page again before it goes on."
-          : a.active ? "You still submit. Click Pause for me to type in the form yourself." : "Check the form, then submit it yourself."));
+          : a.active ? "Submission needs separate approval. Click Pause for me to edit the form yourself." : "Check the application status before continuing."));
       const list = el("ul", { class: "alog xsteps", "aria-label": "Assistant steps" });
       for (const step of (a.steps ?? []).slice(-14)) {
         list.append(el("li", { class: step.state },
@@ -383,7 +387,7 @@
           el("small", { class: item.read ? "read" : "" }, item.read ? "✓ Your assistant read this" : "Waiting for your assistant to read this")));
       }
       const body = el("div", { class: "body", role: "log" },
-        el("div", { class: "meta", "aria-label": "Form agent driver" }, "Driver: Your assistant (your own AI allowance, no ApplyShortly credits)"),
+        el("div", { class: "meta", "aria-label": "Form agent run by" }, `Run by: ${a.assistantName || "Your assistant"} (your own AI allowance, no ApplyShortly credits)`),
         (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step…"),
         sent.children.length ? sent : null);
       queueMicrotask(() => { body.scrollTop = body.scrollHeight; });
@@ -553,11 +557,12 @@
       }
       if (ctl.agent) {
         const engine = ctl.agent.agent_engine;
-        const label = engine === "browser" ? "AI driver" : engine === "classic" ? "Rules first" : "Not reported yet";
-        p.append(el("div", { class: "sub", role: "status", "aria-label": "Form agent engine", style: "padding:0 16px 10px" }, `Engine: ${label}`));
-        // Who decides each step. The page tools are the same whoever drives; only the decider and its cost differ.
-        if (engine) p.append(el("div", { class: "sub", "aria-label": "Form agent driver", style: "padding:0 16px 10px" },
-          `Driver: ${engine === "browser" ? "Platform AI (uses ApplyShortly AI)" : "Rules first"}`));
+        if (ctl.agent.filling_notice) p.append(el("div", { class: "sub", role: "status", style: "padding:0 16px 10px" }, ctl.agent.filling_notice));
+        const label = engine === "ai_led" ? "AI-led" : engine === "rules_led" ? "Rules-led" : "Not reported yet";
+        p.append(el("div", { class: "sub", "aria-label": "Form agent run by", style: "padding:0 16px 10px" }, "Run by: ApplyShortly"));
+        p.append(el("details", { class: "sub", style: "padding:0 16px 10px" },
+          el("summary", {}, "Filling details"),
+          el("div", { "aria-label": "Form agent engine" }, `Filling method: ${label}`)));
       }
 
       if (view.busy) {
@@ -578,7 +583,7 @@
         const full = ctl.submittedReported || summary.progress >= 1;
         if (working && !ctl.submittedReported) p.append(agentHero());
         else p.append(el("div", { class: "hero" },
-          el("strong", {}, summary.headline),
+          el("strong", {}, !ctl.submittedReported && ["stopped", "failed"].includes(ctl.agent?.status) ? "Stopped: review the form" : summary.headline),
           el("div", { class: `bar ${full ? "full" : ""}`, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(summary.total), "aria-valuenow": String(summary.answered) },
             el("i", { style: `width:${full ? 100 : Math.round(summary.progress * 100)}%` })),
           el("div", { class: "meta" }, ctl.submittedReported ? "Tracked in ApplyShortly" : summary.total ? `${summary.answered} of ${summary.total} answered` : "Try again once the form has loaded"),
@@ -606,7 +611,8 @@
         // Submit is in the footer (not while the agent is working). It runs the guarded flow: refuses and says why unless every required
         // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
         const submit = () => {
-          const blockers = P.autoApplyBlockers(results, ctl.state.ctx.app);
+          const blockers = P.autoApplyBlockers(results, ctl.state.ctx.app, ctl.state.readiness, ctl.state.captchaPending);
+          if (["stopped", "failed"].includes(ctl.agent?.status)) blockers.push("The form agent stopped before completing its review");
           // Enabled only when every required answer is in; the tooltip says what's missing.
           return btn("Submit for me", () => void ctl.autoApply(), "primary", {
             disabled: blockers.length > 0,
@@ -669,12 +675,12 @@
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });
         render();
       },
-      /** Shows the panel with a message, e.g. why Auto apply didn't submit. */
+      /** Shows the panel with a message, e.g. why Fill and submit didn't submit. */
       stop(text) {
         view.minimized = false;
         toast(text);
       },
-      /** Counts down before Auto apply submits; resolves false if the user cancels. */
+      /** Counts down before Fill and submit submits; resolves false if the user cancels. */
       countdown(seconds) {
         return new Promise((resolve) => {
           const c = { left: seconds };

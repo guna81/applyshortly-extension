@@ -1,7 +1,8 @@
 // Tests for src/agent/commands.js: the guarded, verified commands every controller shares.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CommandRunner, driftOf } from "../src/agent/commands.js";
+import { PAGE, isPageRule } from "./page-rules.mjs";
+import { CommandRunner, driftOf, readinessOf, scanFields } from "../src/agent/commands.js";
 import { Agent } from "../src/agent/loop.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
@@ -34,7 +35,7 @@ function makeDriver({ names = ["First", "Last", "Email"], blockers = [], userEdi
         case "settle": return "complete";
         case "hitTest": return true;
         case "snapshotState": case "executionState": return undefined;
-        default: throw new Error(`unexpected ${name}`);
+        default: if (isPageRule(name)) return PAGE[name](...args); throw new Error(`unexpected ${name}`);
       }
     },
   };
@@ -192,6 +193,18 @@ test("a controller that hands blockers to the user itself can turn the blocker r
   assert.deepEqual(driver.typed, [["First", "x"]]);
 });
 
+test("a controller can fill around a CAPTCHA, but a sign-in still stops every write", async () => {
+  const driver = makeDriver({ blockers: ["captcha"] });
+  const runner = await read(driver, { blockers: true, captchaFillable: true });
+  const refs = refsOf(runner);
+  await runner.mutate({ type: "type", ref: refs.First, text: "x", observation_id: runner.observed.observation.observation_id }, "c");
+  assert.deepEqual(driver.typed, [["First", "x"]]);
+  await runner.review();
+  runner.observed.observation.blockers = ["captcha", "login"];
+  await assert.rejects(runner.mutate({ type: "type", ref: refs.First, text: "y", observation_id: runner.observed.observation.observation_id }, "c"), /blocker/);
+  await assert.rejects(runner.review(), /blocker/);
+});
+
 test("reply returns only what changed with delta, keeps the full refs valid, and never returns a password", async () => {
   const driver = makeDriver({ names: ["First", "Secret"], remount: false });
   const runner = await read(driver);
@@ -245,7 +258,7 @@ test("review names an attached file even though its file input is gone", async (
   assert.equal((await plain.review()).attached_files, undefined);
 });
 
-// The platform's AI driver gets the same verified results through the Agent loop.
+// The platform's AI-led engine gets the same verified results through the Agent loop.
 const frameObs = (elements) => ({ url: "https://careers.example.com/apply", title: "Apply", dialog: null, blockers: [], errors: [], text: "", elements, more_below: false, document_id: "doc", observation_id: "o1", viewport_width: 1000, viewport_height: 800 });
 
 async function runAgent({ verifiedCommands, actions }) {
@@ -270,7 +283,7 @@ async function runAgent({ verifiedCommands, actions }) {
   return { requests, driver };
 }
 
-test("the AI driver sends verified_commands and gets a result for a batched fill_form", async () => {
+test("the AI-led engine sends verified_commands and gets a result for a batched fill_form", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: true,
     actions: (ids, obs) => [{ type: "fill_form", command_id: "s:1:0", observation_id: obs, label: "Filling your saved answers",
       fields: [{ ref: ids.First, text: "Guna" }, { ref: ids.Last, text: "P" }] }] });
@@ -282,7 +295,7 @@ test("the AI driver sends verified_commands and gets a result for a batched fill
   assert.equal(result.result.done, 2);
 });
 
-test("the AI driver types a fill_form exactly as the platform serialises it (checked: null on text entries)", async () => {
+test("the AI-led engine types a fill_form exactly as the platform serialises it (checked: null on text entries)", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: true,
     actions: (ids, obs) => [{ type: "fill_form", command_id: "s:1:0", observation_id: obs, label: "Filled 2 saved answers", ref: null, text: null, checked: null,
       fields: [{ ref: ids.First, text: "Guna", checked: null }, { ref: ids.Last, text: "P", checked: null }] }] });
@@ -301,7 +314,7 @@ test("an unverified write in a batch fails the result so the model sees it did n
   assert.equal(result.result.done, 1);
 });
 
-test("without the capability the AI driver neither asks for verified commands nor sends results", async () => {
+test("without the capability the AI-led engine neither asks for verified commands nor sends results", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: false,
     actions: (ids, obs) => [{ type: "type", ref: ids.First, text: "Guna", command_id: "s:1:0", observation_id: obs, label: "Filled First" }] });
   assert.equal("verified_commands" in requests[0], false);
@@ -309,4 +322,54 @@ test("without the capability the AI driver neither asks for verified commands no
   const [result] = requests[1].results;
   assert.equal(result.ok, true);
   assert.equal("result" in result, false);
+});
+
+
+test("controller blocker override also permits dropdown inspection and final review", async () => {
+  const driver = makeDriver({ blockers: ["captcha"], names: ["Country"],
+    extra: { Country: { role: "select", options: ["India", "USA"] } } });
+  const runner = await read(driver, { blockers: false });
+  const ref = refsOf(runner).Country;
+  assert.deepEqual((await runner.options({ ref })).options, ["India", "USA"]);
+  assert.equal((await runner.review()).fields[0].name, "Country");
+  runner.policy.blockers = true;
+  await assert.rejects(runner.options({ ref }), /blocker/);
+  await assert.rejects(runner.review(), /blocker/);
+});
+
+
+test("scanFields: a choice group counts once and is answered by any chosen member", () => {
+  const { fields, missing } = scanFields({ elements: [
+    { ref: "1", role: "radio", name: "Yes", group: "Work authorization", required: true, checked: false },
+    { ref: "2", role: "radio", name: "No", group: "Work authorization", required: true, checked: true },
+    { ref: "3", role: "checkbox", name: "Remote", group: "Preferences", required: true, checked: false },
+    { ref: "4", role: "textbox", name: "Notes", required: false, value: "" },
+    { ref: "5", role: "button", name: "Submit" },
+    { ref: "6", role: "textbox", name: "Locked", required: true, value: "", disabled: true },
+  ] });
+  assert.deepEqual(fields.map((f) => f.name), ["Work authorization", "Preferences", "Notes"]);
+  assert.deepEqual(missing.map((m) => m.name), ["Preferences"]);
+});
+
+test("readinessOf: fields outside the top frame are counted as framed", () => {
+  const top = { isTop: true };
+  const child = { isTop: false };
+  const refs = new Map([["0.1", { frame: top }], ["1.1", { frame: child }], ["1.2", { frame: child }]]);
+  const readiness = readinessOf({ elements: [
+    { ref: "0.1", role: "textbox", name: "Name", required: true, value: "Ada" },
+    { ref: "1.1", role: "textbox", name: "Email", required: true, value: "" },
+    { ref: "1.2", role: "file", name: "Resume", required: true, value: "" },
+  ] }, refs);
+  assert.deepEqual(readiness, { total: 3, framed: 2, missing: [
+    { name: "Email", role: "textbox", framed: true }, { name: "Resume", role: "file", framed: true },
+  ] });
+});
+
+test("readinessOf: a one-frame page reports nothing as framed and bounds the missing list", () => {
+  const refs = new Map();
+  const elements = Array.from({ length: 40 }, (_, i) => ({ ref: `0.${i}`, role: "textbox", name: `Q${i}`, required: true, value: "" }));
+  for (const e of elements) refs.set(e.ref, { frame: { isTop: true } });
+  const readiness = readinessOf({ elements }, refs);
+  assert.equal(readiness.framed, 0);
+  assert.equal(readiness.missing.length, 30);
 });

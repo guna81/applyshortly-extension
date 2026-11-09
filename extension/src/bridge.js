@@ -1,3 +1,4 @@
+import { queueDiagnostic, flushDiagnostics } from "./diagnostics.js";
 // Client for the platform's extension bridge (/api/extension/*).
 // A plain-JS port of extension-bridge/client.ts; keep the two in sync.
 // Only the background service worker imports this: requests to the platform origin from there
@@ -190,8 +191,46 @@ export class JobHuntBridge {
     return this.request("/api/extension/agent/capabilities");
   }
 
-  agentStep(body) {
-    return this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(body) });
+  diagnostic(body) {
+    return this.request("/api/extension/agent/diagnostic", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  async agentStep(body) {
+    const version = globalThis.chrome?.runtime?.getManifest?.().version;
+    body = { ...body, runtime_version: version };
+    void flushDiagnostics(this);
+    const send = (b) => this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(b) });
+    try {
+      try {
+        return await send(body);
+      } catch (error) {
+        // An older platform rejects the newer `runtime_version` field (extra="forbid"): retry once
+        // without it so version skew never blocks a run.
+        if (error.status !== 422 || !/runtime_version/.test(error.message)) throw error;
+        const { runtime_version: _skipped, ...legacy } = body;
+        body = legacy;
+        return await send(body);
+      }
+    } catch (error) {
+      // Record operational errors and request rejections (4xx other than auth) so the admin
+      // failure list shows them. Successful turns are captured on the server.
+      const rejected = error.status >= 400 && error.status < 500 && error.status !== 401 && error.status !== 403;
+      if (!error.status || error.status >= 500 || rejected) {
+        const code = rejected ? "request_rejected" : "network_error";
+        void queueDiagnostic(this, {
+          session_key: `agent:${body.session_id || body.request_id || crypto.randomUUID()}`,
+          application_id: body.application_id ?? null, runtime: "extension",
+          status: rejected ? "failed" : "interrupted",
+          page_url: body.observation?.url || "", failure_code: code, stage: "transport",
+          version,
+          events: [{
+            id: crypto.randomUUID(), sequence: 0, kind: "error",
+            data: { code, http_status: error.status || 0, message: String(error.message || "").slice(0, 500) },
+          }],
+        });
+      }
+      throw error;
+    }
   }
 
   report(event) {

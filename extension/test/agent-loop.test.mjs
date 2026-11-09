@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
-import { ProgressGuard, Agent, execute, explain, holdsTyped, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
+import { PAGE } from "./page-rules.mjs";
+import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
 
 test("recovery commands allow edits while questions and negations remain read-only", () => {
   for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year"]) {
@@ -47,6 +48,21 @@ class FakeDriver {
       case "noteShown": return true;
       case "phoneTypePlan": return this.phonePlans?.shift() ?? null;
       case "committedValue": return this.committed ?? "Bengaluru, India";
+      case "holdsTyped": return PAGE.holdsTyped(...args);
+      case "showsChoice": return PAGE.showsChoice(...args);
+      // The page's key-commit decisions, over this fake's simulated typedText/committedValue.
+      case "keyCommitStart": {
+        if (!PAGE.showsChoice(await this.call(frame, "typedText", args[0]).catch(() => ""), args[1])) return { ok: false, before: "" };
+        const first = await this.call(frame, "firstOptionMatches", args[0], args[1]).catch(() => null);
+        if (first?.known && !first.matches) return { ok: false, before: "" };
+        return { ok: true, before: (await this.call(frame, "committedValue", args[0], true).catch(() => "")) ?? "" };
+      }
+      case "keyCommitCheck": {
+        const committed = (await this.call(frame, "committedValue", args[0], true)) ?? "";
+        const shown = committed.toLowerCase().trim();
+        const was = String(args[2] ?? "").toLowerCase().trim();
+        return { committed, verified: PAGE.showsChoice(committed, args[1]), wrong: Boolean(shown) && shown !== was, undone: !shown || shown === was };
+      }
       case "typedSuggestion": return this.suggestion ?? { ok: false };
       case "matchOption": return { ok: true, ref: "opt", text: "Bengaluru, India" };
       case "attach": this.calls.push(["attach-file", args[0], args[2]]); return { ok: true, value: args[2] };
@@ -259,14 +275,6 @@ test("execute: a masked input that drops inserted text is cleared and typed key 
   assert.equal(kept.calls.some(([n]) => n === "typeKeys"), false);
 });
 
-test("holdsTyped reads through masks, separators and case", () => {
-  assert.equal(holdsTyped("+91 63818-68258", "+91 6381868258"), true);
-  assert.equal(holdsTyped("₹19,00,000", "1900000"), true);
-  assert.equal(holdsTyped("+91 ", "+91 6381868258"), false);
-  assert.equal(holdsTyped("+90 000 000 03", "+91 9000000003"), false);
-  assert.equal(holdsTyped("Bengaluru ", "bengaluru"), true);
-  assert.equal(holdsTyped("", "Ada"), false);
-});
 
 test("Agent: acts, asks the user, and stops at review without submitting", async () => {
   const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Notice period" }, { ref: "2", role: "button", name: "Next" }]) });
@@ -406,7 +414,7 @@ test("questionChoices: checkboxes listed under one question are its choices; a l
 
 test("Agent: a CAPTCHA hands the form to the user without asking the platform, then continues once", async () => {
   let captcha = true;
-  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Email" }], { blockers: captcha ? ["captcha"] : [] }) });
+  const driver = new FakeDriver({ top: () => frameObs([], { blockers: captcha ? ["captcha"] : [] }) });
   const bodies = [];
   const updates = [];
   let agent;
@@ -433,6 +441,37 @@ test("Agent: a CAPTCHA hands the form to the user without asking the platform, t
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].resumed, true);
   assert.equal(agent.status, "ready");
+});
+
+test("Agent: clearing one page's CAPTCHA does not clear the next page's", async () => {
+  let page = "step-1";
+  const driver = new FakeDriver({ top: () => frameObs([], { blockers: ["captcha"], url: `https://careers.example.com/apply/${page}` }) });
+  const bodies = [];
+  const updates = [];
+  let agent;
+  agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async (body) => {
+      bodies.push(structuredClone(body));
+      return { session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] };
+    },
+    files: async () => null,
+    notify: async (m) => {
+      updates.push(m);
+      if (m.status === "waiting") {
+        // The user clears this challenge; the site then moves on to a page with another one.
+        const first = updates.filter((u) => u.status === "waiting").length === 1;
+        if (first) page = "step-2";
+        setTimeout(() => agent.resume(), 10);
+      }
+    },
+    report: async () => {},
+  });
+  await agent.run();
+  assert.equal(updates.filter((u) => u.status === "waiting").length, 2, "each page's challenge is handed to the user");
+  assert.equal(bodies.length, 1, "the platform is reached only once the second page is cleared too");
+  assert.equal(agent.status, "ready");
+  assert.equal(updates.find((u) => u.status === "ready").captchaPending, false, "the second page was cleared by the user");
 });
 
 test("takeover discards a pending plan even if resumed before it returns", async () => {
@@ -797,4 +836,67 @@ test("a busy 409 is sent again with the same request_id; other errors are not", 
   const stuck = async () => { tries++; throw new BridgeError(409, "An agent decision is already running."); };
   await assert.rejects(stepWithRetry(stuck, { request_id: "r3" }, [0, 0]), /already running/);
   assert.equal(tries, 3);
+});
+
+
+test("Agent: a form that lives only in a child frame reports its required fields when ready", async () => {
+  const driver = new FakeDriver({
+    top: () => frameObs([]),
+    child: () => frameObs([
+      { ref: "1", role: "textbox", name: "Full name", required: true, value: "Ada Lovelace" },
+      { ref: "2", role: "textbox", name: "Email", required: true, value: "" },
+    ]),
+  });
+  const updates = [];
+  const agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async () => ({ session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] }),
+    files: async () => null,
+    notify: (m) => updates.push(m), report: async () => {},
+  });
+  await agent.run();
+  const ready = updates.find((u) => u.status === "ready");
+  assert.deepEqual(ready.readiness, { total: 2, framed: 2, missing: [{ name: "Email", role: "textbox", framed: true }] });
+});
+
+test("Agent: a form split between the page and a frame counts both parts as the agent saw them", async () => {
+  const driver = new FakeDriver({
+    top: () => frameObs([{ ref: "1", role: "textbox", name: "Full name", required: true, value: "" }]),
+    child: () => frameObs([{ ref: "1", role: "textbox", name: "Email", required: true, value: "ada@example.com" }]),
+  });
+  const updates = [];
+  const agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async () => ({ session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] }),
+    files: async () => null,
+    notify: (m) => updates.push(m), report: async () => {},
+  });
+  await agent.run();
+  const ready = updates.find((u) => u.status === "ready");
+  assert.equal(ready.readiness.total, 2);
+  assert.equal(ready.readiness.framed, 1);
+  assert.deepEqual(ready.readiness.missing, [{ name: "Full name", role: "textbox", framed: false }]);
+});
+
+test("Agent: an embedded CAPTCHA does not interrupt accessible application fields", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([
+    { ref: "1", role: "textbox", name: "Email" },
+  ], { blockers: ["captcha"] }) });
+  const updates = [];
+  let calls = 0;
+  const agent = new Agent({
+    tabId: 4, appId: 9, driver,
+    step: async () => {
+      calls++;
+      return { session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] };
+    },
+    files: async () => null,
+    notify: (m) => updates.push(m), report: async () => {},
+  });
+  await agent.run();
+  assert.equal(calls, 1);
+  assert.equal(updates.some((u) => u.status === "waiting"), false);
+  assert.equal(agent.status, "ready");
+  assert.match(agent.log.at(-1), /complete any CAPTCHA/);
+  assert.equal(updates.find((u) => u.status === "ready").captchaPending, true);
 });

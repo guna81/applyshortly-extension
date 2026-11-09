@@ -288,8 +288,8 @@
         "properties": {
           "agent_engine": {
             "enum": [
-              "classic",
-              "browser"
+              "rules_led",
+              "ai_led"
             ],
             "title": "Agent Engine",
             "type": "string"
@@ -857,6 +857,18 @@
             "title": "Resumed",
             "type": "boolean"
           },
+          "runtime_version": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Version"
+          },
           "session_id": {
             "anyOf": [
               {
@@ -923,8 +935,8 @@
             "anyOf": [
               {
                 "enum": [
-                  "classic",
-                  "browser"
+                  "rules_led",
+                  "ai_led"
                 ],
                 "type": "string"
               },
@@ -1268,6 +1280,178 @@
           "name"
         ],
         "title": "DeviceBody",
+        "type": "object"
+      },
+      "DiagnosticBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticEvent"
+            },
+            "maxItems": 50,
+            "title": "Events",
+            "type": "array"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "page_url": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Page Url",
+            "type": "string"
+          },
+          "runtime": {
+            "default": "extension",
+            "enum": [
+              "extension",
+              "server"
+            ],
+            "title": "Runtime",
+            "type": "string"
+          },
+          "screenshot": {
+            "anyOf": [
+              {
+                "maxLength": 4000000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screenshot"
+          },
+          "screenshot_at": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screenshot At"
+          },
+          "session_key": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Session Key",
+            "type": "string"
+          },
+          "stage": {
+            "default": "unknown",
+            "maxLength": 40,
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "default": "running",
+            "enum": [
+              "running",
+              "waiting",
+              "failed",
+              "submitted",
+              "ready_for_review",
+              "cancelled",
+              "submission_unconfirmed",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "session_key"
+        ],
+        "title": "DiagnosticBatch",
+        "type": "object"
+      },
+      "DiagnosticEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 150,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "message",
+              "action",
+              "result",
+              "error",
+              "state",
+              "heartbeat"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 0.0,
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "kind"
+        ],
+        "title": "DiagnosticEvent",
         "type": "object"
       },
       "ExtensionAIIn": {
@@ -2188,6 +2372,20 @@
         "title": "ResultBody",
         "type": "object"
       },
+      "StandingApproval": {
+        "description": "The account's switch: a connected assistant's browser batches start approved.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "StandingApproval",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2335,6 +2533,69 @@
           }
         },
         "summary": "Capabilities",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/agent/diagnostic": {
+      "post": {
+        "operationId": "extensionAgentDiagnostic",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagnosticBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Extensionagentdiagnostic",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest",
         "tags": [
           "extension"
         ]
@@ -3600,6 +3861,113 @@
           }
         },
         "summary": "Poll",
+        "tags": [
+          "extension-browser"
+        ]
+      }
+    },
+    "/api/extension/browser/standing-approval": {
+      "get": {
+        "operationId": "get_standing_approval_api_extension_browser_standing_approval_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingApproval"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Standing Approval",
+        "tags": [
+          "extension-browser"
+        ]
+      },
+      "put": {
+        "description": "The user's own switch: connected-assistant batches start approved while it is on.",
+        "operationId": "set_standing_approval_api_extension_browser_standing_approval_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StandingApproval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingApproval"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Standing Approval",
         "tags": [
           "extension-browser"
         ]

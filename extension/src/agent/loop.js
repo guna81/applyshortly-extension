@@ -5,7 +5,7 @@
 // final submit button (page.js clickable()), and it stops whenever the platform says
 // ready_for_review: the user reviews the form and submits it themselves.
 
-import { CommandRunner } from "./commands.js";
+import { CommandRunner, readinessOf } from "./commands.js";
 
 const MAX_OBSERVED = 400; // the API's limit on elements per observation
 const TEXT_LIMIT = 12000;
@@ -16,6 +16,15 @@ const OPTION_SCROLL_WAIT_MS = 120;
 const MAX_OPTION_PAGES = 80;
 const ACTION_PAUSE_MS = 120;
 const CAPTCHA_HANDOFF = "There's a CAPTCHA on this page. Please solve it yourself.";
+// An embedded verification widget must not prevent filling the accessible application.
+// Challenge-only pages still need the user's intervention before any work can continue.
+export function hasApplicationFields(observation) {
+  return observation.elements.some((e) =>
+    ["textbox", "textarea", "combobox", "select", "radio", "checkbox", "file"].includes(e.role) &&
+    !e.disabled && !["password", "hidden", "search"].includes(e.input_type) &&
+    !/captcha|recaptcha|hcaptcha|security code|verification code|i.?m not a robot/i.test(`${e.name ?? ""} ${e.identity ?? ""}`));
+}
+
 const LOAD_WAIT_MS = 10_000;
 const WAIT_FOR_POLL_MS = 250;
 // A state seen this often among the recent ones is a loop (one state, or two alternating, as
@@ -198,14 +207,6 @@ async function waitForResult(probe, ready, timeout = 2500) {
   return result;
 }
 
-/** Whether a field shows what was typed (a mask may add spaces, dashes or separators). */
-export function holdsTyped(value, text) {
-  const digits = (t) => String(t ?? "").replace(/\D/g, "");
-  const words = (t) => String(t ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (/^[\d\s+()\-.,]+$/.test(text) && digits(text).length >= 3) return digits(value).endsWith(digits(text).replace(/^0+/, "")) || digits(value).includes(digits(text));
-  return words(value).includes(words(text));
-}
-
 async function typeInto(driver, target, frames, text, adaptive = false) {
   await clickRef(driver, target, frames);
   const focus = await driver.call(target.frame, "focusForTyping", target.local);
@@ -218,7 +219,7 @@ async function typeInto(driver, target, frames, text, adaptive = false) {
     await driver.insertText(text);
     if (text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
       const now = await driver.call(target.frame, "state", target.local);
-      if (typeof now?.value === "string" && !holdsTyped(now.value, text)) {
+      if (typeof now?.value === "string" && !(await driver.call(target.frame, "holdsTyped", now.value, text))) {
         // A masked input dropped the inserted string: clear it and type key by key instead.
         await driver.call(target.frame, "focusForTyping", target.local);
         await driver.press("Backspace");
@@ -297,38 +298,25 @@ async function choose(driver, target, frames, answer, adaptive = false) {
   return { matched: match.text, ...readback };
 }
 
-const squash = (text) => String(text ?? "").toLowerCase().replace(/[^\p{L}\p{N}+]+/gu, " ").trim();
-
-/** Does what the widget shows correspond to the option we picked or the answer we asked for? */
-function showsChoice(committed, ...wanted) {
-  const shown = squash(committed);
-  return Boolean(shown) && wanted.some((w) => {
-    const want = squash(w);
-    return want && (shown === want || shown.includes(want) || want.includes(shown));
-  });
-}
-
 /** Reads the widget's value after a pick, giving React a moment to re-render. */
 async function readCommitted(driver, target, wanted, widgetOnly = false) {
   let committed = null;
+  let verified = false;
   for (let i = 0; i < 4; i++) {
     await sleep(i === 0 ? 150 : 250);
     committed = await driver.call(target.frame, "committedValue", target.local, widgetOnly).catch(() => null);
-    if (showsChoice(committed, ...wanted)) break;
+    verified = Boolean(await driver.call(target.frame, "showsChoice", committed, ...wanted));
+    if (verified) break;
   }
-  return { committed: committed ?? "", verified: showsChoice(committed, ...wanted) };
+  return { committed: committed ?? "", verified };
 }
 
 async function commitByKeys(driver, target, answer) {
-  // ArrowDown + Enter takes the first entry of whatever list is open. That is the answer only when
-  // the typed search text has narrowed the list to it: with no such text the first entry is
-  // arbitrary (the first of an unfiltered menu), so nothing is pressed.
-  const typed = await driver.call(target.frame, "typedText", target.local).catch(() => "");
-  if (!showsChoice(typed, answer)) return { committed: "", verified: false };
-  const before = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
-  // A list that shows its options must show the answer first: the highlighted entry is what Enter takes.
-  const first = await driver.call(target.frame, "firstOptionMatches", target.local, answer).catch(() => null);
-  if (first?.known && !first.matches) return { committed: "", verified: false };
+  // ArrowDown + Enter takes the first entry of whatever list is open. The page decides whether that
+  // entry is the answer (the typed search text has narrowed the list to it); nothing is pressed
+  // otherwise. The page script is shared with the platform's server driver.
+  const start = await driver.call(target.frame, "keyCommitStart", target.local, answer).catch(() => null);
+  if (!start?.ok) return { committed: "", verified: false };
   try {
     // Enter on a plain input, or a combobox whose list closed, submits the form: check again right
     // before Enter, after ArrowDown, that the list is still open.
@@ -340,15 +328,21 @@ async function commitByKeys(driver, target, answer) {
     return { committed: "", verified: false };
   }
   // Strict: the typed search text sitting in the input must not count as a pick.
-  const result = await readCommitted(driver, target, [answer], true);
-  if (!result.verified && squash(result.committed) && squash(result.committed) !== squash(before)) {
+  let check = null;
+  for (let i = 0; i < 4; i++) {
+    await sleep(i === 0 ? 150 : 250);
+    check = await driver.call(target.frame, "keyCommitCheck", target.local, answer, start.before).catch(() => null);
+    if (check?.verified) break;
+  }
+  if (check?.verified) return { committed: check.committed, verified: true };
+  if (check?.wrong) {
     // A wrong entry took the Enter: take it back (Backspace clears a single-value widget), and
     // say so rather than leave an answer nobody chose.
     await driver.press("Backspace").catch(() => {});
-    const now = await driver.call(target.frame, "committedValue", target.local, true).catch(() => null);
-    return { committed: now ?? "", verified: false, undone: !squash(now) || squash(now) === squash(before) };
+    const now = await driver.call(target.frame, "keyCommitCheck", target.local, answer, start.before).catch(() => null);
+    return { committed: now?.committed ?? "", verified: false, undone: now?.undone ?? false };
   }
-  return result;
+  return { committed: check?.committed ?? "", verified: false };
 }
 
 /**
@@ -452,7 +446,7 @@ export async function execute(driver, refs, frames, action, files) {
         const shown = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
         if (shown == null) return null;
         const loose = ["date", "datetime-local", "month", "time", "week", "number", "range", "color"].includes(target.inputType);
-        return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : holdsTyped(shown, text) };
+        return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : await driver.call(target.frame, "holdsTyped", shown, text) };
       }
       const committed = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
       return { matched: text, committed: committed ?? "", verified: String(committed ?? "").replace(/\D/g, "").endsWith(text.replace(/\D/g, "")),
@@ -552,7 +546,7 @@ export async function settle(driver) {
 }
 
 /** Page actions of protocol 2 run with the page told to let the agent's clicks through the panel. */
-async function executing(driver, frames, run) {
+export async function executing(driver, frames, run) {
   for (const frame of frames) await driver.call(frame, "executionState", true);
   try { return await run(); } finally {
     for (const frame of frames) await driver.call(frame, "executionState", false).catch(() => {});
@@ -594,10 +588,11 @@ export class Agent {
     this.waiting = null; // resolves with the user's input while status is ask_user / paused
     this.log = [];
     this.last = null;
+    this.fillingNotice = null;
     driver.onDetached = () => this.stop("You closed the debugging bar, so the agent stopped.");
     // The same guarded, verified commands a host assistant gets; this controller never submits.
     this.runner = new CommandRunner({ driver, policy: {
-      blockers: false, // a CAPTCHA or sign-in is handed to the user before any action runs
+      blockers: false, // blocker handoffs are handled by this loop and the platform policy
       allowHref: (href, origin) => { if (/^https?:/.test(href)) this.trustedOrigins.add(origin); return true; },
       isPaused: () => this.paused,
       files: (kind) => this.files(kind),
@@ -606,7 +601,7 @@ export class Agent {
   }
 
   emit(extra = {}) {
-    const message = { type: "agentUpdate", controller_version: this.controllerVersion, status: this.status, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
+    const message = { type: "agentUpdate", controller_version: this.controllerVersion, status: this.status, filling_notice: this.fillingNotice, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
     void this.notify(message);
   }
 
@@ -627,7 +622,7 @@ export class Agent {
   }
 
   message(text) {
-    if (this.controllerVersion !== 2) throw new Error("Restart with the upgraded AI driver.");
+    if (this.controllerVersion !== 2) throw new Error("Restart with the upgraded AI-led controller.");
     this.progressGuard.reset();
     this.messages.push(text);
     this.controlRevision += 1;
@@ -680,7 +675,7 @@ export class Agent {
     let wantScreenshot = this.controllerVersion === 2;
     let annotateScreenshot = false;
     let focusQuery = "";
-    let captchaCleared = false;
+    let captchaClearedFor = ""; // the document whose CAPTCHA the user cleared; another page or a new challenge starts over
     try {
       await this.driver.attach();
       this.status = "running";
@@ -727,11 +722,11 @@ export class Agent {
             continue;
           }
         }
-        // A CAPTCHA is never ours to solve or to plan around: hand the form to the user right away,
-        // without asking the platform. After they say it's done, one pass runs even if a solved
-        // widget stays on the page.
-        if (!observation.blockers.includes("captcha")) captchaCleared = false;
-        else if (!captchaCleared) {
+        // Fill accessible application fields first. Only a challenge without an accessible
+        // form blocks the run here; embedded widgets are left for the user at submission.
+        const documentKey = observation.document_id ?? observation.url;
+        if (!observation.blockers.includes("captcha") || captchaClearedFor !== documentKey) captchaClearedFor = "";
+        if (observation.blockers.includes("captcha") && !captchaClearedFor && !hasApplicationFields(observation)) {
           this.say("There's a CAPTCHA on this page. Solve it yourself; I haven't touched it.");
           this.last = { agent_engine: this.last?.agent_engine, question: { kind: "blocker", text: CAPTCHA_HANDOFF }, filled: this.last?.filled, unresolved: this.last?.unresolved };
           this.status = "waiting";
@@ -739,7 +734,7 @@ export class Agent {
           const input = await this.waitForUser();
           if (input.kind === "stop") break;
           this.status = "running";
-          captchaCleared = true;
+          captchaClearedFor = documentKey;
           extra = { resumed: true };
           this.say("Continuing…");
           continue;
@@ -810,6 +805,7 @@ export class Agent {
         focusQuery = res.focus_query || "";
         wantScreenshot = Boolean(res.want_screenshot);
         annotateScreenshot = Boolean(res.annotate_screenshot);
+        if (res.message?.startsWith("Using Rules-led: AI-led is unavailable")) this.fillingNotice = res.message.split(".")[0] + ".";
         this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code };
         if (res.message && res.status !== "continue") this.say(res.message);
         for (const [index, action] of (res.actions ?? []).entries()) {
@@ -859,8 +855,12 @@ export class Agent {
         this.progressGuard.noteFailures(results.filter((r) => !r.ok).map((r) => String(res.actions?.[r.index]?.label || res.actions?.[r.index]?.type || "a field").replace(/^(?:Filled|Filling|Chose|Typed|Selected)\s+/i, "")));
         if (res.status === "ready_for_review") {
           this.status = "ready";
-          this.say("Everything I could fill is done. Review the form and submit it yourself.");
-          this.emit();
+          const captchaPending = observation.blockers.includes("captcha") && !captchaClearedFor;
+          this.say(captchaPending
+            ? "Everything I could fill is done. Review the form, complete any CAPTCHA the site requires, then submit it yourself."
+            : "Everything I could fill is done. Review the form and submit it yourself.");
+          // The panel only sees the top document; tell it what this frame-aware observation found.
+          this.emit({ captchaPending, readiness: readinessOf(observation, refs) });
           await this.report("filled", res, this.url);
           if (this.controllerVersion !== 2) break;
           const input = await this.waitForUser();

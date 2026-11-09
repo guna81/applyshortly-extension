@@ -23,7 +23,7 @@
     "iframe[src*='recaptcha'][title*='challenge' i]",
     "iframe[src*='hcaptcha.com'][title*='challenge' i]",
     ".g-recaptcha:not([data-size='invisible'])",
-    ".h-captcha",
+    ".h-captcha:not([data-size='invisible'])",
     "iframe[src*='challenges.cloudflare.com']",
     "input:not([type='hidden'])[name='captcha' i]",
     "input:not([type='hidden'])[id='captcha' i]",
@@ -373,7 +373,7 @@
 
   // AX finds accessible controls that the form mapper does not yet recognize.
   function describeAccessible(el, role, name, observed) {
-    if (!el || !isVisible(el, true) || observed.includes(el.getAttribute(REF))) return null;
+    if (!el || !F.applicationControl(el) || !isVisible(el, true) || observed.includes(el.getAttribute(REF))) return null;
     const dialog = activeDialog(document, true);
     if (dialog && !contains(dialog, el)) return null;
     const roles = { textField: "textbox", searchbox: "textbox", textfield: "textbox", popUpButton: "combobox" };
@@ -381,6 +381,9 @@
     if (!["textbox", "textarea", "combobox", "listbox", "option", "button", "link", "radio", "checkbox"].includes(role)) return null;
     return base(el, {
       ...contextOf(el), role, name: clip(clean(name || F.labelOf(el)), 500),
+      // AX-only controls still need their native type: otherwise a search or password input
+      // becomes an ordinary textbox when the platform extracts application questions.
+      ...(el.tagName === "INPUT" ? { input_type: el.type } : {}),
       // A rich-text box (a div with contenteditable) has no `value`: it holds its text.
       value: clip(el.isContentEditable ? clean(el.textContent) : String(el.value ?? el.getAttribute("aria-valuetext") ?? shownChoice(el)), 2000),
       checked: el.checked ?? (el.getAttribute("aria-checked") === "true"),
@@ -847,6 +850,57 @@
     return widgetOnly ? "" : rich ? clean(el.textContent) : el.value ?? "";
   }
 
+  const squashText = (t) => String(t ?? "").toLowerCase().replace(/[^\p{L}\p{N}+]+/gu, " ").trim();
+
+  /**
+   * Whether a field shows what was typed (a mask may add spaces, dashes or separators). Shared by
+   * the extension's loop and the platform's server driver, so both judge a write the same way.
+   */
+  function holdsTyped(value, text) {
+    const digits = (t) => String(t ?? "").replace(/\D/g, "");
+    const words = (t) => String(t ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (/^[\d\s+()\-.,]+$/.test(text) && digits(text).length >= 3) {
+      return digits(value).endsWith(digits(text).replace(/^0+/, "")) || digits(value).includes(digits(text));
+    }
+    return words(value).includes(words(text));
+  }
+
+  /** Does what a widget shows correspond to the option picked or the answer asked for? */
+  function showsChoice(shown, ...wanted) {
+    const seen = squashText(shown);
+    return Boolean(seen) && wanted.some((w) => {
+      const want = squashText(w);
+      return want && (seen === want || seen.includes(want) || want.includes(seen));
+    });
+  }
+
+  /**
+   * Before committing a typeahead's highlighted entry with ArrowDown + Enter: the first entry is the
+   * answer only when the typed search text has narrowed the list to it, so refuse otherwise.
+   * { ok, before } where `before` is what the widget showed as chosen.
+   */
+  function keyCommitStart(ref, answer) {
+    if (!showsChoice(typedText(ref), answer)) return { ok: false, before: "" };
+    const first = firstOptionMatches(ref, answer);
+    if (first?.known && !first.matches) return { ok: false, before: "" };
+    return { ok: true, before: committedValue(ref, true) ?? "" };
+  }
+
+  /**
+   * After Enter: did the widget take the answer? `wrong` is a different entry having taken the
+   * Enter (to be taken back); `undone` says the widget is back to what it showed before.
+   */
+  function keyCommitCheck(ref, answer, before) {
+    const committed = committedValue(ref, true) ?? "";
+    const shown = squashText(committed);
+    return {
+      committed,
+      verified: showsChoice(committed, answer),
+      wrong: Boolean(shown) && shown !== squashText(before),
+      undone: !shown || shown === squashText(before),
+    };
+  }
+
   /**
    * For a phone box that has a country selector (intl-tel-input and friends): what to type, or
    * which country to pick first. null when the box has no selector, so plain typing applies.
@@ -933,6 +987,10 @@
     blur,
     selectNative,
     committedValue,
+    holdsTyped,
+    showsChoice,
+    keyCommitStart,
+    keyCommitCheck,
     typedText,
     activate,
     phoneTypePlan,

@@ -1,11 +1,11 @@
-# Apply Shortly Form Assistant privacy disclosure
+# Apply Shortly Form Agent privacy disclosure
 
 For the hosted service, see the published [Privacy](https://applyshortly.com/privacy) and
 [Terms](https://applyshortly.com/terms). This disclosure covers extension version 0.3.1.
 
 ## Scope and contact
 
-Apply Shortly Form Assistant helps you fill job application forms from your ApplyShortly profile and
+Apply Shortly Form Agent helps you fill job application forms from your ApplyShortly profile and
 saved answers. It submits an application only when you choose Auto apply (in the extension, or
 by clicking Apply for that job in ApplyShortly), and then only by clicking the employer's own
 Submit button after a countdown you can cancel. Otherwise you review

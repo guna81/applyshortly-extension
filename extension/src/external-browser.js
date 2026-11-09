@@ -1,6 +1,6 @@
 // Host assistants supply decisions; this controller never calls an AI endpoint.
 import { TabDriver } from "./agent/cdp.js";
-import { observeTab } from "./agent/loop.js";
+import { executing, observeTab } from "./agent/loop.js";
 import { CommandRunner } from "./agent/commands.js";
 
 // After this long without a command the application tab is let go (the debugger banner goes
@@ -34,11 +34,16 @@ export function validateApplicationForm() {
 
 export async function waitForApplicationTab(tabId, tabs = chrome.tabs) {
   const deadline = Date.now() + 15_000;
+  let last = null;
   while (Date.now() < deadline) {
     const tab = await tabs.get(tabId);
+    last = tab;
     if (/^https?:\/\//.test(tab.url || "") && tab.status === "complete") return tab;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
+  // Pages heavy on ads and trackers can stay "loading" long after their form is usable. The next
+  // command reads the page again, so a tab that has a real address is good enough to carry on with.
+  if (last && /^https?:\/\//.test(last.url || "") && last.status === "loading") return last;
   throw new Error("Application page did not finish opening. Check the tab before retrying.");
 }
 
@@ -47,7 +52,7 @@ const KEEP = "externalBrowser"; // { wanted, device, autoApprove } kept across s
 /**
  * @typedef {{ get: (key: string) => Promise<Record<string, any>>, set: (value: Record<string, any>) => Promise<void> }} KeyValueStore
  */
-/** @param {{ settings: any, sources: any, resume: any, report: any, makeDriver?: any, store?: KeyValueStore, hasAccess?: (origins: string[]) => Promise<boolean>, timers?: { setTimeout: (fn: () => void, ms: number) => any, clearTimeout: (id: any) => void } }} options */
+/** @param {{ settings: any, sources: any, resume: any, report: any, makeDriver?: any, store?: KeyValueStore, hasAccess?: (origins: string[]) => Promise<boolean>, http?: (url: string, init?: any) => Promise<any>, timers?: { setTimeout: (fn: () => void, ms: number) => any, clearTimeout: (id: any) => void } }} options */
 export function externalBrowser({
   settings, sources, resume, report,
   makeDriver = (tabId, code) => new TabDriver(tabId, code),
@@ -55,6 +60,8 @@ export function externalBrowser({
   // allowed these sites" check. Without them nothing is remembered and nothing is auto-approved.
   store = { get: async (_key) => ({}), set: async (_value) => {} },
   hasAccess = async (_origins) => false,
+  // HTTP for the account's standing-approval switch (not part of the websocket relay).
+  http = (url, init) => globalThis.fetch(url, init),
   // The timers the poll loop uses, replaceable so tests can step it by hand.
   timers = { setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms), clearTimeout: (id) => globalThis.clearTimeout(id) },
 }) {
@@ -71,6 +78,21 @@ export function externalBrowser({
   let wanted = false; // the user connected this browser and has not stopped it
   let reconnectTimer = null;
   let attempts = 0;
+  // The account's standing approval (set by the user, off by default): a connected assistant's
+  // batches start approved on the server, and a submit skips the answer-review prompt and the
+  // countdown. Complete-form checks, blockers and CAPTCHA/sign-in stops still apply.
+  let standing = false;
+  const standingUrl = async () => {
+    const { baseUrl, token } = await settings();
+    return { url: `${baseUrl}/api/extension/browser/standing-approval`, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } };
+  };
+  const loadStanding = async () => {
+    try {
+      const { url, headers } = await standingUrl();
+      const response = await http(url, { headers });
+      if (response.ok) standing = (await response.json()).enabled === true;
+    } catch { /* keep the last known value */ }
+  };
   let autoApprove = false; // the user trusts their assistant to start fill-only batches on sites already allowed
   const remember = async (patch) => {
     try { await store.set({ [KEEP]: { ...((await store.get(KEEP))[KEEP] ?? {}), ...patch } }); } catch { /* best effort */ }
@@ -78,6 +100,7 @@ export function externalBrowser({
   const seen = new Set();
   let batches = [];
   let pendingReview = null;
+  let submissionState = null;
   let pendingNavigation = null;
   const trustedOrigins = new Set();
   // Step log shown in the popup and control page. It records what the assistant is doing,
@@ -126,9 +149,14 @@ export function externalBrowser({
   const changedAnswers = new Map();
   const approvedAnswers = new Map();
   // Runs every page command (verified writes, fill_form, options, review) the same way the platform's
-  // own AI driver does; this controller only decides who is allowed to ask for them.
+  // own AI-led engine does; this controller only decides who is allowed to ask for them.
   const runner = new CommandRunner({ policy: {
     blockers: true,
+    // Fill everything else around a CAPTCHA and leave it to the person; submit still refuses while it shows.
+    captchaFillable: true,
+    // Let clicks pass through the extension's own panel while a command runs, as the platform agent does;
+    // otherwise the panel can sit over a control and the hit test calls it obscured.
+    around: (frames, run) => executing(runner.driver, frames, run),
     allowHref: (href, origin) => {
       if (trustedOrigins.has(origin)) return true;
       pendingNavigation = origin;
@@ -172,6 +200,7 @@ export function externalBrowser({
     if (action.type === "stop" || action.type === "pause") { await stop(); return { paused: true }; }
     if (userPaused) throw new Error("The user paused browser control to edit the form by hand. Wait for them to continue, then observe the page again before changing anything.");
     if (action.type === "open") {
+      submissionState = null;
       if (driver) throw new Error("An application tab is already active.");
       trustedOrigins.clear(); trustedOrigins.add(new URL(job.url).origin);
       const applicationUrl = new URL(job.url);
@@ -221,8 +250,10 @@ export function externalBrowser({
     }
     if (action.type === "submit") {
       const fresh = await observeTab(driver, { extended: true });
+      if (fresh.observation.blockers.includes("captcha")) throw new Error("The page shows a CAPTCHA. Ask the user to complete it and click the site's own Submit; never solve it or submit around it.");
       if (fresh.observation.blockers.length || fresh.observation.errors.length) throw new Error("Resolve page blockers and errors before submission.");
       if (/your application (?:has been |was )?(?:successfully )?(?:submitted|received)|thank you for applying/i.test(fresh.observation.text)) throw new Error("A confirmation is already present; verify the application first.");
+      if (standing) for (const [key, value] of changedAnswers) approvedAnswers.set(key, value);
       const unreviewed = [...changedAnswers].filter(([key, value]) => approvedAnswers.get(key) !== value);
       if (unreviewed.length) {
         pendingReview = { batchId: command.batch_id, answers: unreviewed };
@@ -235,8 +266,10 @@ export function externalBrowser({
       };
       const fingerprint = await validate();
       if (!fingerprint) throw new Error("Required fields or uploads need review. Submit manually if the form is unsupported.");
-      note("Countdown started: cancel it in the page if anything looks wrong", "warn");
-      const [{ result: proceed }] = await chrome.scripting.executeScript({ target: { tabId: driver.tabId }, func: async () => {
+      if (!standing) note("Countdown started: cancel it in the page if anything looks wrong", "warn");
+      else note("Submitting under your standing approval");
+      const [{ result: proceed }] = await chrome.scripting.executeScript({ target: { tabId: driver.tabId }, args: [standing], func: async (skipCountdown) => {
+        if (skipCountdown) return true;
         const box = document.createElement("div");
         box.style.cssText = "position:fixed;z-index:2147483647;top:16px;right:16px;padding:20px;background:white;color:black;border:2px solid black";
         const text = document.createElement("p"); const cancel = document.createElement("button");
@@ -271,6 +304,7 @@ export function externalBrowser({
       }
       await request(`/devices/${device}/batches/${command.batch_id}/confirmation`, { application_id: application, confirmed });
       note(confirmed ? "Employer confirmation seen" : "No confirmation seen. Verify the application before retrying", confirmed ? "done" : "error");
+      submissionState = confirmed ? "submitted" : "needs_verification";
       if (confirmed) {
         await report(application, "submitted", tab.url);
         await driver.detach(); setDriver(null); runner.reset(); application = null;
@@ -429,6 +463,7 @@ export function externalBrowser({
     const result = await open();
     wanted = true;
     void remember({ wanted: true });
+    void loadStanding();
     return result;
   }
   /** Reconnects on its own after a browser start, an extension reload or a service-worker restart. */
@@ -439,17 +474,27 @@ export function externalBrowser({
     if (!kept.wanted || !(await settings()).token) return false;
     if (kept.device) device = kept.device; // asks for the old device back so approved batches stay usable
     wanted = true;
+    await loadStanding();
     try { await open(); } catch { scheduleReconnect(); }
     return true;
   }
   return {
     connect,
     resumeIfWanted,
-    async setAutoApprove(on) { autoApprove = on === true; await remember({ autoApprove }); note(autoApprove ? "Trusted assistant on: fill-only batches on sites you allowed start without asking" : "Trusted assistant off: every batch asks first"); return autoApprove; },
+    /** The user's own switch for the whole account; the server is the source of truth. */
+    async setStanding(on) {
+      const { url, headers } = await standingUrl();
+      const response = await http(url, { method: "PUT", headers, body: JSON.stringify({ enabled: on === true }) });
+      if (!response.ok) throw new Error("Could not change the standing approval. Try again.");
+      standing = (await response.json()).enabled === true;
+      note(standing ? "Standing approval on: your assistant's batches start approved" : "Standing approval off: each batch needs your approval");
+      return standing;
+    },
+    async setAutoApprove(on) { autoApprove = on === true; await remember({ autoApprove }); note(autoApprove ? "Automatic filling on: applications on approved sites start without asking" : "Automatic filling off: each selection needs approval"); return autoApprove; },
     ownsTab: (tabId) => Boolean((driver && (driver.tabId === tabId || driver.candidateTabs.has(tabId))) || released?.tabId === tabId),
     /** The application tab the assistant is working in (or let go of while idle/paused), for the panel. */
     workingTab: () => driver?.tabId ?? released?.tabId ?? null,
-    status: () => ({ device_id: device, autoApprove, wanted, batches, pendingReview, pendingNavigation, connected: timer !== null, paused: userPaused, activity: activity.slice(-60) }),
+    status: () => ({ device_id: device, autoApprove, standing, wanted, batches, submissionState, pendingReview, pendingNavigation, connected: timer !== null, paused: userPaused, activity: activity.slice(-60) }),
     /** The user takes the form by hand: let go of the tab and refuse commands until they continue. */
     async pauseForUser() {
       if (userPaused) return true;
@@ -478,7 +523,7 @@ export function externalBrowser({
     },
     notes: () => notes.map(({ id, text, read }) => ({ id, text, read })),
     async decision(batchId, approve) {
-      note(approve ? "You approved the batch" : "You rejected the batch");
+      note(approve ? "You approved the selected applications" : "You rejected the selected applications");
       return request(`/devices/${device}/batches/${batchId}/decision`, { approve });
     },
     approveNavigation() {
@@ -498,11 +543,15 @@ export function externalBrowser({
       wanted = false; clearTimeout(reconnectTimer); reconnectTimer = null; userPaused = false;
       void remember({ wanted: false });
       note("You stopped browser control", "warn");
+      if (standing) { // Stop access ends the standing approval too
+        standing = false;
+        try { const { url, headers } = await standingUrl(); await http(url, { method: "PUT", headers, body: JSON.stringify({ enabled: false }) }); } catch { /* shown as still on until the next load */ }
+      }
       try {
         for (const batch of batches.filter((item) => ["pending", "active", "paused"].includes(item.state))) {
           await request(`/devices/${device}/batches/${batch.id}/decision`, { approve: false });
         }
-      } finally { await stop(); }
+      } finally { await stop(); socket?.close(); socket = null; }
     },
   };
 }

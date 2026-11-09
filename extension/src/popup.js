@@ -136,7 +136,7 @@ async function render(s, { notFound = false } = {}) {
         ? button("Fill it again anyway", (e) => void start(false, e.currentTarget), "block")
         : [
           choice("Fill this form", FILL_DETAIL, (e) => void start(false, e.currentTarget), "primary"),
-          choice("⚡ Auto apply", AUTO_DETAIL, (e) => void start(false, e.currentTarget, true)),
+          choice("Fill and submit", AUTO_DETAIL, (e) => void start(false, e.currentTarget, true)),
         ],
     ));
   }
@@ -145,7 +145,7 @@ async function render(s, { notFound = false } = {}) {
     el("b", {}, notFound ? "Not in ApplyShortly yet" : "Fill this page"),
     el("p", { class: "muted" }, "You can fill it, but it won't be tracked."),
     choice("Fill this form", FILL_DETAIL, (e) => void start(true, e.currentTarget), "primary"),
-    choice("⚡ Auto apply", AUTO_DETAIL, (e) => void start(true, e.currentTarget, true)),
+    choice("Fill and submit", AUTO_DETAIL, (e) => void start(true, e.currentTarget, true)),
     button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/applications?${new URLSearchParams({ add: "1", url: tab.url })}`), "ghost block"),
   ));
 }
@@ -168,7 +168,7 @@ async function renderAssistant() {
     data = res?.ok ? res.data : null;
   } catch { data = null; }
   if (!data?.connected) {
-    box.replaceChildren(el("a", { href: controlUrl, onclick: openControl }, "Connect ChatGPT, Claude or Codex"));
+    box.replaceChildren(el("a", { href: controlUrl, onclick: openControl }, "Let your assistant fill applications"));
     return;
   }
   const waiting = attention(data);

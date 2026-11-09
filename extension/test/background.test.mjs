@@ -28,7 +28,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   };
   class BridgeError extends Error { constructor(status, message) { super(message); this.status = status; } }
   class JobHuntBridge {
-    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "classic" }); }
+    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "rules_led" }); }
     aiSettings() { return { mode: "platform", configured: [] }; }
     selectAI(body) { calls.push({ selectedAI: body }); return { ...body, configured: [] }; }
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }
@@ -313,6 +313,22 @@ test('packaged origin overrides saved origins without leaking old credentials', 
   assert.equal(h.local.token, undefined);
   await h.send({ type: 'browserSignIn', baseUrl: 'https://ignored.example' });
   assert.match(h.calls.find((call) => call.loginUrl).loginUrl, /^https:\/\/deployment.example\//);
+});
+
+test('deployment reset preserves a new approved-code pairing across connection checks', async () => {
+  const h = harness({ packagedOrigin: 'https://deployment.example', configStatus: 404 });
+  const started = await h.send({ type: 'browserSignIn', interactive: true });
+  assert.equal(started.data.state, 'legacy');
+  assert.equal(h.local.baseUrl, 'https://deployment.example');
+  assert.equal(h.local.token, undefined);
+  assert.ok(h.session.pairing);
+  await h.send({ type: 'connectionSettings' });
+  await h.send({ type: 'test' });
+  assert.ok(h.session.pairing);
+  const result = await h.send({ type: 'pairingPoll' });
+  assert.equal(result.data.state, 'connected');
+  assert.equal((await h.send({ type: 'test' })).data.connected, true);
+  assert.equal(h.local.token, 'fixture-new-bearer');
 });
 
 test('AI settings are available only to trusted UI and return metadata', async () => {

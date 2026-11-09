@@ -41,6 +41,8 @@ async function settings() {
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
     await clearConnection();
+    // Complete the deployment reset once; repeated checks must not erase a new pairing.
+    await chrome.storage.local.set({ baseUrl });
     stored.token = "";
   }
   return { ...DEFAULT_SETTINGS, ...stored, baseUrl };
@@ -254,7 +256,7 @@ async function pairingPoll() {
 
 async function clearConnection() {
   await externalController.stop();
-  await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue"]);
+  await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue", "browserDiagnosticQueue"]);
   await chrome.storage.session.clear();
   profileCache = null;
 }
@@ -558,7 +560,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
       // once. Status lookups and reloads must never replay a submission choice.
       const current = await settings();
       if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) autoSubmit = false;
-      const submit = autoSubmit && message.status === "ready";
+      const submit = autoSubmit && message.status === "ready" && !message.captchaPending;
       if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
       return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
     },
@@ -630,11 +632,12 @@ async function pushAssistantSteps() {
   if (target == null) return;
   const steps = status.activity.slice(-14).map(({ id, text, state }) => ({ id, text, state }));
   const notes = externalController.notes();
-  const key = JSON.stringify([target, active, status.paused, steps, notes]);
+  const assistantName = status.batches.find((b) => ["active", "paused", "needs_verification"].includes(b.state))?.assistant;
+  const key = JSON.stringify([target, active, status.paused, steps, notes, assistantName, status.submissionState]);
   if (key === pushedKey) return;
   pushedKey = key;
   pushedTab = active ? tabId : null;
-  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes }, { frameId: 0 }).catch(() => {});
+  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes, assistantName, submissionState: status.submissionState }, { frameId: 0 }).catch(() => {});
 }
 if (typeof setInterval === "function") setInterval(() => { void pushAssistantSteps(); }, 1000);
 
@@ -651,6 +654,7 @@ const handlers = {
   externalBrowser: async (msg) => {
     if (msg.action === "connect") return externalController.connect();
     if (msg.action === "autoApprove") return externalController.setAutoApprove(msg.on === true);
+    if (msg.action === "standing") return externalController.setStanding(msg.on === true);
     if (msg.action === "approveNavigation") return externalController.approveNavigation();
     if (msg.action === "reviewAnswers") return externalController.reviewAnswers();
     if (msg.action === "status") return externalController.status();

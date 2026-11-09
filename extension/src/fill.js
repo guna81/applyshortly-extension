@@ -281,9 +281,14 @@
    * Field kinds: text, select, radio (native or ARIA), checkbox, file, picker (an upload the
    * page handles in its own dialog, e.g. Google Forms), dropdown (an ARIA listbox).
    */
+  // Page furniture is never part of an application, including AX fallback controls.
+  function applicationControl(el) {
+    return !el.closest('footer, nav, [role="contentinfo"], [role="navigation"], [role="search"]');
+  }
+
   function collectFields(doc, { checkLayout = true } = {}) {
     const fields = [];
-    const visible = (el) => isVisible(el, checkLayout);
+    const visible = (el) => applicationControl(el) && isVisible(el, checkLayout);
 
     for (const el of doc.querySelectorAll(TEXT_INPUT)) {
       if (!visible(el) || !isEditable(el) || selectLikeInput(el)) continue;
@@ -337,19 +342,31 @@
       if (el.closest(".ashby-application-form-input-yesno")) continue;
       const cf7 = el.closest('.wpcf7-checkbox');
       const ashby = el.closest('.ashby-application-form-input-checkbox-group');
-      const group = cf7 || (ashby?.querySelectorAll('input[type=checkbox]').length > 1 ? ashby : null);
+      const named = el.name ? [...(el.form ?? doc).querySelectorAll('input[type=checkbox]')]
+        .filter((other) => other.name === el.name && visible(other)) : [];
+      const semantic = el.closest('fieldset, [role="group"][aria-labelledby], [role="group"][aria-label]');
+      const candidates = semantic ? [...semantic.querySelectorAll('input[type=checkbox]')].filter(visible) : [];
+      // A fieldset headed "Legal" may hold several independent acknowledgements.
+      const semanticInputs = candidates.length > 1 && (
+        candidates.every((input) => input.name && input.name === candidates[0].name) ||
+        /\?|\b(?:select|choose|pick)\b|all that apply/i.test(labelOf(semantic))
+      ) ? candidates : [];
+      let common = named.length > 1 ? named[0].parentElement : null;
+      while (common && !named.every((input) => common.contains(input))) common = common.parentElement;
+      const shared = semanticInputs.length > 1 ? semantic : common;
+      const group = cf7 || (ashby?.querySelectorAll('input[type=checkbox]').length > 1 ? ashby : null) || shared;
       if (group) {
         if (seenCheckboxGroups.has(group)) continue;
         seenCheckboxGroups.add(group);
-        const inputs = [...group.querySelectorAll('input[type=checkbox]')].filter(visible);
+        const inputs = group === shared ? semanticInputs.length > 1 ? semanticInputs : named : [...group.querySelectorAll('input[type=checkbox]')].filter(visible);
         const options = inputs.map((input) => ({ text: labelOfOption(input), el: input }));
-        fields.push({ kind: "checkbox", el, label: ashby ? labelOf(group) : nearbyLabel(el), required: isRequired(group) || inputs.some(isRequired), options });
+        fields.push({ kind: "checkbox", el, label: ashby || semantic === group ? labelOf(group) : nearbyLabel(shared ?? el) || textAbove(shared ?? el), required: isRequired(group) || inputs.some(isRequired), options });
         continue;
       }
       fields.push({ kind: "checkbox", el, label: labelOf(el) || optionText(el), required: isRequired(el) });
     }
     for (const el of doc.querySelectorAll("input[type=file]")) {
-      if (el.disabled) continue;
+      if (el.disabled || !applicationControl(el)) continue;
       fields.push({ kind: "file", el, label: labelOf(el) || "File upload", required: isRequired(el) });
     }
     for (const el of doc.querySelectorAll('[role="listbox"]')) {
@@ -1114,7 +1131,7 @@
     switch (field.kind) {
       case "text":
         // A dial code alone ("+44") or a few digits is a number still to be written.
-        return isPhoneBox(field) ? phoneProgress(field.el.value).state !== "complete" : !field.el.value.trim();
+        return isPhoneBox(field) ? phoneProgress(field.el.value).state !== "complete" : !field.el.value.trim() && !widgetPick(field.el);
       case "select":
         return !field.el.value || field.el.selectedIndex <= 0 && field.el.options[0]?.value === ""
           || isPlaceholderOption(field.el.options[field.el.selectedIndex]?.text)
@@ -1263,6 +1280,7 @@
     labelOf,
     isRequired,
     collectFields,
+    applicationControl,
     profileAnswer,
     chooseOption,
     isPhoneBox,

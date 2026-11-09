@@ -77,21 +77,44 @@
   const OPEN_STATUSES = ["saved", "queued", "filling", "ready_for_review"];
 
   /**
-   * Why "Auto apply" must not click Submit yet; empty when it may. Every required question
+   * Why "Fill and submit" must not click Submit yet; empty when it may. Every required question
    * has to be answered on the page, and a tracked application must not already be sent or
    * waiting for verification (retrying one could submit twice).
    */
-  function autoApplyBlockers(results, app) {
+  /**
+   * Why Auto apply must not send this page. `readiness` is the form agent's own frame-aware count
+   * of the fields it saw (the panel's scan reads the top document only); `captchaPending` is the
+   * agent's note that the site still wants a verification the user has to complete.
+   * @param {any[]} results @param {any} app
+   * @param {{ total?: number, framed?: number, missing?: {name: string, framed?: boolean}[] } | null} [readiness]
+   * @param {boolean} [captchaPending]
+   */
+  function autoApplyBlockers(results, app, readiness = null, captchaPending = false) {
     const blockers = [];
     if (app?.status === "submission_unconfirmed") {
       blockers.push("A previous attempt needs verification in ApplyShortly first");
     } else if (app?.status && !OPEN_STATUSES.includes(app.status)) {
       blockers.push(`This application is already ${String(app.status).replace(/_/g, " ")}`);
     }
-    if (!results.length) blockers.push("No form fields found on this page");
+    if (!results.length && !(readiness?.total > 0)) blockers.push("No form fields found on this page");
     const unresolved = results.filter((r) => r.status === "unresolved");
     if (unresolved.length) blockers.push(`${plural(unresolved.length, "required field")} still ${unresolved.length === 1 ? "needs" : "need"} you`);
+    // Fields inside a frame are not on this page's own list, so count the ones the agent found empty.
+    const framedMissing = (readiness?.missing ?? []).filter((m) => m.framed);
+    if (framedMissing.length) blockers.push(`${plural(framedMissing.length, "required field")} in the embedded form still ${framedMissing.length === 1 ? "needs" : "need"} you`);
+    // Auto apply can only check and press what this page holds; a form in a frame is for the user to send.
+    if (readiness?.framed > 0) blockers.push("This form is embedded in the page, so I can't check all of it from here. Review it and submit it yourself");
+    if (captchaPending) blockers.push("The site still needs you to complete its CAPTCHA. Do that, then submit it yourself");
     return blockers;
+  }
+
+  /** One line for the chat when the agent found required fields it could not leave filled. */
+  function readinessNote(readiness) {
+    const missing = readiness?.missing ?? [];
+    if (!missing.length) return "";
+    const names = missing.slice(0, 3).map((m) => `“${m.name}”`).join(", ");
+    const more = missing.length > 3 ? ` and ${missing.length - 3} more` : "";
+    return `Still empty and required: ${names}${more}.`;
   }
 
   // The same sign-in paths the form agent treats as a login wall (agent/page.js).
@@ -99,7 +122,7 @@
 
   /**
    * Whether the page is asking the user to sign in: a password box is showing, or the path is a
-   * sign-in one. Auto apply never submits there; the user signs in first.
+   * sign-in one. Fill and submit never submits there; the user signs in first.
    * @param {string} pathname @param {boolean} passwordShown
    */
   function loginWall(pathname, passwordShown) {
@@ -196,7 +219,7 @@
     return [
       HANDOFF[reason] ?? HANDOFF.asked,
       "I'll ask here when I need you. Chrome shows a “started debugging” bar while I click through, and it uses one apply run of credits.",
-      autoSubmit ? "Once every required answer is complete, Auto apply will resume with its cancellable countdown." : "",
+      autoSubmit ? "Once every required answer is complete, Fill and submit will resume with its cancellable countdown." : "",
     ].filter(Boolean).join(" ");
   }
 
@@ -401,7 +424,7 @@
   }
 
   globalThis.JobHuntPanel = {
-    summarize, autoApplyBlockers, loginWall, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
+    summarize, autoApplyBlockers, readinessNote, loginWall, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
     nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();
