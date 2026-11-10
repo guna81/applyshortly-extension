@@ -91,7 +91,9 @@
         if (text) return text;
       }
       const clone = wrapping.cloneNode(true);
-      clone.querySelectorAll("input, select, textarea, option").forEach((n) => n.remove());
+      // A widget's own chrome sits inside the label too (Lever's location box: its suggestion list,
+      // "No location found" and "Loading" notes): none of it is the question.
+      clone.querySelectorAll('input, select, textarea, option, svg, [hidden], [aria-hidden="true"], [style*="display: none"], [class*="dropdown" i]').forEach((n) => n.remove());
       if (cleanLabel(clone.textContent)) return cleanLabel(clone.textContent);
     }
     const aria = cleanLabel(el.getAttribute("aria-label"));
@@ -1105,6 +1107,17 @@
       options.filter((o) => normalise(o.text).startsWith(a)),
     ];
     for (const tier of tiers) if (tier.length === 1) return tier[0];
+    // A place ("Trichy, Tamil Nadu") against a suggestion that spells it out with more parts and
+    // accents ("Trichy, Tiruchirappalli, Tamil Nādu, IND"): every part of the answer is in it.
+    const plain = (t) => normalise(String(t).normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+    const parts = String(answer).split(",").map(plain).filter(Boolean);
+    if (parts.length >= 2) {
+      const placed = options.filter((o) => {
+        const t = ` ${plain(o.text)} `;
+        return parts.every((part) => t.includes(` ${part} `));
+      });
+      if (placed.length === 1) return placed[0];
+    }
     const contained = options.filter((o) => {
       const t = normalise(o.text);
       return t && (a.includes(t) || t.includes(a));

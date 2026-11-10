@@ -142,6 +142,30 @@
     return name ? { name, required: /\*\s*$/.test(text.trim()) } : { name: label, required: false };
   }
 
+  const ATTACHED_FILE = /^[^\\/\n]{1,200}\.(?:pdf|docx?|rtf|txt|odt|pages)$/i;
+  const REMOVE_FILE = /^(?:remove|delete|clear)\b/i;
+
+  /**
+   * An upload whose input the site took away once the file was attached: Greenhouse replaces
+   * "Attach" and its <input type=file> with the file's name and a "Remove file" button. The group
+   * is still that upload, now holding the file, so it is reported under the same name.
+   */
+  function attachedUploadElements(root, scope, checkLayout) {
+    const out = [];
+    for (const group of root.querySelectorAll('[role="group"][aria-labelledby], fieldset')) {
+      if ((scope && !contains(scope, group)) || !isVisible(group, checkLayout) || group.querySelector("input[type=file]")) continue;
+      const removers = [...group.querySelectorAll('button, [role="button"]')].filter((b) => REMOVE_FILE.test(buttonText(b)));
+      if (removers.length !== 1) continue;
+      const shown = [...group.querySelectorAll("p, span, a, div")]
+        .map((n) => (n.children.length ? "" : clean(n.textContent)))
+        .filter((t) => ATTACHED_FILE.test(t));
+      const named = uploadGroupLabel(group, "");
+      if (shown.length !== 1 || !named.name) continue;
+      out.push(base(group, { role: "file", name: named.name, value: clip(shown[0], 300), required: named.required || group.getAttribute("aria-required") === "true", in_viewport: true }));
+    }
+    return out;
+  }
+
   /** Field → observation elements: one per input, or one per option for radio groups. */
   function fieldElements(field) {
     const { el } = field;
@@ -452,6 +476,7 @@
       for (const field of fields) push(fieldElements(field));
       push(extraTextElements(root, dialog, checkLayout));
       push(disabledElements(root, dialog, checkLayout));
+      push(attachedUploadElements(root, dialog, checkLayout));
     }
     // Page order, not collection order: collectFields groups by kind (text inputs, then
     // selects, …), and the agent asks its questions in the order the elements come.
@@ -652,7 +677,7 @@
     const owned = ownedLists(el);
     const scopes = owned.length ? owned : roots(doc);
     let found = scopes
-      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item')])
+      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location')])
       .filter((o) => isVisible(o, checkLayout) && o.getAttribute("aria-disabled") !== "true");
     if (!found.length && shownBefore) found = F.appearedOptions(shownBefore, doc, checkLayout).map((o) => o.el);
     return found
