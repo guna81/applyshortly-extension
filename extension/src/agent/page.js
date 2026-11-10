@@ -677,7 +677,7 @@
     const owned = ownedLists(el);
     const scopes = owned.length ? owned : roots(doc);
     let found = scopes
-      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item')])
+      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location')])
       .filter((o) => isVisible(o, checkLayout) && o.getAttribute("aria-disabled") !== "true");
     if (!found.length && shownBefore) found = F.appearedOptions(shownBefore, doc, checkLayout).map((o) => o.el);
     return found
