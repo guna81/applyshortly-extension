@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
+import { endpoint, canDraft, customAssist } from "../src/custom-ai.js";
+import { customPlanner } from "../src/custom-agent.js";
 import { externalBrowser } from "../src/external-browser.js";
 import { autoApplyUrl } from '../src/bridge.js';
 import { webcrypto } from 'node:crypto';
 
-function harness({ autofillId = null, autoCode = null, claimed = false, blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, autopilotItem = null, reportFailures = 0, packagedOrigin = "http://localhost:3000" } = {}) {
-  const local = { baseUrl: 'http://localhost:3000', token: 'fixture-bearer', aiDrafts: false };
+function harness({ autofillId = null, autoCode = null, claimed = false, blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, autopilotItem = null, reportFailures = 0, packagedOrigin = "http://localhost:3000", engine = "rules_led", customNegotiation = true, capabilityFailure = false } = {}) {
+  const local = { baseUrl: 'http://localhost:3000', token: 'fixture-bearer', aiDrafts: false, extensionEngine: engine };
   const session = {};
   const access = [];
   const calls = [];
@@ -28,7 +30,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   };
   class BridgeError extends Error { constructor(status, message) { super(message); this.status = status; } }
   class JobHuntBridge {
-    agentCapabilities() { return Promise.resolve({ controller_version: 1, agent_engine: "rules_led" }); }
+    agentCapabilities(custom, choice) { calls.push({ capabilities: custom, choice }); if (capabilityFailure) return Promise.reject(new Error('Offline')); return Promise.resolve({ extension_engine: choice, controller_version: engine === "ai_led" ? 2 : 1, agent_engine: engine, verified_commands: engine === "ai_led", ...(custom && customNegotiation ? { planner: "custom" } : {}) }); }
+    agentStep(body) { calls.push({ agentStep: body }); return Promise.resolve({}); }
     aiSettings() { return { mode: "platform", configured: [] }; }
     selectAI(body) { calls.push({ selectedAI: body }); return { ...body, configured: [] }; }
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }
@@ -40,6 +43,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     lookup() { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return null; }
     trackApplication(body) { calls.push({ tracked: body }); return { id: 91, title: body.title, status: 'saved' }; }
     websiteTicket() { return { ticket: 'fixture-short-lived-ticket' }; }
+    suggestAnswer(body) { calls.push({ suggest: body }); return { answer: null, source: "none", needs_review: true }; }
     assistFill(body) { calls.push({ assist: body }); return { reply: 'ok', updates: {}, warnings: [], done: false, choices: [] }; }
     disconnect() { calls.push('revoke'); if (revoked) throw new BridgeError(401, 'Revoked'); }
     autopilotNext() { calls.push('autopilotNext'); return autopilotItem; }
@@ -56,6 +60,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
   }
   const chrome = {
     storage: { local: area(local), session: area(session) }, runtime,
+    permissions: { contains: async () => true },
     identity: {
       getRedirectURL: (path) => `https://fixture-extension.chromiumapp.org/${path}`,
       launchWebAuthFlow: async ({ url, interactive }) => {
@@ -72,8 +77,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, customPlanner } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { endpoint, canDraft, customPlanner, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -644,4 +649,111 @@ test('employer pages cannot connect, approve or control the external browser', a
     const result = await h.send({ type: 'externalBrowser', action }, h.content);
     assert.equal(result.ok, false);
   }
+});
+
+
+test('custom provider uses profile lookup and directs only drafts to the configured endpoint', async () => {
+  const h = harness();
+  const saved = await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret' });
+  assert.equal(saved.ok, true);
+  const settings = await h.send({ type: 'customAISettings' });
+  assert.equal(settings.data.hasKey, true);
+  assert.equal('apiKey' in settings.data, false);
+  const result = await h.send({ type: 'suggest', appId: null, question: 'Why do you want this role?', allowGenerate: true }, h.content);
+  assert.equal(result.data.answer, 'Fixture draft');
+  assert.equal(result.data.needs_review, true);
+  assert.equal(h.calls.find((x) => x.suggest).suggest.allow_generate, false);
+  assert.equal(h.calls.filter((x) => x.customRequest).length, 1);
+  assert.equal((await h.send({ type: 'suggest', appId: null, question: 'What is your salary?', allowGenerate: true }, h.content)).data.answer, null);
+  assert.equal(h.calls.filter((x) => x.customRequest).length, 1);
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, false);
+  assert.equal((await h.send({ type: 'customAISettings' }, h.content)).ok, false);
+  await h.send({ type: 'disconnect' });
+  assert.equal(h.local.customAI, undefined);
+});
+
+test('local sample forms stay untracked and remain available for filling', async () => {
+  const h = harness();
+  const localPage = { ...h.content, url: 'http://127.0.0.1:18972/', tab: { id: 10, url: 'http://127.0.0.1:18972/' } };
+  const result = await h.send({ type: 'context', appId: null, page: { title: 'Sample' } }, localPage);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.app, null);
+  assert.equal(h.calls.some((call) => call.tracked), false);
+  const started = await h.send({ type: 'agentStart', appId: null }, localPage);
+  assert.equal(started.ok, true);
+  assert.equal(started.data.appId, null);
+  assert.equal(h.calls.some((call) => call.tracked || call.report), false);
+});
+
+
+test('custom assistant chat goes directly to the selected provider without platform AI', async () => {
+  const h = harness();
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret' });
+  const result = await h.send({ type: 'assist', messages: [{ role: 'user', text: 'What optional fields are empty?' }], fields: [{ key: 'f1', label: 'Source', kind: 'text', options: [], required: false }], current: { f1: '' } }, h.content);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.reply, 'Optional source is blank.');
+  assert.equal(h.calls.filter((c) => c.customRequest).length, 1);
+  assert.equal(h.calls.some((c) => c.assist), false);
+});
+
+test('custom AI-led planning uses the selected engine and never calls the platform agent', async () => {
+  const h = harness({ engine: "ai_led" });
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture', apiKey: 'fixture' });
+  const context = await h.send({ type: 'context', appId: null }, h.content);
+  assert.equal(context.data.controllerVersion, 2);
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  assert.equal(h.agentInstances[0].controllerVersion, 2);
+  assert.equal(h.agentInstances[0].verifiedCommands, true);
+  assert.ok(h.calls.some((call) => call.capabilities === true));
+  assert.equal(h.calls.some((call) => call.agentStep), false);
+});
+
+test('custom provider does not silently fall back when platform negotiation is unavailable', async () => {
+  const h = harness({ engine: "ai_led", customNegotiation: false });
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture', apiKey: 'fixture' });
+  const context = await h.send({ type: 'context', appId: null }, h.content);
+  assert.equal(context.ok, true);
+  assert.equal(context.data.controllerVersion, 1);
+  const start = await h.send({ type: 'agentStart', appId: null }, h.content);
+  assert.equal(start.ok, false);
+  assert.match(start.error, /needs an update/);
+});
+
+test('capability errors preserve autofill but fail agent startup closed', async () => {
+  for (const custom of [false, true]) {
+    const h = harness({ engine: 'ai_led', capabilityFailure: true });
+    if (custom) await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture' });
+    const context = await h.send({ type: 'context', appId: null }, h.content);
+    assert.equal(context.ok, true);
+    assert.equal(context.data.controllerVersion, 1);
+    assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, false);
+    assert.equal(h.agentInstances.length, 0);
+  }
+});
+
+test('disabling custom AI stops active custom agent', async () => {
+  const h = harness({ engine: 'ai_led' });
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture' });
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  assert.equal((await h.send({ type: 'disableCustomAI' })).ok, true);
+  assert.equal(h.agentInstances[0].stopped, true);
+  assert.equal(h.local.customAI, undefined);
+  await assert.rejects(h.agentInstances[0].step({ observation: { url: 'https://example.com/apply', elements: [] }, results: [] }), /provider changed/i);
+  assert.equal(h.calls.some((call) => call.customRequest), false);
+});
+
+test('extension engine defaults to AI-led independently of the platform account setting', async () => {
+  const h = harness({ engine: 'ai_led' });
+  delete h.local.extensionEngine;
+  assert.equal((await h.send({ type: 'connectionSettings' })).data.extensionEngine, 'ai_led');
+  const result = await h.send({ type: 'context', appId: null }, h.content);
+  assert.equal(result.data.agentEngine, 'ai_led');
+  assert.equal(h.calls.find((call) => call.choice)?.choice, 'ai_led');
+});
+
+test('platform-managed extension planner sends the extension engine to each step', async () => {
+  const h = harness({ engine: 'ai_led' });
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  await h.agentInstances[0].step({ observation: {} });
+  assert.equal(h.calls.find((call) => call.agentStep).agentStep.extension_engine, 'ai_led');
 });

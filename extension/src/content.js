@@ -134,6 +134,10 @@
       // Optional and still empty: listed (and offered to the assistant) without counting as a to-do.
       return { field, status: "optional", optional: true, reason: "Optional" };
     }
+    // Form controls are plain text, so never paste generated Markdown syntax into them.
+    if (field.kind === "text" && (answer.source === "generated" || answer.aiUpdate)) {
+      answer = { ...answer, value: plainDraft(answer.value) };
+    }
     // An AI draft only counts for a choice question when it names an option outright.
     const strict = answer.source === "generated";
     if (field.kind === "dropdown") {
@@ -158,6 +162,14 @@
     // Several onChange handlers can otherwise use the same stale form-state snapshot.
     await new Promise((resolve) => setTimeout(resolve, 100));
     return { field, status: "filled", value: written, source: answer.source, needsReview: answer.needsReview, optional: !field.required };
+  }
+
+  function plainDraft(value) {
+    return String(value).replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1 ($2)")
+      .replace(/(^|\n)\s{0,3}#{1,6}\s+/g, "$1")
+      .replace(/(^|\n)\s*[-*+]\s+/g, "$1• ")
+      .replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/__([^_\n]+)__/g, "$1")
+      .replace(/`([^`\n]+)`/g, "$1").trim();
   }
 
   async function fillAll({ allowGenerate }) {
@@ -190,7 +202,7 @@
       }
       if (field.kind === "picker") {
         if (!answeredNow(field)) {
-          results.push({ field, status: "unresolved", reason: "Download your CV, then use the form's Add file button" });
+          results.push({ field, status: field.required ? "unresolved" : "optional", optional: !field.required, reason: "Use the form's upload button to attach your résumé" });
         }
         continue;
       }
@@ -210,6 +222,7 @@
       }
       if (!answerFor.has(field)) continue; // already had a value
       const row = await applyAnswer(field, answerFor.get(field));
+      if (row && !answerFor.get(field) && allowGenerate && P.draftable(field)) row.draftAttempted = true;
       if (row) results.push(row);
     }
     const checked = await validate(results, fields);
@@ -239,6 +252,10 @@
   async function validate(results, fields) {
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     for (const row of results) {
+      if (row.status === "filled" && row.field.kind === "text" && row.field.el.matches('[role="textbox"][contenteditable]') && F.isEmpty(row.field)) {
+        Object.assign(row, { status: row.field.required ? "unresolved" : "optional", reason: "The form did not keep this answer. Please enter it on the page." });
+        continue;
+      }
       if (row.status !== "filled" || !F.isInvalid(row.field)) continue;
       if (!(await repair(row))) {
         const why = F.invalidReason(row.field);
@@ -356,7 +373,7 @@
     for (const [key, value] of Object.entries(updates ?? {})) {
       const r = rows[key];
       if (!r || typeof value !== "string" || !value.trim()) continue;
-      const next = await applyAnswer(r.field, { value, source: "assistant", needsReview: false });
+      const next = await applyAnswer(r.field, { value, source: "assistant", needsReview: false, aiUpdate: true });
       if (next) changed.push(next);
     }
     if (!changed.length) return [];
@@ -611,6 +628,7 @@
       case "dropdown":
         return field.phoneFor ? !F.isEmpty(field) : Boolean(F.dropdownValue(field)) && !F.isInvalid(field);
       case "picker": // Google Forms hides "Add file" once the file is attached
+        if (field.dropzone) return !field.el.isConnected || !field.el.getClientRects().length;
         return ![...field.el.querySelectorAll('[role="button"]')].some(
           (b) => /add file|upload/i.test(b.textContent) && b.getClientRects().length > 0,
         );
@@ -620,7 +638,7 @@
   }
 
   function currentValue(field) {
-    if (field.kind === "text") return field.el.value || F.widgetPick(field.el);
+    if (field.kind === "text") return F.textValue(field.el) || F.widgetPick(field.el);
     if (field.kind === "select") return field.el.selectedOptions[0]?.text ?? "";
     if (field.kind === "dropdown" && field.custom) return F.dropdownValue(field);
     return null;
@@ -902,7 +920,7 @@
   chrome.storage?.onChanged?.addListener((changes, area) => {
     if (area !== "local" || !("aiDrafts" in changes) || !state?.ctx) return;
     state.ctx.aiDrafts = changes.aiDrafts.newValue !== false;
-    if (state.ctx.aiDrafts && !agentLive() && !chat.pending && P.openQuestions(state.results).length) void draftOpen();
+    if (state.ctx.aiDrafts && !agentLive() && !chat.pending && state.results.some((r) => ["unresolved", "optional"].includes(r.status) && P.draftable(r.field))) void draftOpen();
   });
 
   async function start(appId, opts = {}) {

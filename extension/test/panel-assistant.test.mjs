@@ -95,6 +95,29 @@ test("consecutive answers let batched form state commit between fields", async (
   page.win.close();
 });
 
+test("attaches the profile resume to Greenhouse's grouped upload, not its cover-letter input", async () => {
+  const form = `<form>
+    <div role="group" aria-labelledby="upload-label-resume" aria-required="true">
+      <div id="upload-label-resume">Resume/CV</div><label for="resume">Attach</label><input id="resume" type="file">
+    </div>
+    <div role="group" aria-labelledby="upload-label-cover" aria-required="false">
+      <div id="upload-label-cover">Cover Letter</div><label for="cover">Attach</label><input id="cover" type="file">
+    </div></form>`;
+  const page = panelPage(() => ({}), { form });
+  page.win.DataTransfer = class { constructor() { this.list = []; this.items = { add: (file) => this.list.push(file) }; } get files() { return this.list; } };
+  Object.defineProperty(page.win.HTMLInputElement.prototype, "files", { configurable: true, get() { return this.chosen ?? []; }, set(value) { this.chosen = value; } });
+  page.handlers.resume = () => ({ name: "resume.pdf", type: "application/pdf", base64: "JVBERi0=" });
+  page.start();
+  await until(() => page.win.document.querySelector("#resume").files.length, "resume attachment");
+  assert.equal(page.win.document.querySelector("#resume").files[0].name, "resume.pdf");
+  assert.equal(page.win.document.querySelector("#cover").files.length, 0);
+  const fields = page.win.JobHuntFill.collectFields(page.win.document, { checkLayout: false }).filter((field) => field.kind === "file");
+  assert.deepEqual(plain(fields.map(({ label, required }) => ({ label, required }))), [
+    { label: "Resume/CV", required: true }, { label: "Cover Letter", required: false },
+  ]);
+  page.win.close();
+});
+
 test("the assistant asks the open question, offers its options, and fills the answer without AI", async () => {
   const page = panelPage(() => ({ reply: "Updated your name.", updates: {}, warnings: [], done: true, choices: [] }));
   page.start();
@@ -178,6 +201,75 @@ test("an optional question nobody could answer is offered for drafting, not coun
   assert.equal(page.sent.some((m) => m.type === "assist"), false);
   await until(() => !page.shadow().querySelector(".thinking"), "reply");
   assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /Here's a draft/);
+});
+
+test("optional screening answers are drafted automatically as plain text, and missing facts are requested", async () => {
+  const form = `<label for="integration">Describe an integration you built, including systems and challenges.</label><textarea id="integration"></textarea>
+    <label for="issue">Describe a production issue you resolved.</label><textarea id="issue"></textarea>`;
+  const page = panelPage(() => ({}), {
+    form,
+    context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => msg.allowGenerate && /integration/.test(msg.question)
+      ? { answer: "* **Outcome:** Improved reliability.\n* **Systems:** Python and Redis.", source: "generated", needs_review: true }
+      : { answer: null },
+  });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "remaining question");
+  assert.equal(page.win.document.querySelector("#integration").value, "• Outcome: Improved reliability.\n• Systems: Python and Redis.");
+  assert.ok(page.sent.some((msg) => msg.allowGenerate && /production issue/.test(msg.question)));
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /couldn't draft.*production issue.*Tell me the details/i);
+  page.win.close();
+});
+
+test("Airtable editable textboxes are discovered, drafted, and checked after writing", async () => {
+  const form = `<div data-testid="stackedLabel"><div id="q2">Describe a customer project you delivered.</div>
+    <div data-testid="cell-editor"><div class="contentEditableTextboxContainer">
+      <div role="textbox" contenteditable="plaintext-only" aria-multiline="true" aria-labelledby="q2"></div>
+      <input class="editableFix" tabindex="-1">
+    </div></div></div>
+    <div id="q3">Describe a production issue you resolved.</div><div role="textbox" contenteditable="plaintext-only" aria-labelledby="q3"></div>`;
+  const page = panelPage(() => ({}), {
+    form,
+    context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => msg.allowGenerate && /customer project/.test(msg.question)
+      ? { answer: "**Outcome:** Delivered the project.", source: "generated", needs_review: true }
+      : { answer: null },
+  });
+  page.start();
+  const fields = page.win.document.querySelectorAll('[role="textbox"][contenteditable]');
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "remaining question");
+  assert.equal(fields[0].textContent, "Outcome: Delivered the project.");
+  assert.equal(fields[1].textContent, "");
+  assert.ok(page.sent.some((msg) => msg.allowGenerate && /production issue/.test(msg.question)));
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /production issue/i);
+  assert.equal(page.win.JobHuntFill.collectFields(page.win.document, { checkLayout: false }).length, 2);
+  page.win.close();
+});
+
+test("a contenteditable answer cleared by the site remains unanswered", async () => {
+  const form = `<div id="q">Describe a project you delivered.</div><div role="textbox" contenteditable="plaintext-only" aria-labelledby="q" aria-required="true"></div>`;
+  const page = panelPage(() => ({}), {
+    form,
+    context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => msg.allowGenerate ? { answer: "Built a project.", source: "generated", needs_review: true } : { answer: null },
+  });
+  const editor = page.win.document.querySelector('[role="textbox"]');
+  editor.addEventListener("input", () => { editor.textContent = ""; });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "unanswered question");
+  assert.equal(editor.textContent, "");
+  assert.doesNotMatch(page.shadow().querySelector(".hero strong").textContent, /All set/);
+  page.win.close();
+});
+
+test("a required résumé drop zone is not reported as complete", async () => {
+  const form = `<div><div>Resume (PDF only) *</div><div><button type="button">Drop files here or click to browse</button></div></div>`;
+  const page = panelPage(() => ({}), { form });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "upload request");
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /upload button/i);
+  assert.doesNotMatch(page.shadow().querySelector(".hero strong").textContent, /All set/);
+  page.win.close();
 });
 
 test("on an untracked page, Draft it for me sends the page's job, and a failed draft says why", async () => {

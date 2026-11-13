@@ -567,6 +567,7 @@ export class Agent {
   constructor({ tabId, appId, driver, step, files, notify, report, controllerVersion = 1, startUrl = null, verifiedCommands = false }) {
     this.trustedOrigins = new Set(startUrl ? [new URL(startUrl).origin] : []);
     this.controllerVersion = controllerVersion;
+    this.planner = "platform";
     // The platform understands fill_form / options / review and the per-action `result` (committed, verified).
     this.verifiedCommands = verifiedCommands && controllerVersion === 2;
     /** @type {Promise<void> | null} */

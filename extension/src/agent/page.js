@@ -176,7 +176,8 @@
     const phone = field.phoneCountry ? field.label : field.phoneFor?.label;
     const group = phone ? { group: clip(clean(phone), 500) } : {};
     if (field.kind === "text") {
-      const role = el.tagName === "TEXTAREA" ? "textarea" : "textbox";
+      const rich = el.hasAttribute("contenteditable");
+      const role = el.tagName === "TEXTAREA" || rich ? "textarea" : "textbox";
       // A search-style combobox (react-select) keeps its input empty and shows the pick beside it.
       const picked = el.value ? "" : F.widgetPick(el);
       const cap = Number.isInteger(el.maxLength) && el.maxLength > 0 && el.maxLength < 1_000_000 ? { text_limit: el.maxLength } : {};
@@ -184,7 +185,7 @@
       // country selector, which a "+91 …" value would be refused by.
       const mode = el.inputMode ? { input_mode: clip(el.inputMode, 20) } : {};
       const pat = el.getAttribute?.("pattern") ? { pattern: clip(el.getAttribute("pattern"), 200) } : {};
-      return [base(el, { role, name: label, input_type: el.type || "text", value: clip(el.value || picked || "", 2000), required,
+      return [base(el, { role, name: label, input_type: rich ? "richtext" : el.type || "text", value: clip(rich ? clean(F.textValue(el)) : el.value || picked || "", 2000), required,
         ...(el.matches('[role="combobox"]') ? { popup: true } : {}), ...group, ...cap, ...mode, ...pat, ...invalidInfo(field) })];
     }
     if (field.kind === "select") {

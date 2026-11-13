@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
-async function setup({ signedIn = false, billingEnabled = true, autoConnect = false } = {}) {
+async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false } = {}) {
   const dom = new JSDOM(readFileSync(new URL('../src/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
   const calls = [];
   let connected = signedIn;
   let storageListener;
   let ai = { mode: 'platform', provider: null, configured: [] };
+  const stored = {};
+  let custom = { enabled: customEnabled, baseUrl: 'http://localhost:8765/v1', model: 'fixture-model' };
   const { window } = dom;
   window.JobHuntPanel = { friendlyError: () => ({ title: 'Connection failed', detail: 'Retry' }) };
   window.chrome = {
@@ -23,6 +25,8 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
           case 'browserSignIn': connected = autoConnect || message.interactive; data = { state: connected ? 'connected' : 'signin_required' }; break;
           case 'saveAIProvider': ai.configured = [{ provider: message.provider, model: message.model }]; data = ai; break;
           case 'selectAI': ai = { ...ai, mode: message.mode, provider: message.provider ?? null }; data = ai; break;
+          case 'customAISettings': data = custom; break;
+          case 'disableCustomAI': custom = { ...custom, enabled: false }; data = true; break;
           case 'deleteAIProvider': ai.configured = []; data = ai; break;
           case 'disconnect': connected = false; data = true; break;
           default: data = true;
@@ -31,13 +35,28 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
       },
     },
     commands: { getAll: async () => [] },
-    storage: { session: { get: async () => ({}) }, local: { set: async () => {} }, onChanged: { addListener: (fn) => { storageListener = fn; } } },
+    storage: { session: { get: async () => ({}) }, local: { set: async (values) => Object.assign(stored, values) }, onChanged: { addListener: (fn) => { storageListener = fn; } } },
   };
   window.eval(readFileSync(new URL('../src/options.js', import.meta.url), 'utf8'));
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
   await flush();
-  return { window, document: window.document, calls, flush, setConnected: (value) => { connected = value; }, storageChanged: (changes) => storageListener(changes, 'local'), close: () => window.close() };
+  return { window, document: window.document, calls, stored, flush, setConnected: (value) => { connected = value; }, storageChanged: (changes) => storageListener(changes, 'local'), close: () => window.close() };
 }
+
+test('active custom endpoint is selected until the user switches to credits', async () => {
+  const h = await setup({ signedIn: true, customEnabled: true });
+  try {
+    const funding = h.document.querySelector('#aiFunding');
+    assert.equal(funding.value, 'custom');
+    assert.match(funding.selectedOptions[0].textContent, /fixture-model/);
+    funding.value = 'platform';
+    funding.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(funding.value, 'platform');
+    assert.ok(h.calls.some((item) => item.type === 'disableCustomAI'));
+    assert.ok(h.calls.some((item) => item.type === 'selectAI' && item.mode === 'platform'));
+  } finally { h.close(); }
+});
 
 test('setup hides URL configuration and silently connects an existing web session', async () => {
   const h = await setup({ autoConnect: true });
@@ -137,5 +156,18 @@ test('a connection made in the background shows without reloading', async () => 
     await h.flush();
     assert.match(h.document.querySelector('#connTitle').textContent, /Connected/);
     assert.equal(h.document.querySelector('#logout').hidden, false);
+  } finally { h.close(); }
+});
+
+test('extension has its own engine selector, defaulting to AI-led', async () => {
+  const h = await setup();
+  try {
+    const select = h.document.querySelector('#extensionEngine');
+    assert.equal(select.value, 'ai_led');
+    select.value = 'rules_led';
+    select.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.match(h.document.querySelector('#prefMsg').textContent, /Saved/);
+    assert.equal(h.stored.extensionEngine, 'rules_led');
   } finally { h.close(); }
 });

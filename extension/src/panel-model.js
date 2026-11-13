@@ -256,7 +256,10 @@
   }
 
   /** The optional question the assistant offers to help with, until it is answered or skipped. */
-  const optionalTarget = (results) => results.find((r) => r.status === "optional" && canAssist(r) && !r.skipped) ?? null;
+  const optionalTarget = (results) => {
+    const available = results.filter((r) => r.status === "optional" && canAssist(r) && !r.skipped);
+    return available.find((r) => draftable(r.field)) ?? available[0] ?? null;
+  };
   /** Steps the chat can't answer for the user: ticking a checkbox, attaching a file. */
   const manualSteps = (results) => results.filter((r) => r.status === "unresolved" && !canAssist(r));
   const openQuestions = (results) => results.filter((r) => r.status === "unresolved" && canAssist(r));
@@ -264,7 +267,7 @@
   /** The row the chat's local quick replies act on: the optional question, then a manual step. */
   function promptTarget(results) {
     if (openQuestions(results).length) return null;
-    return optionalTarget(results) ?? manualSteps(results)[0] ?? null;
+    return manualSteps(results)[0] ?? optionalTarget(results) ?? null;
   }
   const questionLabel = (r) => r.field.label || "Untitled question";
 
@@ -379,16 +382,6 @@
         target: first,
       };
     }
-    const optional = optionalTarget(results);
-    if (optional) {
-      const options = (optional.field.options ?? []).map((o) => o.text).filter(Boolean);
-      const prompt = options.length
-        ? { text: `Everything required is filled in. “${bare(optional)}” is optional: pick an answer, or leave it blank.`, choices: [...options.slice(0, MAX_CHOICES - 1), SKIP_REPLY] }
-        : draftable(optional.field)
-          ? { text: `Everything required is filled in. “${bare(optional)}” is optional, but a good answer helps. Want me to draft one, or tell me what to say?`, choices: [DRAFT_REPLY, SKIP_REPLY] }
-          : { text: `Everything required is filled in. “${bare(optional)}” is optional: tell me what to put, or leave it blank.`, choices: [SKIP_REPLY] };
-      return { ...prompt, target: optional };
-    }
     const steps = manualSteps(results);
     if (steps.length) {
       const step = steps[0];
@@ -396,6 +389,18 @@
       return step.field.kind === "checkbox" && !step.field.options?.length
         ? { text: `${lead} “${bare(step)}”. Tick it yourself if you agree, or tap “${AGREE_REPLY}”.`, choices: [AGREE_REPLY, SHOW_REPLY] }
         : { text: `${lead} ${bare(step)}. ${step.reason ?? ""}`.trim(), choices: [SHOW_REPLY, DONE_REPLY] };
+    }
+    const optional = optionalTarget(results);
+    if (optional) {
+      const options = (optional.field.options ?? []).map((o) => o.text).filter(Boolean);
+      const prompt = options.length
+        ? { text: `Everything required is filled in. “${bare(optional)}” is optional: pick an answer, or leave it blank.`, choices: [...options.slice(0, MAX_CHOICES - 1), SKIP_REPLY] }
+        : optional.draftAttempted
+          ? { text: `I couldn't draft “${bare(optional)}”. Tell me the details, try drafting again, or leave it blank.`, choices: [DRAFT_REPLY, SKIP_REPLY] }
+        : draftable(optional.field)
+          ? { text: `Everything required is filled in. “${bare(optional)}” is optional, but a good answer helps. Want me to draft one, or tell me what to say?`, choices: [DRAFT_REPLY, SKIP_REPLY] }
+          : { text: `Everything required is filled in. “${bare(optional)}” is optional: tell me what to put, or leave it blank.`, choices: [SKIP_REPLY] };
+      return { ...prompt, target: optional };
     }
     return null;
   }

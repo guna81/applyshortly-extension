@@ -2,19 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Apply Shortly Form Agent · Settings</title>
   <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="options.css">
 </head>
-<body class="page">
+<body class="page settings-page">
   <main>
     <header class="hero-head">
       <img class="mark lg" src="../icons/logo.svg" width="48" height="48" alt="" aria-hidden="true">
       <div>
-        <h1>Apply Shortly Form Agent</h1>
-        <p class="muted">Fills job applications from your ApplyShortly profile. You review and click Submit, or choose Fill and submit to submit a complete form for you.</p>
+        <span class="eyebrow">APPLYSHORTLY EXTENSION</span>
+        <h1>Settings</h1>
+        <p class="muted">Manage your account, AI provider and application preferences.</p>
       </div>
     </header>
 
+    <nav class="section-nav" aria-label="Settings sections">
+      <a href="#account">Account</a><a href="#ai">AI provider</a><a href="#preferences">Preferences</a><a href="#guide">How it works</a>
+    </nav>
+    <div class="settings-layout">
+    <div class="settings-primary">
     <div id="connCard" class="card conn-card" role="status" aria-live="polite">
       <span class="status-dot" id="dot"></span>
       <div class="grow">
@@ -24,8 +32,8 @@
       <button id="retest" type="button" hidden>Try again</button>
     </div>
 
-    <section class="card">
-      <h2><span class="num">1</span>Connect your account</h2>
+    <section class="card settings-card" id="account">
+      <div class="section-heading"><div><span class="eyebrow">YOUR ACCOUNT</span><h2>Connection</h2><p class="section-description">Connect your profile to fill applications.</p></div></div>
       <form id="form" novalidate>
         <p id="accountSummary" hidden></p>
         <div class="actions">
@@ -53,28 +61,15 @@
       </form>
     </section>
 
-    <section class="card">
-      <h2><span class="num">2</span>Apply to a job</h2>
-      <ol class="how">
-        <li><b>Start it.</b> In ApplyShortly, choose <b>Open &amp; Autofill</b> on a job. Or, on any application page, click
-          the extension icon<span id="shortcutHint"></span>.</li>
-        <li><b>Review.</b> A panel at the bottom right lists what was filled and what still needs you. Click a row to
-          jump to that field. Green means filled, amber means check it, red means it's your turn.</li>
-        <li><b>Submit.</b> Click the form's own Submit button. ApplyShortly moves the job to <i>Submitted</i> for you.
-          Or use <b>Fill and submit</b>: once every required field is answered, it clicks Submit for you after a
-          3-second countdown you can cancel.</li>
-      </ol>
-      <p class="hint"><a href="#" id="shortcuts">Change the keyboard shortcut</a></p>
-    </section>
-
-    <section class="card">
-      <h2>AI drafting</h2>
-      <p id="aiMode">Connect your account to see AI settings.</p>
-      <label>AI funding
+    <section class="card settings-card" id="ai">
+      <div class="section-heading"><div><span class="eyebrow">INTELLIGENCE</span><h2>AI provider</h2><p class="section-description">Choose how the extension powers chat and drafts.</p></div></div>
+      <div class="ai-current"><span class="ai-current-label">CURRENT PROVIDER</span><p id="aiMode">Connect your account to see AI settings.</p></div>
+      <label>Active AI provider
         <select id="aiFunding" disabled><option value="platform">ApplyShortly credits</option></select>
       </label>
-      <details id="advancedAI">
-        <summary>Advanced: use your own AI key</summary>
+      <p class="hint funding-hint">Choose which provider powers AI chat and drafts. Selecting an ApplyShortly option turns off the custom endpoint.</p>
+      <details class="settings-details" id="advancedAI">
+        <summary>Use a personal provider key <span>Managed by ApplyShortly</span></summary>
         <form id="providerForm">
           <label>Provider
             <select id="provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select>
@@ -86,15 +81,33 @@
         <ul id="savedProviders"></ul>
         <p class="hint">Provider requests are billed directly by your provider. Personal mode never automatically switches to ApplyShortly credits.</p>
       </details>
+      <details class="settings-details custom-details" id="customDetails">
+        <summary>OpenAI-compatible endpoint <span>Configured on this device</span></summary>
+        <form id="customAIForm">
+          <label>API base URL<input id="customBaseUrl" type="url" placeholder="http://127.0.0.1:11434/v1" required></label>
+          <label>Model identifier<input id="customModel" type="text" required maxlength="200"></label>
+          <label>API key (optional for local servers)<input id="customKey" type="password" autocomplete="off" maxlength="4096"></label>
+          <div class="actions custom-actions"><button class="primary" type="submit">Save and use for AI</button>
+          <button type="button" id="customTest">Test connection</button>
+          <button type="button" id="customDisable">Remove custom provider</button></div>
+        </form>
+        <p id="customStatus" role="status"></p>
+        <p class="hint">The key stays on this device and is removed on sign-out. AI chat, drafts, and AI-led form planning use this endpoint. The provider receives relevant profile, job, and form details; screenshots are not sent.</p>
+      </details>
       <p id="aiMessage" role="status" aria-live="polite"></p>
       <button type="button" id="manageAI">Open AI settings in ApplyShortly</button>
       <p class="hint">Personal keys are stored encrypted by ApplyShortly. Your provider bills those requests directly. Profile and answer-bank fills are free.</p>
-      <h2>Preferences</h2>
+    </section>
+    <section class="card settings-card preferences-card" id="preferences">
+      <span class="eyebrow">YOUR WORKFLOW</span><h2>Preferences</h2>
+      <p class="section-description">Decide how the extension helps you apply.</p>
+      <label>Extension form filling method
+        <select id="extensionEngine"><option value="ai_led">AI-led</option><option value="rules_led">Rules-led</option></select>
+      </label>
+      <p class="hint">Applies to new extension sessions on this device. The platform has a separate setting. AI-led uses your selected provider.</p>
       <label class="switch-row">
         <span>Let AI answer questions it can't find
-          <small class="muted">On by default, like the website's agent; uses AI credits. Off: only your profile
-            and answer bank are used (free), and you can still tap “Draft it for me” on any question.
-            AI drafts are always marked “Check”.</small></span>
+          <small class="muted">When enabled, the selected AI provider drafts answers missing from your profile and answer bank. Drafts are always marked “Check”. You can still request a draft when this is off.</small></span>
         <input id="aiDrafts" type="checkbox" class="switch">
       </label>
       <label class="switch-row">
@@ -108,6 +121,26 @@
       <span id="prefMsg" class="hint good" role="status"></span>
     </section>
 
+    </div>
+    <aside class="settings-sidebar">
+    <section class="card settings-card guide-card" id="guide">
+      <span class="eyebrow">GETTING STARTED</span>
+      <h2>Apply with confidence</h2>
+      <p class="section-description">Your application, with a little help.</p>
+      <ol class="how">
+        <li><b>Start it.</b> In ApplyShortly, choose <b>Open &amp; Autofill</b> on a job. Or, on any application page, click
+          the extension icon<span id="shortcutHint"></span>.</li>
+        <li><b>Review.</b> A panel at the bottom right lists what was filled and what still needs you. Click a row to
+          jump to that field. Green means filled, amber means check it, red means it's your turn.</li>
+        <li><b>Submit.</b> Click the form's own Submit button. ApplyShortly moves the job to <i>Submitted</i> for you.
+          Or use <b>Fill and submit</b>: once every required field is answered, it clicks Submit for you after a
+          3-second countdown you can cancel.</li>
+      </ol>
+      <p class="hint"><a href="#" id="shortcuts">Change the keyboard shortcut</a></p>
+    </section>
+
+    </aside>
+    </div>
     <footer class="muted foot-page">Version <span id="version"></span> · Connection credentials stay inside the extension. Personal AI keys are stored encrypted by ApplyShortly.</footer>
   </main>
   <script src="panel-model.js"></script>

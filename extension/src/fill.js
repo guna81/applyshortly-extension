@@ -9,7 +9,7 @@
   // Custom dropdowns that aren't a <select> or a Google Forms listbox: Angular Material's mat-select
   // and the ARIA combobox / listbox-popup pattern. Their options only exist while open.
   const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
-  const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input[type=date], input:not([type]), textarea';
+  const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input[type=date], input:not([type]), textarea, [role="textbox"][contenteditable="true"], [role="textbox"][contenteditable="plaintext-only"]';
   const PICK_PLACEHOLDER = /^[\s-]*(select|choose|please select|pick)\b/i;
   // The "nothing chosen" entry of a list: "Select…", "--", Zoho's "-None-".
   const EMPTY_OPTION = /^(select|choose|please select|-+|-+\s*none\s*-+)$/i;
@@ -68,6 +68,15 @@
 
   function rawLabel(el) {
     const doc = el.ownerDocument;
+    // Greenhouse gives the file input a generic "Attach" label; the actual question
+    // and required flag belong to the containing upload group.
+    if (el.matches('input[type="file" i]')) {
+      const group = el.closest('[role="group"][aria-labelledby]');
+      if (group && group.querySelectorAll('input[type="file" i]').length === 1) {
+        const label = cleanLabel(textOfIds(doc, group.getAttribute("aria-labelledby")));
+        if (label) return label;
+      }
+    }
     const ashby = ashbyField(el);
     if (ashby?.label) return ashby.label;
     const rippling = ripplingField(el);
@@ -222,6 +231,11 @@
 
   function isRequired(el) {
     if (el.required || el.getAttribute("aria-required") === "true") return true;
+    if (el.matches('input[type="file" i]')) {
+      const group = el.closest('[role="group"][aria-labelledby]');
+      if (group && group.querySelectorAll('input[type="file" i]').length === 1 &&
+          (group.getAttribute("aria-required") === "true" || /\*/.test(textOfIds(el.ownerDocument, group.getAttribute("aria-labelledby"))))) return true;
+    }
     if (ashbyField(el)?.required) return true;
     if (ripplingField(el)?.required) return true;
     if ((zohoTabular(el) ?? zohoRow(el))?.required) return true;
@@ -294,6 +308,8 @@
 
     for (const el of doc.querySelectorAll(TEXT_INPUT)) {
       if (!visible(el) || !isEditable(el) || selectLikeInput(el)) continue;
+      // Airtable's focus helper is not a separate application question.
+      if (el.matches('input.editableFix') && el.parentElement?.querySelector('[role="textbox"][contenteditable]')) continue;
       // React Select (including Greenhouse) adds an invisible input for native required
       // validation. It has a layout box, but the sibling combobox is the actual question.
       if (el.matches('input[aria-hidden="true"][tabindex="-1"]') &&
@@ -408,6 +424,21 @@
       if (hasPickerButton && !item.querySelector("input[type=file]")) {
         const heading = item.querySelector('[role="heading"]');
         fields.push({ kind: "picker", el: item, label: cleanLabel(heading?.textContent) || "File upload", required: isRequired(heading ?? item) });
+      }
+    }
+    // Some Airtable forms expose only a drop-zone button until the file dialog opens.
+    // Scope this fallback to résumé-labelled upload controls without a file input.
+    for (const button of doc.querySelectorAll('button, [role="button"]')) {
+      if (!visible(button) || !/drop files here or click to browse/i.test(button.textContent ?? "")) continue;
+      let node = button;
+      for (let depth = 0; node.parentElement && depth < 6; depth++, node = node.parentElement) {
+        const parent = node.parentElement;
+        if (parent.querySelector('input, textarea, select')) break;
+        const caption = [...parent.children].filter((child) => !child.contains(button))
+          .map((child) => child.textContent?.trim() ?? "").find((text) => /^(?:resume|résumé|cv)\b/i.test(text));
+        if (!caption) continue;
+        fields.push({ kind: "picker", el: button, label: cleanLabel(caption), required: /\*/.test(caption) || button.getAttribute("aria-required") === "true", dropzone: true });
+        break;
       }
     }
     // Document order, so the panel lists questions the way the page shows them.
@@ -1066,16 +1097,34 @@
   /** Sets a value the way typing would, so React/Angular/Google Forms state picks it up. */
   function setValue(el, value) {
     const win = el.ownerDocument.defaultView;
-    const proto = el instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
     el.focus?.();
-    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
-    el.dispatchEvent(new win.InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: String(value) }));
+    let nativeEdit = false;
+    if (el.matches('[role="textbox"][contenteditable]')) {
+      // Use Chrome's editing transaction so rich text editors receive their native input event.
+      const selection = win.getSelection();
+      if (selection && typeof el.ownerDocument.execCommand === "function") {
+        const range = el.ownerDocument.createRange();
+        range.selectNodeContents(el);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        nativeEdit = el.ownerDocument.execCommand("insertText", false, String(value));
+      }
+      if (!nativeEdit) el.textContent = value;
+    } else {
+      const proto = el instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
+    }
+    if (!nativeEdit) el.dispatchEvent(new win.InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: String(value) }));
     el.dispatchEvent(new win.Event("change", { bubbles: true }));
     // Commit input state before onBlur validation reads it. Blurring in the same task can
     // let a framework's stale blur handler overwrite the value we just entered.
     win.setTimeout(() => {
       if (el.isConnected && el.ownerDocument.activeElement === el) el.blur?.();
     }, 50);
+  }
+
+  function textValue(el) {
+    return el.matches('[role="textbox"][contenteditable]') ? (el.innerText ?? el.textContent ?? "") : (el.value ?? "");
   }
 
   function normalise(s) {
@@ -1144,7 +1193,7 @@
     switch (field.kind) {
       case "text":
         // A dial code alone ("+44") or a few digits is a number still to be written.
-        return isPhoneBox(field) ? phoneProgress(field.el.value).state !== "complete" : !field.el.value.trim() && !widgetPick(field.el);
+        return isPhoneBox(field) ? phoneProgress(field.el.value).state !== "complete" : !textValue(field.el).trim() && !widgetPick(field.el);
       case "select":
         return !field.el.value || field.el.selectedIndex <= 0 && field.el.options[0]?.value === ""
           || isPlaceholderOption(field.el.options[field.el.selectedIndex]?.text)
@@ -1316,6 +1365,7 @@
     shownTexts,
     appearedOptions,
     apply,
+    textValue,
     attachFile,
     findSubmitButton,
     looksSubmitted,

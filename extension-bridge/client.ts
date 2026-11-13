@@ -200,6 +200,7 @@ export interface AgentActionResult {
 }
 
 export interface AgentStepRequest {
+  extension_engine?: "rules_led" | "ai_led";
   runtime_version?: string;
   controller_version?: 1 | 2;
   request_id?: string | null;
@@ -417,8 +418,9 @@ export class JobHuntBridge {
   }
 
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
-  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "rules_led" | "ai_led"; verified_commands?: boolean}> {
-    return this.request("/api/extension/agent/capabilities");
+  agentCapabilities(custom = false, engine: "rules_led" | "ai_led" = "ai_led"): Promise<{controller_version: 1 | 2; agent_engine: "rules_led" | "ai_led"; extension_engine?: "rules_led" | "ai_led"; verified_commands?: boolean; planner?: "custom"}> {
+    const query = new URLSearchParams({ extension_engine: engine, ...(custom ? { planner: "custom" } : {}) });
+    return this.request(`/api/extension/agent/capabilities?${query}`);
   }
 
   diagnostic(body: {

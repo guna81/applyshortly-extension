@@ -7,6 +7,7 @@ let aiBusy = false;
 let connected = false;
 let connecting;
 let currentAI;
+let currentCustomAI;
 const providerNames = { openai: "OpenAI", anthropic: "Anthropic Claude", gemini: "Google Gemini" };
 
 async function send(type, extra = {}) {
@@ -27,6 +28,7 @@ function setMsg(text, kind = "") {
 function renderAI(ai = currentAI) {
   currentAI = ai;
   $("aiFunding").replaceChildren(new Option("ApplyShortly credits", "platform"));
+  if (currentCustomAI?.enabled) $("aiFunding").add(new Option(`Custom endpoint (${currentCustomAI.model})`, "custom"));
   $("savedProviders").replaceChildren();
   for (const item of ai?.configured ?? []) {
     $("aiFunding").add(new Option(`${providerNames[item.provider]} (${item.model})`, item.provider));
@@ -44,7 +46,7 @@ function renderAI(ai = currentAI) {
   if (ai?.mode === "personal" && !ai.configured?.some((item) => item.provider === ai.provider)) {
     $("aiFunding").add(new Option("Personal key missing — add a key or choose credits", ai.provider));
   }
-  $("aiFunding").value = ai?.mode === "personal" ? ai.provider : "platform";
+  $("aiFunding").value = currentCustomAI?.enabled ? "custom" : ai?.mode === "personal" ? ai.provider : "platform";
   $("aiFunding").disabled = aiBusy || !connected;
   $("saveProvider").disabled = aiBusy || !connected;
 }
@@ -78,11 +80,15 @@ async function test() {
     $("aiMode").textContent = s.ai?.mode === "personal" ? `Personal key: ${providerNames[s.ai.provider] ?? s.ai.provider}. No ApplyShortly credits used.` : s.billingEnabled === false ? "ApplyShortly AI — no credit charges." : `ApplyShortly credits: ${s.credits ?? 0} available.`;
     // Automatic connections share this browser's website session; manual keys stand alone.
     $("logoutHint").textContent = s.connectionType === "automatic" ? "Logging out also signs this browser out of the ApplyShortly website." : "Logging out revokes this extension's API key.";
+    const custom = await send("customAISettings");
+    currentCustomAI = custom;
     renderAI(s.ai);
+    if (custom?.enabled) $("aiMode").textContent = `Custom endpoint: ${custom.model}. AI chat, drafts and AI-led planning are billed by your provider.`;
     return true;
   }
   $("aiMode").textContent = "Connect your account to see AI settings.";
   currentAI = undefined;
+  currentCustomAI = undefined;
   renderAI();
   if (s && !s.configured) showConn("off", "Not connected yet", "Sign in with ApplyShortly to connect your account.");
   else {
@@ -95,6 +101,7 @@ async function test() {
 async function load() {
   const s = await send("connectionSettings");
   $("token").value = "";
+  $("extensionEngine").value = s.extensionEngine === "rules_led" ? "rules_led" : "ai_led";
   $("aiDrafts").checked = Boolean(s.aiDrafts);
   $("autopilotWindows").checked = s.autopilotWindows !== false;
   $("version").textContent = chrome.runtime.getManifest().version;
@@ -103,6 +110,13 @@ async function load() {
     if (cmd?.shortcut) $("shortcutHint").textContent = ` or press ${cmd.shortcut}`;
   } catch { /* No keyboard shortcut available. */ }
   await connect();
+  const custom = await send("customAISettings");
+  if (custom?.enabled) {
+    $("customDetails").open = true;
+    $("customBaseUrl").value = custom.baseUrl;
+    $("customModel").value = custom.model;
+    $("customStatus").textContent = "Custom provider is active for AI chat, drafts and AI-led planning. Re-enter the key when saving changes.";
+  }
 }
 /** Checks the stored connection; without one, silently reuses the website sign-in. */
 function connect() {
@@ -187,12 +201,24 @@ $("providerForm").addEventListener("submit", async (event) => {
   if (!$("providerForm").reportValidity()) return;
   await aiAction(async () => {
     const provider = $("provider").value;
+    await send("disableCustomAI");
+    currentCustomAI = undefined;
+    $("customStatus").textContent = "Using ApplyShortly provider settings.";
     await send("saveAIProvider", { provider, apiKey: $("providerKey").value.trim(), model: $("providerModel").value.trim() });
     $("providerKey").value = "";
     return send("selectAI", { mode: "personal", provider });
   });
 });
-$("aiFunding").addEventListener("change", () => void aiAction(() => send("selectAI", $("aiFunding").value === "platform" ? { mode: "platform" } : { mode: "personal", provider: $("aiFunding").value })));
+$("aiFunding").addEventListener("change", () => {
+  const selection = $("aiFunding").value;
+  if (selection === "custom") return;
+  void aiAction(async () => {
+    await send("disableCustomAI");
+    currentCustomAI = undefined;
+    $("customStatus").textContent = "Using ApplyShortly provider settings.";
+    return send("selectAI", selection === "platform" ? { mode: "platform" } : { mode: "personal", provider: selection });
+  });
+});
 $("retest").addEventListener("click", () => void connect());
 // The background follows website sign-in and sign-out; show the result here as it happens.
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -210,6 +236,10 @@ $("reveal").addEventListener("click", () => {
   $("reveal").title = hidden ? "Hide key" : "Show key";
   $("reveal").setAttribute("aria-label", $("reveal").title);
 });
+$("extensionEngine").addEventListener("change", async (event) => {
+  await chrome.storage.local.set({ extensionEngine: /** @type {HTMLSelectElement} */ (event.target).value });
+  $("prefMsg").textContent = "Saved for new extension sessions";
+});
 $("aiDrafts").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ aiDrafts: /** @type {HTMLInputElement} */ (event.target).checked });
   $("prefMsg").textContent = "Saved";
@@ -224,3 +254,28 @@ $("shortcuts").addEventListener("click", (event) => { event.preventDefault(); vo
 $("manageAI").addEventListener("click", async () => { try { await send("openWebsite", { path: "/settings#extension-ai" }); } catch (error) { setMsg(error.message, "bad"); } });
 $("openWebsite").addEventListener("click", async () => { try { await send("openWebsite"); } catch (error) { setMsg(error.message, "bad"); } });
 void load().catch((error) => showConn("bad", "Could not load settings", error.message));
+
+$("customAIForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!$("customAIForm").reportValidity()) return;
+  try {
+    const raw = $("customBaseUrl").value.trim();
+    const url = new URL(raw);
+    if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) || url.username || url.password || url.search || url.hash) throw new Error("Use an HTTPS URL or a local HTTP URL without credentials, query or fragment.");
+    const allowed = await chrome.permissions.request({ origins: [`${url.origin}/*`] });
+    if (!allowed) throw new Error("Provider access was not granted.");
+    await send("saveCustomAI", { baseUrl: raw, model: $("customModel").value.trim(), apiKey: $("customKey").value.trim() });
+    $("customKey").value = "";
+    $("customStatus").textContent = "Custom provider saved and active for AI chat, drafts and AI-led planning.";
+    await test();
+  } catch (error) { $("customStatus").textContent = error.message; }
+});
+$("customTest").addEventListener("click", async () => {
+  $("customStatus").textContent = "Testing…";
+  try { await send("testCustomAI"); $("customStatus").textContent = "Connection successful."; }
+  catch (error) { $("customStatus").textContent = error.message; }
+});
+$("customDisable").addEventListener("click", async () => {
+  try { await send("disableCustomAI"); $("customKey").value = ""; $("customStatus").textContent = "Custom provider removed."; await test(); }
+  catch (error) { $("customStatus").textContent = error.message; }
+});

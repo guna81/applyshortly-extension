@@ -37,8 +37,14 @@ The extension requests profile data and sends the information above to its confi
 ApplyShortly server to provide autofill, account connection, application tracking and requested
 assistant features. Optional AI drafting and assistant requests send relevant messages, profile
 or job information, questions, options and answers through that server to the selected provider.
-Supported personal-key providers are OpenAI, Anthropic and Google Gemini. Their processing and
-retention terms apply; a personal provider key does not bypass the ApplyShortly server.
+ApplyShortly-managed personal-key providers are OpenAI, Anthropic and Google Gemini. Their processing
+and retention terms apply.
+
+A source build with custom endpoint support can instead send answer-drafting and assistant chat requests directly from
+the extension to a user-configured OpenAI-compatible provider. The request contains the question,
+relevant professional profile fields and job context. The provider processes this information under
+its own terms. The ApplyShortly server is still used for the account, profile and answer-bank lookup;
+assistant chat also sends the conversation and form fields and values to the custom provider. When AI-led form filling is selected, the extension sends observed page content, form values, candidate profile, job context, action results and conversation directly to that provider for planning. It does not send screenshots to the custom provider. Page actions are subject to the extension's guarded command layer.
 
 When the extension fills a field or attaches your résumé, that information becomes available to
 the employer website. The website may read or transmit it before submission. Review that site's
@@ -81,7 +87,8 @@ Submission sends form values and attachments to the employer or its application 
 For tracked applications, ApplyShortly stores attempt and confirmation events; an unconfirmed
 attempt is Needs verification, excluded from submitted metrics, and blocks retries/autofill
 until resolved. Confirmation may be detected on the page or supplied by the user. Starting the extension on a posting creates or reuses an application record in your connected
-account using its URL, page title and company. Attempt and confirmation metadata (without form
+account using its URL, page title and company. Localhost and loopback forms are not registered and
+remain untracked. Attempt and confirmation metadata (without form
 answers) is kept in restricted local extension storage while delivery is pending; temporary
 connection failures retry once a minute. Signing out clears pending metadata.
 
@@ -92,8 +99,11 @@ restricted to trusted extension contexts; credentials are not placed in Chrome s
 the installation package, or employer page scripts. Short-lived sign-in and tab state use
 session storage. Profile data is fetched when needed to fill the page.
 
-Personal AI provider keys are sent to the ApplyShortly server and stored encrypted there.
-Provider settings return configured-provider metadata rather than the key. The server stores
+Keys for ApplyShortly-managed AI providers are sent to the ApplyShortly server and stored encrypted
+there. Custom endpoint keys are stored in trusted extension-local storage on the device, not sent to
+ApplyShortly, and removed when the custom provider is removed or the extension signs out. Local
+storage is not described as an encrypted credential vault. Provider settings return configured-provider
+metadata rather than the key. The server stores
 hashes of extension authentication credentials and uses HTTPS for the hosted connection.
 
 The assistant's conversation remains in the current page until you leave. The server processes
@@ -104,7 +114,9 @@ the selected provider's retention terms still apply.
 ## Choices and deletion
 
 You may keep automatic AI drafting off, request individual drafts, or select a supported
-personal AI key instead of ApplyShortly credits. You can replace or delete that key in Settings.
+personal AI key instead of ApplyShortly credits. In a build that includes custom endpoint support,
+you can also save or remove a device-local provider in extension settings. You can replace or delete
+provider keys in the applicable settings.
 Logging out of the extension revokes its current credential and, for automatic sign-in, also
 signs that browser out of the website. Uninstalling clears its browser
 storage but does not delete the server account, profile or applications.

@@ -1,0 +1,69 @@
+/* Settings page only; the popup and assistant keep their own layouts. */
+.settings-page {
+  --page-bg: #f4f7f5;
+  --card-shadow: 0 8px 30px rgba(23, 51, 38, .045);
+  background: var(--page-bg);
+}
+.settings-page main { max-width: 1100px; margin: 44px auto 60px; padding: 0 28px; gap: 0; }
+.settings-page .hero-head { gap: 16px; margin: 0 0 30px; align-items: center; }
+.settings-page .mark.lg { width: 52px; height: 52px; }
+.settings-page .eyebrow { display: block; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .09em; line-height: 1.3; }
+.settings-page h1 { font-size: 29px; letter-spacing: -.035em; line-height: 1.15; margin: 4px 0; }
+.settings-page .hero-head p { font-size: 14px; }
+.settings-page .section-nav { display: flex; flex-wrap: wrap; gap: 5px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+.settings-page .section-nav a { color: var(--muted); font-weight: 650; text-decoration: none; padding: 11px 16px; border-bottom: 2px solid transparent; }
+.settings-page .section-nav a:hover, .settings-page .section-nav a:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 285px; gap: 22px; align-items: start; }
+.settings-primary, .settings-sidebar { display: grid; gap: 16px; min-width: 0; }
+.settings-page .card { border-radius: 16px; box-shadow: var(--card-shadow); }
+.settings-page .settings-card { padding: 24px; }
+.settings-page .conn-card { padding: 15px 18px; }
+.settings-page .conn-card.good { background: var(--accent-soft); }
+.settings-page h2 { display: block; font-size: 19px; letter-spacing: -.02em; margin: 5px 0 0; }
+.settings-page .section-description { color: var(--muted); margin: 4px 0 20px; }
+.settings-page .card p.section-description { margin: 4px 0 20px; }
+.settings-page .card p:empty { display: none; }
+.settings-page form { gap: 14px; }
+.settings-page button { font-weight: 600; }
+.settings-page #openWebsite { justify-self: start; }
+.settings-page #accountSummary { font-weight: 600; }
+.settings-page #logoutHint { margin: -8px 0 0; }
+.settings-page details { border: 1px solid var(--line); border-radius: 11px; padding: 0 14px; }
+.settings-page details[open] { padding-bottom: 15px; }
+.settings-page summary { cursor: pointer; font-weight: 650; padding: 14px 0; }
+.settings-page summary span { display: block; padding-left: 17px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.settings-page details form { margin-top: 4px; }
+.settings-page .settings-details { margin-top: 12px; }
+.settings-page .settings-details .hint { margin: 12px 0 0; line-height: 1.55; }
+.settings-page #savedProviders { padding-left: 20px; }
+.settings-page #savedProviders:empty { display: none; }
+.settings-page #savedProviders li { margin-top: 10px; }
+.settings-page #savedProviders button { margin: 4px 0; }
+.settings-page .ai-current { background: var(--accent-soft); border: 1px solid transparent; border-radius: 11px; padding: 13px 15px; margin-bottom: 18px; }
+.settings-page .ai-current-label { font-size: 10px; font-weight: 750; letter-spacing: .08em; color: var(--accent); }
+.settings-page .card .ai-current p { margin: 3px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.settings-page #manageAI { margin-top: 12px; }
+.settings-page #manageAI + .hint { margin-top: 10px; }
+.settings-page .custom-actions { gap: 8px; }
+.settings-page .preferences-card .switch-row { display: flex; padding: 18px 0; border-top: 1px solid var(--line); font-weight: 650; }
+.settings-page .preferences-card small { line-height: 1.5; max-width: 530px; }
+.settings-page .guide-card { position: sticky; top: 24px; }
+.settings-page .how { padding-left: 19px; gap: 16px; color: var(--muted); font-size: 13px; }
+.settings-page .how b { color: var(--fg); }
+.settings-page .guide-card .hint { margin-top: 20px; }
+.settings-page .foot-page { margin-top: 26px; text-align: left; }
+.settings-page select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-color-scheme: dark) {
+  .settings-page { --page-bg: #11151a; --card-shadow: 0 8px 30px rgba(0, 0, 0, .12); }
+}
+@media (max-width: 760px) {
+  .settings-page main { margin-top: 25px; padding: 0 16px; }
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-page .section-nav a { padding: 10px 9px; font-size: 13px; }
+  .settings-page .guide-card { position: static; }
+}
+@media (max-width: 420px) {
+  .settings-page .settings-card { padding: 18px; }
+  .settings-page .hero-head { align-items: flex-start; }
+  .settings-page h1 { font-size: 25px; }
+}

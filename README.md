@@ -77,7 +77,9 @@ For account setup, AI settings, screenshots and troubleshooting, see the [extens
 
 Your profile, saved answers and tracked applications live in your connected ApplyShortly account. The extension keeps its connection credential, preferences and short-lived panel state in extension storage. Credentials and platform requests are handled by the background worker.
 
-Optional AI features process relevant application context through the server and configured provider. Personal AI keys are stored encrypted on the ApplyShortly server; using your own key still requires a server.
+The current source build also supports answer drafts, assistant chat and AI-led form planning through a user-configured OpenAI-compatible endpoint, including a local server. The extension sends relevant profile, job, conversation and observed form details directly to that endpoint; the key stays in trusted extension storage on the device. Select the extension form filling method in extension settings; platform sessions use a separate setting on the website. AI-led is the default for both. Custom AI-led planning requires a compatible server and a model that returns the requested JSON; screenshots are not sent to the custom provider.
+
+For the existing ApplyShortly-managed providers, AI requests pass through the server and personal keys are stored encrypted there. An ApplyShortly server and account remain required in both modes. The custom endpoint feature requires a build containing these changes; its availability in the Chrome Web Store depends on a future release.
 
 ## Build from source
 

@@ -154,7 +154,7 @@ Protocol 2 pauses locally before another planning call when a page state appears
 
 Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. Besides click, type, choose, check, upload, keys, scroll and wait, the agent can hover, drag between two controls, and wait for text to appear. Screenshots are capped at 1280 pixels on the longest side, and taken only when the page layout changed. Taking one changes nothing on the page: the capture is shrunk and labelled inside the extension (never with Chrome's clip option, which briefly resizes the page), and the panel stays in place. A field already on screen is filled without scrolling. Your saved answers for plain fields (text, email, numbers, native dropdowns) are typed in one go without an AI call; the AI handles pickers, phone numbers, uploads and anything that didn't stick.
 
-Choose **Settings → Advanced settings → Form filling method → AI-led** in ApplyShortly for new sessions.
+Choose **Extension settings → Preferences → Extension form filling method** for new extension sessions. The platform has a separate account setting. AI-led is the default for both.
 AI-led is the service default. It uses fresh page observations, screenshots
 and native AI tool calls; Anthropic and Gemini native tools are supported. Personal OpenAI
 keys support structured drafts rather than this native tool loop; sessions on those keys, or with
@@ -174,6 +174,44 @@ assistant description above applies outside this upgraded session.
 The server gate defaults on. Reload the updated extension and start a new session after an
 upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
 mechanics, but representative real-model ATS reliability has not been established.
+
+### Use an OpenAI-compatible endpoint on this device
+
+The current source build supports a custom endpoint for answer drafting and assistant chat. Availability in the
+Chrome Web Store depends on a future release. An ApplyShortly account and server connection are
+still required to retrieve the profile and check saved answers.
+
+1. In extension settings, open **Use an OpenAI-compatible endpoint on this device**.
+2. Enter the API **base URL**, including its API prefix, a model identifier, and an API key if the
+   service requires one. The extension appends `/chat/completions` to the base URL. The endpoint
+   must support OpenAI-style chat completions; provider implementations and model capabilities vary.
+3. Choose **Save and use for AI**, then **Test connection**. The test makes a short real model
+   request and may incur provider charges. On failure, check the URL, key, model and server status.
+
+For example, the LLM CLI Gateway uses `http://127.0.0.1:8765/v1`, a gateway API key and a model
+such as `agy/gemini-3.8-flash-medium`. A local Ollama server commonly uses
+`http://127.0.0.1:11434/v1` and a locally installed model; its API key can be left blank when the
+server does not require one. OpenRouter uses `https://openrouter.ai/api/v1` with an OpenRouter key
+and model ID. Local services must be running on the same computer as Chrome. Remote endpoints must
+use HTTPS; HTTP is allowed only for localhost and loopback addresses. URLs cannot contain embedded
+credentials, query parameters or fragments.
+
+The background worker sends the question and relevant professional profile and job information
+directly to the selected endpoint. It checks the profile and answer bank first, does not fall back
+to ApplyShortly AI on provider failure, and marks generated answers for review. Custom endpoint mode
+uses the method selected in extension settings on this device. With AI-led selected, the extension sends page observations, the candidate profile, job context, previous actions and conversation directly to the custom provider for planning, and runs returned commands through the same verified controller. Screenshots are not sent to the custom provider. The provider must follow the requested JSON format; an invalid response stops the run rather than switching providers or engines. Chat sends the conversation, form fields and values, and relevant professional profile information directly to the custom provider. No ApplyShortly AI credits are used for these requests. The server must support custom-planner negotiation.
+The provider's own billing and data policies apply.
+
+The key stays in trusted extension-local storage on this device and is removed on sign-out or when
+the custom provider is removed. Selecting ApplyShortly credits or a saved ApplyShortly provider
+also removes the custom configuration. Re-enter the key when saving changes. Local extension storage
+is not an encrypted credential vault.
+
+Localhost and loopback forms can be filled without registering them as job postings. They are shown
+as **Not tracked in ApplyShortly** and do not create application records. A manual Chrome test of a
+fictional local form filled profile fields and a reviewed draft via the LLM CLI Gateway, then
+submitted only to the local test page. This is one tested flow, not a guarantee for all providers,
+models or job forms.
 
 ### Choose how AI drafts are paid for
 
@@ -443,7 +481,7 @@ automatically. Closing the setup page keeps the connection active; **Stop access
 
 **Run by** identifies ApplyShortly or your connected assistant. Platform runs show
 **Rules-led** or **AI-led** under **Filling details**; change the method in website
-Settings → Advanced settings → Form filling method. Connected assistants use their own allowance.
+Extension settings → Preferences → Extension form filling method. Platform sessions use their separate website setting. Connected assistants use their own allowance.
 **Fill and submit** is an explicit submission choice with the existing completion checks and
 cancellable countdown. **Submission needs verification** requires checking the employer result
 and resolving the attempt in ApplyShortly before retrying.

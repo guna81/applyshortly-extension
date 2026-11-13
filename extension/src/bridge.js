@@ -187,8 +187,9 @@ export class JobHuntBridge {
   }
 
   /** One round trip: vetted actions, or want_screenshot with optional annotate_screenshot. */
-  agentCapabilities() {
-    return this.request("/api/extension/agent/capabilities");
+  agentCapabilities(custom = false, engine = "ai_led") {
+    const query = new URLSearchParams({ extension_engine: engine, ...(custom ? { planner: "custom" } : {}) });
+    return this.request(`/api/extension/agent/capabilities?${query}`);
   }
 
   diagnostic(body) {

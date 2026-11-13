@@ -487,7 +487,7 @@
       return el("div", { class: "composer" },
         el("div", { class: "box" }, input,
           btn(icon(SEND), () => void ctl.askAssistant(input.value), "primary send", { disabled: ctl.chat.pending || busy, "aria-label": "Send", title: "Send" })),
-        el("small", { class: "hint" }, "Answering my questions is free. Drafts and other changes use AI credits."),
+        el("small", { class: "hint" }, "AI chat, drafts and AI-led planning use your selected provider."),
       );
     }
 
@@ -559,7 +559,7 @@
         const engine = ctl.agent.agent_engine;
         if (ctl.agent.filling_notice) p.append(el("div", { class: "sub", role: "status", style: "padding:0 16px 10px" }, ctl.agent.filling_notice));
         const label = engine === "ai_led" ? "AI-led" : engine === "rules_led" ? "Rules-led" : "Not reported yet";
-        p.append(el("div", { class: "sub", "aria-label": "Form agent run by", style: "padding:0 16px 10px" }, "Run by: ApplyShortly"));
+        p.append(el("div", { class: "sub", "aria-label": "Form agent run by", style: "padding:0 16px 10px" }, ctl.agent.planner === "custom" ? "Run by: Your custom AI provider" : "Run by: ApplyShortly"));
         p.append(el("details", { class: "sub", style: "padding:0 16px 10px" },
           el("summary", {}, "Filling details"),
           el("div", { "aria-label": "Form agent engine" }, `Filling method: ${label}`)));

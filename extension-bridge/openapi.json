@@ -302,6 +302,33 @@
             "title": "Controller Version",
             "type": "integer"
           },
+          "extension_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rules_led",
+                  "ai_led"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extension Engine"
+          },
+          "planner": {
+            "anyOf": [
+              {
+                "const": "custom",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planner"
+          },
           "verified_commands": {
             "default": false,
             "title": "Verified Commands",
@@ -818,6 +845,21 @@
             ],
             "title": "Controller Version",
             "type": "integer"
+          },
+          "extension_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rules_led",
+                  "ai_led"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extension Engine"
           },
           "in_user_tab": {
             "default": true,
@@ -2089,6 +2131,18 @@
             "title": "Answers",
             "type": "array"
           },
+          "date_of_birth": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Birth"
+          },
           "education": {
             "items": {
               "additionalProperties": true,
@@ -2126,6 +2180,17 @@
               }
             ],
             "title": "Full Name"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
           },
           "links": {
             "items": {
@@ -2212,6 +2277,8 @@
           "email",
           "phone",
           "location",
+          "gender",
+          "date_of_birth",
           "links",
           "summary",
           "total_experience_years",
@@ -2493,6 +2560,40 @@
       "get": {
         "operationId": "extensionAgentCapabilities",
         "parameters": [
+          {
+            "in": "query",
+            "name": "planner",
+            "required": false,
+            "schema": {
+              "default": "platform",
+              "enum": [
+                "platform",
+                "custom"
+              ],
+              "title": "Planner",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extension_engine",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "rules_led",
+                    "ai_led"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extension Engine"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",

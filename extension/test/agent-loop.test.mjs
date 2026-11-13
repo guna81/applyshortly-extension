@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { BridgeError } from "../src/bridge.js";
 import { PAGE } from "./page-rules.mjs";
 import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
+import { customPlanner } from "../src/custom-agent.js";
 
 test("recovery commands allow edits while questions and negations remain read-only", () => {
   for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year"]) {
@@ -503,6 +504,26 @@ class V2Driver extends FakeDriver {
     return super.call(frame, name, ...args);
   }
 }
+
+test("custom planner drives a verified AI-led run without submitting", async () => {
+  let value = "";
+  const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "textarea", name: "Describe a project", value, required: true }], { document_id: "doc" }) });
+  driver.insertText = async (text) => { value = text; };
+  driver.committed = "Built a system.";
+  let calls = 0;
+  const step = customPlanner({}, {}, {}, async () => JSON.stringify(++calls === 1
+    ? { status: "continue", message: "Filling project", action: { type: "type", ref: "0.1", text: "Built a system." } }
+    : { status: "ready_for_review", message: "Ready for review" }));
+  let ready;
+  let agent;
+  agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, controllerVersion: 2, verifiedCommands: true,
+    step, report: async () => {}, notify: (update) => { if (update.status === "ready") { ready = update; agent.stop(); } } });
+  await agent.run();
+  assert.equal(value, "Built a system.");
+  assert.equal(ready.agent_engine, "ai_led");
+  assert.equal(ready.filled[0].needs_review, true);
+  assert.equal(driver.calls.some(([name]) => name === "submit"), false);
+});
 
 for (const scenario of ["stale", "navigation", "message"]) test(`v2 rejects outdated plans: ${scenario}`, async () => {
   const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc", viewport_width: 1000, viewport_height: 800 }) });
