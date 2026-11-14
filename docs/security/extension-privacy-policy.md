@@ -37,8 +37,7 @@ The extension requests profile data and sends the information above to its confi
 ApplyShortly server to provide autofill, account connection, application tracking and requested
 assistant features. Optional AI drafting and assistant requests send relevant messages, profile
 or job information, questions, options and answers through that server to the selected provider.
-ApplyShortly-managed personal-key providers are OpenAI, Anthropic and Google Gemini. Their processing
-and retention terms apply.
+The selected provider’s processing and retention terms apply. Custom/local provider keys are configured and stored on the device, not uploaded to ApplyShortly.
 
 A source build with custom endpoint support can instead send answer-drafting and assistant chat requests directly from
 the extension to a user-configured OpenAI-compatible provider. The request contains the question,
@@ -53,15 +52,20 @@ privacy policy. The extension cannot control employer page scripts.
 ## The form agent
 
 When you start the form agent, the extension uses Chrome's debugger permission on that tab only,
-until it finishes or you stop it (Chrome shows a bar while it is attached). After each step it
-sends ApplyShortly a description of the application form on the page: the page URL
-and title, the form's questions, options, buttons, the values currently in the fields, and the
-page's own error messages. When the agent is stuck it also sends a screenshot of the visible part
-of the tab. The server uses these to choose the next step, sending them to the selected AI provider
-when a step needs AI; it keeps a short-lived session (about two hours) and does not store page
-descriptions or screenshots. Buttons the agent clicked to get through a form (their labels only,
-no answers) are kept per website so later visits need no AI. Answers you type in reply to the
-agent's questions are saved to your answer bank.
+until it finishes or you stop it (Chrome shows a bar while it is attached). For AI-led filling, one planner runs in the extension for both provider modes. It processes the
+page URL and title, questions, options, buttons, current field values, error messages, relevant
+candidate profile, job context, user replies and action results. Platform AI sends planner
+messages through ApplyShortly to its provider, subject to account usage and credit controls.
+My AI provider sends these directly to the selected provider; its API key stays on this device.
+The server remains involved in account/profile access and saved-answer lookup.
+
+Current AI-led planning and its separate completion audit do not send screenshots to either
+provider path. Earlier extension Platform AI versions used a screenshot-aware server planner;
+legacy step clients and the separate server browser can still use screenshots. This source
+change does not update an already installed extension or a published privacy page. Rules-led
+continues to use the server step endpoint. Planner session state lives in extension runtime
+memory; platform gateway sessions keep short-lived billing, usage and retry state. User-approved
+answers may be saved to the answer bank. Employer pages can read filled values before submission.
 
 ## Autopilot windows
 

@@ -19,7 +19,21 @@ const TOP = { frameId: "top", isTop: true, parentId: null };
 const FRAME = { frameId: "child", isTop: false, parentId: "top", sessionId: "oopif" };
 
 function frameObs(elements, extra = {}) {
-  return { url: "https://careers.example.com/apply", title: "Apply", dialog: null, blockers: [], errors: [], text: "", elements, more_below: false, ...extra };
+  return { document_id: extra.url ?? "doc", url: "https://careers.example.com/apply", title: "Apply", dialog: null, blockers: [], errors: [], text: "", elements, more_below: false, ...extra };
+}
+
+// Scripted server responses obey the same command identity contract as the real server.
+class ScriptedAgent extends Agent {
+  constructor(options) {
+    super({ ...options, step: async (request) => {
+      const response = await options.step(request);
+      if (!response) return response;
+      return { guarded_commands: true, ...response, actions: (response.actions ?? []).map((action, index) => ({
+        command_id: `${request.request_id}:${index}`, observation_id: request.observation.observation_id, ...action,
+      })) };
+    } });
+  }
+  waitForUser() { return this.status === "ready" ? Promise.resolve({ kind: "stop" }) : super.waitForUser(); }
 }
 
 class FakeDriver {
@@ -39,6 +53,9 @@ class FakeDriver {
   async screenshot() { return "SHOT"; }
   async call(frame, name, ...args) {
     switch (name) {
+      case "freshState": return { document_id: "doc", user_edited: false, value: "" };
+      case "executionState": case "snapshotState": return;
+      case "hitTest": return true;
       case "observe": return frame.isTop ? this.pages.top() : this.pages.child?.();
       case "settle": return "complete";
       case "clickable": return this.refuse.has(args[0]) ? "Submitting is left to you." : null;
@@ -121,7 +138,7 @@ test("resuming a paused run immediately reports running to the panel", () => {
   const updates = [];
   const agent = new Agent({ tabId: 1, driver: new FakeDriver({ top: () => frameObs([]) }),
     files: async () => null, notify: (update) => updates.push(update), report: async () => {},
-    step: async () => ({}), controllerVersion: 2 });
+    step: async () => ({}), agentAvailable: true });
   agent.pause();
   agent.resume();
   assert.equal(updates.at(-1).status, "running");
@@ -153,7 +170,7 @@ test("observeTab merges frames with prefixed refs, and an open modal hides the r
 test("Agent stops an action batch on failure and returns to observation", async () => {
   const driver = new FakeDriver({ top: () => frameObs([{ ref: "n", role: "textbox", name: "Name" }]) });
   const bodies = [];
-  const agent = new Agent({
+  const agent = new ScriptedAgent({
     tabId: 3, driver, files: async () => null, notify: async () => {}, report: async () => {},
     step: async (body) => {
       bodies.push(structuredClone(body));
@@ -166,7 +183,8 @@ test("Agent stops an action batch on failure and returns to observation", async 
   });
   await agent.run();
   assert.equal(bodies.length, 2);
-  assert.deepEqual(bodies[1].results, [{ index: 0, ok: false, detail: "That element is no longer on the page." }]);
+  assert.equal(bodies[1].results[0].command_id, `${bodies[0].request_id}:0`);
+  assert.deepEqual(bodies[1].results.map(({ command_id, ...result }) => result), [{ index: 0, ok: false, detail: "That element is no longer on the page." }]);
   assert.equal(driver.calls.some(([name]) => name === "insertText"), false);
 });
 
@@ -193,7 +211,7 @@ test("requested ref overlays are removed from every frame even if capture fails"
   assert.deepEqual(driver.calls[0][2], [{ ref: "0.a", local: "a" }]);
 });
 
-test("a protocol 2 screenshot changes nothing on the page: labels go into the image", async () => {
+test("a screenshot changes nothing on the page: labels go into the image", async () => {
   const driver = new FakeDriver({
     top: () => frameObs([{ ref: "a", role: "textbox", name: "Name", bounds: [10, 20, 100, 30], in_viewport: true }]),
   });
@@ -288,7 +306,7 @@ test("Agent: acts, asks the user, and stops at review without submitting", async
   const updates = [];
   const reports = [];
   let agent;
-  agent = new Agent({
+  agent = new ScriptedAgent({
     tabId: 3,
     appId: 9,
     driver,
@@ -304,7 +322,7 @@ test("Agent: acts, asks the user, and stops at review without submitting", async
   });
   await agent.run();
   assert.equal(agent.status, "ready");
-  assert.deepEqual(bodies.map((b) => [b.session_id, b.results, b.user_reply ?? null]), [
+  assert.deepEqual(bodies.map((b) => [b.session_id, b.results.map(({ command_id, effect, ...result }) => result), b.user_reply ?? null]), [
     [null, [], null],
     ["s1", [{ index: 0, ok: true }, { index: 1, ok: false, detail: "That element is no longer on the page." }], null],
     ["s1", [], "I love the product"],
@@ -327,7 +345,7 @@ test("Agent: a question about a search-style picker carries its choices, not a d
   ];
   const updates = [];
   let agent;
-  agent = new Agent({
+  agent = new ScriptedAgent({
     tabId: 3, appId: 9, driver,
     step: async () => responses.shift(),
     files: async () => null,
@@ -344,7 +362,7 @@ test("Agent: a question about a search-style picker carries its choices, not a d
 test("Agent: stop while waiting ends the run and detaches; closing the debug bar stops it too", async () => {
   const driver = new FakeDriver({ top: () => frameObs([]) });
   let agent;
-  agent = new Agent({
+  agent = new ScriptedAgent({
     tabId: 1, appId: null, driver,
     step: async () => {
       setTimeout(() => driver.onDetached("canceled_by_user"), 10);
@@ -362,7 +380,7 @@ test("Agent: a platform without the agent says so and records no failure", async
   const driver = new FakeDriver({ top: () => frameObs([]) });
   const updates = [];
   const reports = [];
-  const agent = new Agent({
+  const agent = new ScriptedAgent({
     tabId: 2, appId: 5, driver,
     step: async () => { throw new BridgeError(404, "Not Found"); },
     files: async () => null,
@@ -419,7 +437,7 @@ test("Agent: a CAPTCHA hands the form to the user without asking the platform, t
   const bodies = [];
   const updates = [];
   let agent;
-  agent = new Agent({
+  agent = new ScriptedAgent({
     tabId: 4, appId: 9, driver,
     step: async (body) => {
       bodies.push(structuredClone(body));
@@ -450,7 +468,7 @@ test("Agent: clearing one page's CAPTCHA does not clear the next page's", async 
   const bodies = [];
   const updates = [];
   let agent;
-  agent = new Agent({
+  agent = new ScriptedAgent({
     tabId: 4, appId: 9, driver,
     step: async (body) => {
       bodies.push(structuredClone(body));
@@ -479,7 +497,7 @@ test("takeover discards a pending plan even if resumed before it returns", async
   const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }]) });
   let calls = 0;
   let agent;
-  agent = new Agent({
+  agent = new ScriptedAgent({
     tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {},
     step: async (req) => {
       if (++calls === 1) {
@@ -496,7 +514,7 @@ test("takeover discards a pending plan even if resumed before it returns", async
   assert.equal(driver.calls.some(([name]) => name === "click"), false);
 });
 
-class V2Driver extends FakeDriver {
+class GuardedDriver extends FakeDriver {
   async call(frame, name, ...args) {
     if (name === "freshState") return { document_id: this.documentId ?? "doc", user_edited: false, value: "" };
     if (name === "executionState" || name === "snapshotState") return;
@@ -507,7 +525,7 @@ class V2Driver extends FakeDriver {
 
 test("custom planner drives a verified AI-led run without submitting", async () => {
   let value = "";
-  const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "textarea", name: "Describe a project", value, required: true }], { document_id: "doc" }) });
+  const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "textarea", name: "Describe a project", value, required: true }], { document_id: "doc" }) });
   driver.insertText = async (text) => { value = text; };
   driver.committed = "Built a system.";
   let calls = 0;
@@ -516,7 +534,7 @@ test("custom planner drives a verified AI-led run without submitting", async () 
     : { status: "ready_for_review", message: "Ready for review" }));
   let ready;
   let agent;
-  agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, controllerVersion: 2, verifiedCommands: true,
+  agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, verifiedCommands: true,
     step, report: async () => {}, notify: (update) => { if (update.status === "ready") { ready = update; agent.stop(); } } });
   await agent.run();
   assert.equal(value, "Built a system.");
@@ -526,15 +544,15 @@ test("custom planner drives a verified AI-led run without submitting", async () 
 });
 
 test("a wait action pauses on the page without touching it, then the run carries on", async () => {
-  const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc" }) });
+  const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc" }) });
   const bodies = [];
   const started = Date.now();
-  await new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, controllerVersion: 2,
+  await new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, agentAvailable: true,
     step: async (req) => {
       bodies.push(structuredClone(req));
       return bodies.length === 1
-        ? { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "wait", label: "Waiting for the page to load", command_id: "w", observation_id: req.observation.observation_id }] }
-        : { controller_version: 2, session_id: "s", status: "failed", actions: [] };
+        ? { guarded_commands: true, session_id: "s", status: "continue", actions: [{ type: "wait", label: "Waiting for the page to load", command_id: "w", observation_id: req.observation.observation_id }] }
+        : { guarded_commands: true, session_id: "s", status: "failed", actions: [] };
     } }).run();
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1].results[0].ok, true);
@@ -542,16 +560,16 @@ test("a wait action pauses on the page without touching it, then the run carries
   assert.equal(driver.calls.some(([name]) => ["click", "insertText", "submit"].includes(name)), false);
 });
 
-for (const scenario of ["stale", "navigation", "message"]) test(`v2 rejects outdated plans: ${scenario}`, async () => {
-  const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc", viewport_width: 1000, viewport_height: 800 }) });
+for (const scenario of ["stale", "navigation", "message"]) test(`controller rejects outdated plans: ${scenario}`, async () => {
+  const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc", viewport_width: 1000, viewport_height: 800 }) });
   let calls = 0;
   let agent;
-  agent = new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, controllerVersion: 2,
+  agent = new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, agentAvailable: true,
     step: async (req) => {
       if (++calls === 1) {
         if (scenario === "navigation") driver.documentId = "new-doc";
         if (scenario === "message") agent.message("Can you see City?");
-        return { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "click", ref: "0.1", command_id: "c", observation_id: scenario === "stale" ? "stale" : req.observation.observation_id }] };
+        return { guarded_commands: true, session_id: "s", status: "continue", actions: [{ type: "click", ref: "0.1", command_id: "c", observation_id: scenario === "stale" ? "stale" : req.observation.observation_id }] };
       }
       assert.equal(req.results[0].ok, false);
       if (scenario === "message") {
@@ -559,7 +577,7 @@ for (const scenario of ["stale", "navigation", "message"]) test(`v2 rejects outd
         assert.equal(req.inspect_only, true);
         assert.equal(req.observation.screenshot, "SHOT");
       }
-      return { controller_version: 2, session_id: "s", status: "failed", actions: [] };
+      return { guarded_commands: true, session_id: "s", status: "failed", actions: [] };
     },
   });
   await agent.run();
@@ -567,20 +585,20 @@ for (const scenario of ["stale", "navigation", "message"]) test(`v2 rejects outd
   assert.equal(driver.calls.some(([name]) => name === "click"), false);
 });
 
-test("v2 reports truncated observations explicitly", async () => {
-  const driver = new V2Driver({ top: () => frameObs(Array.from({ length: 401 }, (_, i) => ({ ref: String(i), role: "button", name: "Next" })), { document_id: "doc" }) });
+test("controller reports truncated observations explicitly", async () => {
+  const driver = new GuardedDriver({ top: () => frameObs(Array.from({ length: 401 }, (_, i) => ({ ref: String(i), role: "button", name: "Next" })), { document_id: "doc" }) });
   const { observation } = await observeTab(driver, { extended: true });
   assert.equal(observation.elements.length, 400);
   assert.ok(observation.coverage.some((t) => /transport limit/.test(t)));
 });
 
-for (const approve of [false, true]) test(`v2 pauses on an unexpected origin; continue=${approve}`, async () => {
-  const driver = new V2Driver({ top: () => frameObs([], { document_id: "doc" }) });
+for (const approve of [false, true]) test(`controller pauses on an unexpected origin; continue=${approve}`, async () => {
+  const driver = new GuardedDriver({ top: () => frameObs([], { document_id: "doc" }) });
   let calls = 0;
   let agent;
-  agent = new Agent({ tabId: 1, appId: null, driver, files: {}, report: async () => {}, controllerVersion: 2, startUrl: "https://original.example.test/job",
+  agent = new Agent({ tabId: 1, appId: null, driver, files: {}, report: async () => {}, startUrl: "https://original.example.test/job",
     notify: (message) => { if (message.status === "waiting") queueMicrotask(() => approve ? agent.resume() : agent.stop()); },
-    step: async () => { calls += 1; return { session_id: "s", controller_version: 2, status: "failed", actions: [] }; },
+    step: async () => { calls += 1; return { session_id: "s", guarded_commands: true, status: "failed", actions: [] }; },
   });
   await agent.run();
   assert.equal(calls, approve ? 1 : 0);
@@ -619,7 +637,7 @@ test("a stall after failed fills asks the user instead of pausing", async () => 
   let calls = 0;
   const seen = [];
   const agent = new Agent({
-    tabId: 4, controllerVersion: 2, driver, files: async () => null,
+    tabId: 4, driver, files: async () => null,
     notify: async (update) => {
       seen.push(update.status);
       if (update.status === "waiting") { agent.stop(); }
@@ -627,7 +645,7 @@ test("a stall after failed fills asks the user instead of pausing", async () => 
     report: async () => {},
     step: async () => {
       calls += 1;
-      return { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "bogus", label: "Filled Describe a project", command_id: "c" + calls, observation_id: "stale" }] };
+      return { guarded_commands: true, session_id: "s", status: "continue", actions: [{ type: "bogus", label: "Filled Describe a project", command_id: "c" + calls, observation_id: "stale" }] };
     },
   });
   await agent.run();
@@ -645,12 +663,12 @@ test("ProgressGuard keeps the labels of the latest failed actions", () => {
   assert.deepEqual(guard.failures, []);
 });
 
-test("v2 asks for help on a stalled run without issuing a third planning request", async () => {
+test("controller asks for help on a stalled run without issuing a third planning request", async () => {
   const driver = new FakeDriver({ top: () => frameObs([], { document_id: "doc" }) });
   let calls = 0;
   const seen = [];
   const agent = new Agent({
-    tabId: 3, controllerVersion: 2, driver, files: async () => null,
+    tabId: 3, driver, files: async () => null,
     notify: async (update) => {
       seen.push(update.status);
       if (update.status === "waiting") agent.stop();
@@ -658,7 +676,7 @@ test("v2 asks for help on a stalled run without issuing a third planning request
     report: async () => {},
     step: async () => {
       calls += 1;
-      return { controller_version: 2, session_id: "s", status: "continue", actions: [] };
+      return { guarded_commands: true, session_id: "s", status: "continue", actions: [] };
     },
   });
   await agent.run();
@@ -886,7 +904,7 @@ test("Agent: a form that lives only in a child frame reports its required fields
     ]),
   });
   const updates = [];
-  const agent = new Agent({
+  const agent = new ScriptedAgent({
     tabId: 4, appId: 9, driver,
     step: async () => ({ session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] }),
     files: async () => null,
@@ -903,7 +921,7 @@ test("Agent: a form split between the page and a frame counts both parts as the 
     child: () => frameObs([{ ref: "1", role: "textbox", name: "Email", required: true, value: "ada@example.com" }]),
   });
   const updates = [];
-  const agent = new Agent({
+  const agent = new ScriptedAgent({
     tabId: 4, appId: 9, driver,
     step: async () => ({ session_id: "s", status: "ready_for_review", actions: [], filled: [], unresolved: [] }),
     files: async () => null,
@@ -922,7 +940,7 @@ test("Agent: an embedded CAPTCHA does not interrupt accessible application field
   ], { blockers: ["captcha"] }) });
   const updates = [];
   let calls = 0;
-  const agent = new Agent({
+  const agent = new ScriptedAgent({
     tabId: 4, appId: 9, driver,
     step: async () => {
       calls++;
@@ -979,10 +997,10 @@ test("expired sessions require Resume and restart from a fresh observation witho
   agent = new Agent({ tabId: 1, appId: null, driver,
     step: async body => {
       bodies.push(body);
-      if (bodies.length === 1) return { controller_version: 2, session_id: "expired", status: "continue", actions: [] };
+      if (bodies.length === 1) return { guarded_commands: true, session_id: "expired", status: "continue", actions: [] };
       if (bodies.length === 2) throw new BridgeError(410, "gone");
-      return { controller_version: 2, session_id: "replacement", status: "ready_for_review", actions: [] };
-    }, controllerVersion: 2,
+      return { guarded_commands: true, session_id: "replacement", status: "ready_for_review", actions: [] };
+    }, agentAvailable: true,
     files: async () => null, report: async () => { setTimeout(() => agent.input("stop"), 0); },
     notify: async message => {
       if (message.status === "paused" && /planning session expired/.test(message.message ?? "")) queueMicrotask(() => agent.resume());
@@ -1004,4 +1022,15 @@ test("platform recovery does not replay a stateful custom planner", async () => 
   agent.planner = "custom";
   await assert.rejects(agent.planningStep({ request_id: "local" }), /provider unavailable/);
   assert.equal(calls, 1);
+});
+
+test("the controller refuses an incompatible server before executing any command", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Name" }]) });
+  const agent = new Agent({ tabId: 1, driver, files: async () => null, notify() {}, report: async () => {},
+    step: async () => ({ session_id: "old", status: "continue", actions: [{ type: "type", ref: "0.1", text: "must not run" }] }),
+  });
+  await agent.run();
+  assert.equal(agent.status, "failed");
+  assert.match(agent.log.join(" "), /does not support guarded commands/);
+  assert.equal(driver.calls.some(([name]) => name === "insertText" || name === "click"), false);
 });

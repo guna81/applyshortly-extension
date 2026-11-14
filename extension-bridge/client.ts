@@ -203,7 +203,7 @@ export interface AgentActionResult {
 export interface AgentStepRequest {
   extension_engine?: "rules_led" | "ai_led";
   runtime_version?: string;
-  controller_version?: 1 | 2;
+  guarded_commands: true;
   request_id?: string | null;
   user_message?: string | null;
   inspect_only?: boolean;
@@ -216,7 +216,7 @@ export interface AgentStepRequest {
   resumed?: boolean;
   in_user_tab?: boolean;
   /** This extension runs fill_form / options / review and reports each action's `result`. */
-  verified_commands?: boolean;
+  verified_commands?: boolean; local_planner?: boolean;
 }
 
 /** One entry of a fill_form: typed or chosen (`text`), or checked. */
@@ -250,7 +250,7 @@ export interface AgentAction {
 }
 
 export interface AgentStepResponse {
-  controller_version?: 1 | 2;
+  guarded_commands: true;
   observation_id?: string | null;
   session_id: string;
   agent_engine?: "rules_led" | "ai_led" | null;
@@ -417,9 +417,13 @@ export class JobHuntBridge {
   }
 
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
-  agentCapabilities(custom = false, engine: "rules_led" | "ai_led" = "ai_led"): Promise<{controller_version: 1 | 2; agent_engine: "rules_led" | "ai_led"; extension_engine?: "rules_led" | "ai_led"; verified_commands?: boolean; planner?: "custom"}> {
+  agentCapabilities(custom = false, engine: "rules_led" | "ai_led" = "ai_led"): Promise<{guarded_commands: true; agent_engine: "rules_led" | "ai_led"; extension_engine?: "rules_led" | "ai_led"; verified_commands?: boolean; local_planner?: boolean; planner?: "custom"}> {
     const query = new URLSearchParams({ extension_engine: engine, ...(custom ? { planner: "custom" } : {}) });
     return this.request(`/api/extension/agent/capabilities?${query}`);
+  }
+
+  agentModel(body: { session_id: string; application_id: number | null; request_id: string; messages: Array<{role: string; content: string}>; max_output_tokens: number }): Promise<{text: string}> {
+    return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body) });
   }
 
   diagnostic(body: {

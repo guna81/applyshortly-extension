@@ -294,14 +294,6 @@
             "title": "Agent Engine",
             "type": "string"
           },
-          "controller_version": {
-            "enum": [
-              1,
-              2
-            ],
-            "title": "Controller Version",
-            "type": "integer"
-          },
           "extension_engine": {
             "anyOf": [
               {
@@ -316,6 +308,16 @@
               }
             ],
             "title": "Extension Engine"
+          },
+          "guarded_commands": {
+            "const": true,
+            "title": "Guarded Commands",
+            "type": "boolean"
+          },
+          "local_planner": {
+            "default": false,
+            "title": "Local Planner",
+            "type": "boolean"
           },
           "planner": {
             "anyOf": [
@@ -336,7 +338,7 @@
           }
         },
         "required": [
-          "controller_version",
+          "guarded_commands",
           "agent_engine"
         ],
         "title": "AgentCapabilities",
@@ -625,6 +627,95 @@
         "title": "AgentFilled",
         "type": "object"
       },
+      "AgentModelMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 150000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "system",
+              "user"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "AgentModelMessage",
+        "type": "object"
+      },
+      "AgentModelRequest": {
+        "additionalProperties": false,
+        "description": "Bounded model turn from the extension-owned AI-led planner. No credentials accepted.",
+        "properties": {
+          "application_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id"
+          },
+          "max_output_tokens": {
+            "default": 1400,
+            "maximum": 4096.0,
+            "minimum": 256.0,
+            "title": "Max Output Tokens",
+            "type": "integer"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/AgentModelMessage"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Messages",
+            "type": "array"
+          },
+          "request_id": {
+            "pattern": "^[a-zA-Z0-9_-]{16,64}$",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "session_id": {
+            "pattern": "^[a-zA-Z0-9_-]{16,64}$",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "request_id",
+          "messages"
+        ],
+        "title": "AgentModelRequest",
+        "type": "object"
+      },
+      "AgentModelResponse": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "AgentModelResponse",
+        "type": "object"
+      },
       "AgentObservation": {
         "additionalProperties": false,
         "properties": {
@@ -837,15 +928,6 @@
             ],
             "title": "Application Id"
           },
-          "controller_version": {
-            "default": 1,
-            "enum": [
-              1,
-              2
-            ],
-            "title": "Controller Version",
-            "type": "integer"
-          },
           "extension_engine": {
             "anyOf": [
               {
@@ -860,6 +942,11 @@
               }
             ],
             "title": "Extension Engine"
+          },
+          "guarded_commands": {
+            "const": true,
+            "title": "Guarded Commands",
+            "type": "boolean"
           },
           "in_user_tab": {
             "default": true,
@@ -959,6 +1046,7 @@
           }
         },
         "required": [
+          "guarded_commands",
           "observation"
         ],
         "title": "AgentStepRequest",
@@ -993,15 +1081,6 @@
             "title": "Annotate Screenshot",
             "type": "boolean"
           },
-          "controller_version": {
-            "default": 1,
-            "enum": [
-              1,
-              2
-            ],
-            "title": "Controller Version",
-            "type": "integer"
-          },
           "failure_code": {
             "anyOf": [
               {
@@ -1025,6 +1104,12 @@
             "maxLength": 2000,
             "title": "Focus Query",
             "type": "string"
+          },
+          "guarded_commands": {
+            "const": true,
+            "default": true,
+            "title": "Guarded Commands",
+            "type": "boolean"
           },
           "message": {
             "default": "",
@@ -2683,6 +2768,66 @@
           }
         },
         "summary": "Ingest",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/agent/model": {
+      "post": {
+        "description": "Platform model adapter. The extension owns all planning and page commands.",
+        "operationId": "extensionAgentModel",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentModelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model",
         "tags": [
           "extension"
         ]

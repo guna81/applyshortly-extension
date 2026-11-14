@@ -192,6 +192,10 @@ export class JobHuntBridge {
     return this.request(`/api/extension/agent/capabilities?${query}`);
   }
 
+  agentModel(body) {
+    return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body) });
+  }
+
   diagnostic(body) {
     return this.request("/api/extension/agent/diagnostic", { method: "POST", body: JSON.stringify(body) });
   }

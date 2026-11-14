@@ -964,7 +964,7 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
   await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Filling method: AI-led"), "session engine badge");
   await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
   assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
-  assert.equal(shadow().querySelector(".composer-input").disabled, true);
+  assert.equal(shadow().querySelector(".composer-input").disabled, false);
   assert.deepEqual([...shadow().querySelectorAll(".f button")].map((b) => b.textContent), ["Pause", "Stop and take over"]);
 
   page.message({ type: "agentUpdate", status: "waiting", appId: 5, log: ["Clicked Next"], question: { kind: "question", text: "Notice period?", choices: ["30 days", "60 days"] } });
@@ -1295,20 +1295,20 @@ test("browser manual handoff sends page questions back to the browser controller
   input.value = "Can you see the City field?";
   input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
   input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply"), "page question delivered to browser");
-  assert.equal(page.sent.find((m) => m.type === "agentControl" && m.action === "reply").text, "Can you see the City field?");
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "page question delivered to browser");
+  assert.equal(page.sent.find((m) => m.type === "agentControl" && m.action === "message").text, "Can you see the City field?");
 });
 
-test("v2 starts the controller before filling and accepts page questions while running", async () => {
+test("controller starts the controller before filling and accepts page questions while running", async () => {
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
-    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
     suggest: () => { throw new Error("deterministic filler must not run"); },
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   assert.equal(page.win.document.getElementById("name").value, "");
-  page.message({ type: "agentUpdate", status: "running", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [] });
+  page.message({ type: "agentUpdate", status: "running", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [] });
   const input = page.shadow().querySelector(".composer-input");
   assert.equal(input.disabled, false);
   input.value = "Can you see City?";
@@ -1316,22 +1316,22 @@ test("v2 starts the controller before filling and accepts page questions while r
   await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "question queued in controller");
   assert.equal(page.sent.filter((m) => m.type === "assist").length, 0);
   page.win.document.getElementById("name").value = "Verified name";
-  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
   await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /been through/.test(b.textContent)), "readback refresh");
   assert.equal(page.win.document.getElementById("name").value, "Verified name");
   assert.equal(page.sent.filter((m) => m.type === "suggest").length, 0);
 });
 
-test("v2: Draft it for me on the agent's question drafts the answer instead of sending the chip text", async () => {
+test("controller: Draft it for me on the agent's question drafts the answer instead of sending the chip text", async () => {
   const asked = "5. Where do you see yourself in the next 5 years, in terms of your career goal?";
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
-    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
     suggest: (msg) => (msg.allowGenerate ? { answer: "I want to lead an AI platform team.", source: "generated", needs_review: true } : { answer: null }),
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
-  page.message({ type: "agentUpdate", status: "waiting", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal" } });
+  page.message({ type: "agentUpdate", status: "waiting", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal" } });
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
   await until(() => quick().filter((b) => b.textContent === "Draft it for me"), "the draft chip on a single question");
   quick().find((b) => b.textContent === "Draft it for me").click();
@@ -1340,18 +1340,18 @@ test("v2: Draft it for me on the agent's question drafts the answer instead of s
   page.win.close();
 });
 
-test("v2: after the agent finishes, 'I agree, tick it' ticks the box on the page instead of going to the agent", async () => {
+test("controller: after the agent finishes, 'I agree, tick it' ticks the box on the page instead of going to the agent", async () => {
   const form = `<label for="name">Full name</label><input id="name" required>
     <label><input type="checkbox" id="consent" required> I agree to the privacy policy</label>
     <button type="submit">Submit application</button>`;
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form,
-    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   page.win.document.getElementById("name").value = "Profile name";
-  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
   await until(() => quick().find((b) => b.textContent === "I agree, tick it"), "the tick chip");
   const consent = page.win.document.getElementById("consent");
@@ -1459,7 +1459,7 @@ test("stopped agent never reports all set or offers submission when fields are f
   const page = panelPage(() => { throw new Error("completion refresh must only read"); }, {
     form: '<form><label>Full name<input required value="Ada"></label><button type="submit">Submit application</button></form>',
   });
-  page.message({ type: "agentUpdate", status: "stopped", appId: 5, controller_version: 2 });
+  page.message({ type: "agentUpdate", status: "stopped", appId: 5, guarded_commands: true });
   await until(() => /Stopped: review the form/.test(page.shadow()?.textContent ?? ""), "stopped headline");
   assert.doesNotMatch(page.shadow().textContent, /All set/);
   assert.equal(page.sent.some((m) => m.type === "suggest" || m.type === "assist"), false);
@@ -1473,7 +1473,7 @@ test("stopping a driver with no context controller version never fills remaining
   const page = panelPage(() => { throw new Error("must not draft on stop"); }, {
     form: '<form><label>Full name<input required></label><button type="submit">Submit application</button></form>',
   });
-  page.message({ type: "agentUpdate", status: "stopped", appId: 5, controller_version: 2 });
+  page.message({ type: "agentUpdate", status: "stopped", appId: 5, guarded_commands: true });
   await until(() => /Stopped: review the form/.test(page.shadow()?.textContent ?? ""), "stopped readback");
   assert.equal(page.win.document.querySelector("input").value, "");
   assert.match(page.shadow().textContent, /0 of 1 answered/);

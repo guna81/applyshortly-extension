@@ -10,7 +10,7 @@ test("custom planner sends context to the provider and issues a fresh guarded co
   const calls = [];
   const step = planner({ status: "continue", message: "Filling project", action: { type: "type", ref: "0.1", text: "* **Outcome:** Built a system." } }, calls);
   const result = await step(body());
-  assert.equal(result.controller_version, 2);
+  assert.equal(result.guarded_commands, true);
   assert.equal(result.agent_engine, "ai_led");
   assert.equal(result.actions[0].observation_id, "obs");
   assert.equal(result.actions[0].text, "• Outcome: Built a system.");
@@ -39,7 +39,10 @@ test("custom planner asks about optional unanswered fields before finishing", as
   const first = await step(body(optional));
   assert.equal(first.status, "ask_user");
   assert.equal(first.question.optional, true);
-  assert.equal((await step(body(optional, { skip_question: true }))).status, "ready_for_review");
+  const review = await step(body(optional, { skip_question: true }));
+  assert.equal(review.actions[0].type, "review");
+  const ready = await step(body(optional, { results: [{ command_id: review.actions[0].command_id, ok: true, result: { type: "review", missing_required: [], needs_confirmation: [], errors: [] } }] }));
+  assert.equal(ready.status, "ready_for_review");
 });
 
 test("custom planner asks instead of claiming completion with a required answer missing", async () => {
@@ -54,8 +57,8 @@ test("verified custom AI answers are marked for review", async () => {
   const step = customPlanner({}, {}, {}, async () => JSON.stringify(++calls === 1
     ? { status: "continue", message: "Filling project", action: { type: "type", ref: "0.1", text: "Built a system." } }
     : { status: "ready_for_review", message: "Review" }));
-  await step(body());
-  const result = await step(body({ ...field, value: "Built a system." }, { results: [{ ok: true, result: { verified: true } }] }));
+  const written = await step(body());
+  const result = await step(body({ ...field, value: "Built a system." }, { results: [{ command_id: written.actions[0].command_id, ok: true, result: { verified: true } }] }));
   assert.equal(result.filled[0].needs_review, true);
   assert.equal(result.filled[0].source, "llm");
 });

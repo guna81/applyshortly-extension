@@ -114,7 +114,7 @@ For automatic browser sign-in, the server operator must register the installed e
 
 Review filled answers, AI drafts and attachments before submission. The form agent never clicks final Submit itself. Auto apply requires your explicit choice, including clicking Apply for a job in ApplyShortly through a one-time link, and uses a cancellable countdown. Sign-in, CAPTCHAs, uploads, consent and unsupported controls may require your input.
 
-Form questions and answers are processed for filling and assistant features. The form agent can send visible page context and transient screenshots to the configured AI provider. Filled information is visible to the employer website before submission; submitting sends the application and attachments to that employer or its application service.
+Form questions and answers are processed for filling and assistant features. The current shared AI-led form agent sends structured visible page context to its AI provider, without screenshots. Earlier Platform AI versions could send transient screenshots; the server-browser agent still uses them. Filled information is visible to the employer website before submission; submitting sends the application and attachments to that employer or its application service.
 
 Custom builds support compatible self-hosted servers. This public repository contains the extension and API bridge; the platform backend is maintained separately. See the [privacy disclosure](docs/security/extension-privacy-policy.md), [hosted privacy policy](https://applyshortly.com/privacy) and [Chrome permissions guide](extension/README.md#why-it-asks-for-these-permissions).
 

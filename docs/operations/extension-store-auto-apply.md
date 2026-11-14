@@ -235,3 +235,14 @@ not stored by the extension.
 Add: "Apply in ApplyShortly opens the job page with a one-time code, and the extension then runs
 Auto apply. On the review demo, Auto apply must still refuse its disabled Submit control.
 Reloading that page, or opening the same link again, only fills."
+
+## Current source architecture correction — 14 November 2026
+
+The store text above is historical release copy, not the current implementation contract.
+Before publishing the unified-planner build, replace claims that personal keys are stored by
+ApplyShortly or that the current AI-led form agent sends screenshots. Custom/local keys stay
+on the device. Platform AI sends structured page/profile/job context and planner messages through
+the platform model gateway; custom/local AI sends those directly to its endpoint. Both share
+one extension planner and currently exclude images. Older installed builds and the server
+browser may still use screenshots. See the current extension privacy policy for replacement
+processing details. Updating this file does not publish store text or a hosted privacy policy.

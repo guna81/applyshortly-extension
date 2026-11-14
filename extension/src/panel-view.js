@@ -476,7 +476,7 @@
     }
 
     function composer() {
-      const busy = agentBusy() && ctl.agent?.controller_version !== 2;
+      const busy = false;
       const input = el("textarea", {
         class: "composer-input", rows: "1", "aria-label": "Message the agent", disabled: busy,
         placeholder: busy ? "Working on the form… I'll ask here when I need you." : ctl.agent?.status === "waiting" ? "Type your answer…" : "Type your answer, or ask to change one…",

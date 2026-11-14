@@ -3,7 +3,7 @@ import { candidateContext } from "./candidate-context.js";
 // Content scripts and the popup talk to it with chrome.runtime messages ({type, ...}).
 
 import { endpoint, complete, canDraft, customAssist } from "./custom-ai.js";
-import { customPlanner } from "./custom-agent.js";
+import { extensionPlanner } from "./extension-agent.js";
 import { externalBrowser } from "./external-browser.js";
 import { Agent } from "./agent/loop.js";
 import { TabDriver } from "./agent/cdp.js";
@@ -203,12 +203,12 @@ async function context(appId, tabId, url, page) {
   const unattended = tabId !== undefined && (await autopilotWindow())?.tabId === tabId;
   const custom = (await chrome.storage.local.get("customAI")).customAI;
   // Autofill works without the agent. An unavailable or incompatible capability response must
-  // not select protocol 2 here; agentStart negotiates independently and still fails closed.
+  // not start the controller here; agentStart negotiates independently and still fails closed.
   const capabilities = unattended ? null : await b.agentCapabilities(Boolean(custom?.enabled), s.extensionEngine).catch(() => null);
   const acknowledged = capabilities?.extension_engine === s.extensionEngine && capabilities?.agent_engine === s.extensionEngine &&
     (!custom?.enabled || capabilities?.planner === "custom") &&
-    (capabilities?.agent_engine !== "ai_led" || capabilities?.controller_version === 2);
-  return { controllerVersion: acknowledged ? capabilities.controller_version : 1, agentEngine: acknowledged ? capabilities.agent_engine : undefined, profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
+    capabilities?.guarded_commands === true;
+  return { agentAvailable: acknowledged, agentEngine: acknowledged ? capabilities.agent_engine : undefined, profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
 }
 
 /** What the popup shows: connection, and which application (if any) the tab's page is. */
@@ -544,7 +544,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
   // filled form left for review) ends when the user starts a new one; it is not doing anything.
   for (const previous of new Set(agents.values())) {
     if (previous.tabId === tabId || previous.stopped) continue;
-    if (["waiting", "paused"].includes(previous.status) || (previous.controllerVersion === 2 && previous.status === "ready")) {
+    if (["waiting", "paused"].includes(previous.status) || previous.status === "ready") {
       previous.stop("You started the agent on another application, so it stopped here. The form is yours to finish.");
       await previous.runPromise;
     }
@@ -571,21 +571,27 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
   if (capabilities?.extension_engine !== owner.extensionEngine) throw new Error("ApplyShortly needs an update to use the extension form engine setting.");
   if (capabilities?.agent_engine !== owner.extensionEngine) throw new Error("The selected extension form engine is unavailable with this provider. Change the extension setting or provider.");
   if (custom?.enabled && capabilities?.planner !== "custom") throw new Error("ApplyShortly needs an update before this custom provider can use the selected form engine.");
-  if (capabilities.agent_engine === "ai_led" && capabilities.controller_version !== 2) throw new Error("The selected AI-led method is unavailable on this ApplyShortly server. Try again later or change the extension form filling method.");
-  if (custom?.enabled && (capabilities.controller_version !== 2 || capabilities.agent_engine !== "ai_led")) throw new Error("The selected Rules-led method cannot navigate this form with a custom provider. Change the form filling method in settings or complete it on the page.");
+  if (capabilities.guarded_commands !== true) throw new Error("Update ApplyShortly before starting the form agent; this server does not support guarded commands.");
+  if (custom?.enabled && (capabilities.guarded_commands !== true || capabilities.agent_engine !== "ai_led")) throw new Error("The selected Rules-led method cannot navigate this form with a custom provider. Change the form filling method in settings or complete it on the page.");
+  if (!custom?.enabled && capabilities.agent_engine === "ai_led" && capabilities.local_planner !== true) throw new Error("Update ApplyShortly before starting the unified extension agent.");
   const sources = await pageSources();
   if (customProviderChanging || revision !== customProviderRevision) throw new Error("AI provider changed. Start a new form session.");
+  const modelSession = crypto.randomUUID();
   const agent = new Agent({
     tabId,
     appId: id,
     driver: new TabDriver(tabId, sources),
     startUrl: url,
-    controllerVersion: capabilities?.controller_version ?? 1,
+
     verifiedCommands: capabilities?.verified_commands === true,
-    step: custom?.enabled ? customPlanner(custom, p, app, (config, messages, maxTokens) => {
+    step: capabilities.agent_engine === "ai_led" ? extensionPlanner(custom, p, app, async (config, messages, maxTokens) => {
       if (revision !== customProviderRevision || customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
-      return complete(config, messages, maxTokens);
-    }, undefined, owner.aiDrafts) : (body) => b.agentStep({ ...body, extension_engine: owner.extensionEngine }),
+      if (custom?.enabled) return complete(config, messages, maxTokens);
+      const current = await settings();
+      if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) throw new Error("Account changed. Start a new form session.");
+      return (await b.agentModel({ session_id: modelSession, application_id: id, request_id: crypto.randomUUID(), messages, max_output_tokens: maxTokens })).text;
+    }, (question) => b.suggestAnswer({ question, application_id: id, allow_generate: false }), owner.aiDrafts)
+      : (body) => b.agentStep({ ...body, extension_engine: owner.extensionEngine }),
     files: agentFiles(p, app),
     notify: async (message) => {
       // Keep approval in this background run across page navigation, and deliver it
@@ -628,7 +634,7 @@ function agentControl(tabId, action, text) {
 function agentStatus(tabId) {
   const agent = agents.get(tabId);
   if (!agent) return null;
-  return { type: "agentUpdate", controller_version: agent.controllerVersion, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.last, planner: agent.planner };
+  return { type: "agentUpdate", guarded_commands: true, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.last, planner: agent.planner };
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {

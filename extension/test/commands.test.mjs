@@ -270,14 +270,14 @@ async function runAgent({ verifiedCommands, actions }) {
   };
   const requests = [];
   let calls = 0;
-  const agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, notify: () => {}, report: async () => {}, controllerVersion: 2, verifiedCommands,
+  const agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, notify: () => {}, report: async () => {}, agentAvailable: true, verifiedCommands,
     step: async (req) => {
       requests.push(req);
       if (++calls === 1) {
         const ids = Object.fromEntries(req.observation.elements.map((e) => [e.name, e.ref]));
-        return { controller_version: 2, session_id: "s", status: "continue", actions: actions(ids, req.observation.observation_id) };
+        return { guarded_commands: true, session_id: "s", status: "continue", actions: actions(ids, req.observation.observation_id) };
       }
-      return { controller_version: 2, session_id: "s", status: "failed", actions: [] };
+      return { guarded_commands: true, session_id: "s", status: "failed", actions: [] };
     } });
   await agent.run();
   return { requests, driver };

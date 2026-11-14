@@ -28,7 +28,7 @@ Preserve user-chosen submission (the user clicks the site's Submit, or explicitl
 
 Autopilot windows (`src/background.js`, `autopilot*`) open only a link the platform returned from `/autopilot/next`, with its one-time code, only with the user's setting on, one at a time and never for a job board (the platform doesn't offer them; the extension also never opens a non-http(s) link). They are unattended, so they never start the form agent or AI drafting, never send an answer marked for checking, stop on a sign-in page, and close only the tab they opened, after the submit attempt. Keep it that way.
 
-The AI-led controller (`src/agent/loop.js`, `src/agent/cdp.js`) runs only when the platform negotiates protocol 2. It pauses locally on repeated page states or after sixty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
+The AI-led controller (`src/agent/loop.js`, `src/agent/cdp.js`) requires the platform to acknowledge guarded commands. It pauses locally on repeated page states or after forty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
 
 ## Testing the AI-led engine on a live form
 
@@ -67,10 +67,16 @@ boards beyond one job at a time or to CAPTCHA/sign-in pages.
 
 ## Paired form-agent fixes
 
-For planner behavior changes, fix Python first and mirror `extension/src/custom-agent.js`.
+The extension AI-led planner is `extension/src/extension-agent.js` in the public repository,
+shared by Platform AI and custom/local providers. Change it once for both. The private server
+browser retains its Python planner; mirror shared policy fixes there when applicable.
 Add a page snapshot and scripted replies to the extension's `test/agent-scenarios.json` and run
 both the Node replay and backend `test_shared_scenario_replay`. Runtime policy data is in
 `extension/src/agent-rules.json`; regenerate `src/agent-rules.js` with
 `python3 scripts/agent_rules.py` in the extension and keep the backend `services/agent/rules.json`
 copy identical. Shared tests check all copies. See the platform's
 `docs/development/shared-agent-rules.md`. Never restore server-stored personal-key calls.
+
+The shared extension planner currently excludes screenshots from model inputs for both
+Platform AI and custom/local providers. The server Python planner retains screenshots and native
+tools. Do not claim visual parity or identical behavior; extension vision support is deferred.

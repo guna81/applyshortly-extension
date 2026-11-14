@@ -150,30 +150,31 @@ a new positive Ashby **Success** receipt confirms the submission in ApplyShortly
 
 The AI-led engine and a connected assistant run the same page commands (`extension/src/agent/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the AI-led engine uses them too and sends each action's `result`; the panel says who it is run by (ApplyShortly or your assistant).
 
-Protocol 2 pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. The platform also pauses after six decisions without progress and caps AI spend at about $1 per application. Resume explicitly after checking the page; each resume starts a new safety window.
+The guarded controller pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. Platform AI also enforces backend run budgets. Resume explicitly after checking the page; each resume starts a new safety window.
 
-Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. Besides click, type, choose, check, upload, keys, scroll and wait, the agent can hover, drag between two controls, and wait for text to appear. Screenshots are capped at 1280 pixels on the longest side, and taken only when the page layout changed. Taking one changes nothing on the page: the capture is shrunk and labelled inside the extension (never with Chrome's clip option, which briefly resizes the page), and the panel stays in place. A field already on screen is filled without scrolling. Your saved answers for plain fields (text, email, numbers, native dropdowns) are typed in one go without an AI call; the AI handles pickers, phone numbers, uploads and anything that didn't stick.
+Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. The shared AI-led planner uses structured page observations and one JSON action at a time,
+including filling, selecting, checking, uploads, navigation, options, waits and review. The
+executor supports additional commands for other controllers; this does not make them available
+to the shared planner. Current AI-led model inputs exclude screenshots.
 
 Choose **Extension settings → Preferences → Extension form filling method** for new extension sessions. The platform has a separate account setting. AI-led is the default for both.
-AI-led is the service default. It uses fresh page observations, screenshots
-and native AI tool calls; Anthropic and Gemini native tools are supported. Personal OpenAI
-keys support structured drafts rather than this native tool loop; sessions on those keys, or with
-no AI, run Rules-led instead.
+Both Platform AI and My AI provider use the same JavaScript planner. It requires JSON responses,
+not native tool calls. Platform AI uses the authenticated model gateway; custom/local providers
+are called directly with keys kept on this device. Errors do not silently switch providers.
 
-With controller protocol 2 (the server default), the extension inspects the page before filling
+With the guarded controller, the extension inspects the page before filling
 and keeps page questions, actions and review in one session. Messages interrupt pending actions
 and receive fresh page context. Page questions stay read-only until you ask it to edit or
 continue. The controller tracks field readback and user edits, bounds failed interaction
 strategies, and can follow an application tab opened by its recent click. It stops for review;
 the agent itself never clicks final Submit. Stop ends browser access.
 
-This upgraded session sends visible page context and transient screenshots to the configured
-AI provider through ApplyShortly. The panel stays visible (the AI is told it is ApplyShortly's own) and lets clicks through while the agent acts. The classic
-assistant description above applies outside this upgraded session.
-
-The server gate defaults on. Reload the updated extension and start a new session after an
-upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
-mechanics, but representative real-model ATS reliability has not been established.
+Platform AI sends page context and planner messages through ApplyShortly to its provider.
+Custom/local AI sends them directly to the selected endpoint. Neither current extension AI-led
+path sends screenshots to the model. Before unification, Platform AI used the screenshot-aware
+Python planner; restoring visual input in the shared planner remains future work. The server
+browser still uses screenshots. Reload after upgrading and start a new session. Scripted tests
+do not establish real-model reliability.
 
 ### Configure an endpoint on this device
 
@@ -224,7 +225,7 @@ There is no fallback to platform credits. In-app browser, Autopilot and schedule
 platform credits. Choose credits explicitly to return to the platform flow.
 
 Gemini uses its OpenAI-compatible endpoint. Anthropic uses a small native Messages adapter with
-its API-key, version and direct-browser headers. Both planners request JSON actions as text;
+its API-key, version and direct-browser headers. Both provider modes share one planner requesting JSON actions as text;
 provider-native tool calling is not needed for this path. Mocked tests validate the wire formats,
 not real credentials, model availability, or browser CORS. **Test connection** makes a real billable
 request from your installed extension; organizations can restrict direct-browser requests.
@@ -508,3 +509,18 @@ An expired platform session asks for Resume before creating a fresh session from
 form. Previous skipped questions and answer permissions must be given again. Stop ends recovery.
 The shared executor fixture corpus lives in `test/executor-contract.json`; both real-browser
 executors are exercised by the platform's `backend/tests/browser/test_executor_contract.py`.
+
+
+### Shared extension AI-led planner
+
+Platform AI and My AI provider run the same `src/extension-agent.js` planner in the background
+worker: one prompt, command vocabulary, session state, verification and recovery policy.
+Platform AI calls the authenticated `/api/extension/agent/model` gateway, which selects the
+platform model and enforces credits, usage and run limits. Custom/local providers are called
+directly; their credentials never go to that gateway. Saved-answer lookup uses
+`allow_generate: false` for both providers. Completion requires a fresh correlated browser
+review and a separate model audit. The guarded command executor still controls every page change.
+
+Rules-led uses the existing backend step endpoint. The private server browser keeps its Python
+planner. Platform AI requires the server's `local_planner` capability; update the backend before
+installing this extension release. There is no silent fallback to a different AI-led planner.

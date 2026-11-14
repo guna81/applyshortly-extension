@@ -314,5 +314,35 @@
         "expected": "click"
       }
     ]
+  },
+  {
+    "name": "CAPTCHA blocks both planners before a write",
+    "observation": {
+      "observation_id": "blocked-1",
+      "url": "https://careers.example.test/apply",
+      "blockers": [
+        "captcha"
+      ],
+      "elements": [
+        {
+          "ref": "name",
+          "role": "textbox",
+          "name": "Full name",
+          "value": "",
+          "required": true
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "type",
+          "ref": "name",
+          "text": "Candidate"
+        },
+        "expected": "no_reask"
+      }
+    ]
   }
 ]

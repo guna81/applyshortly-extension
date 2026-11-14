@@ -553,7 +553,7 @@ export async function settle(driver) {
   }
 }
 
-/** Page actions of protocol 2 run with the page told to let the agent's clicks through the panel. */
+/** Guarded page actions run with the page told to let the agent's clicks through the panel. */
 export async function executing(driver, frames, run) {
   for (const frame of frames) await driver.call(frame, "executionState", true);
   try { return await run(); } finally {
@@ -572,12 +572,11 @@ function boundedResult(result) {
  * resume() after a CAPTCHA/sign-in or a click the user had to make, pause(), stop().
  */
 export class Agent {
-  constructor({ tabId, appId, driver, step, files, notify, report, controllerVersion = 1, startUrl = null, verifiedCommands = false }) {
+  constructor({ tabId, appId, driver, step, files, notify, report, startUrl = null, verifiedCommands = false }) {
     this.trustedOrigins = new Set(startUrl ? [new URL(startUrl).origin] : []);
-    this.controllerVersion = controllerVersion;
     this.planner = "platform";
     // The platform understands fill_form / options / review and the per-action `result` (committed, verified).
-    this.verifiedCommands = verifiedCommands && controllerVersion === 2;
+    this.verifiedCommands = verifiedCommands;
     /** @type {Promise<void> | null} */
     this.runPromise = null;
     this.messages = [];
@@ -610,7 +609,7 @@ export class Agent {
   }
 
   emit(extra = {}) {
-    const message = { type: "agentUpdate", controller_version: this.controllerVersion, status: this.status, filling_notice: this.fillingNotice, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
+    const message = { type: "agentUpdate", guarded_commands: true, status: this.status, filling_notice: this.fillingNotice, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
     void this.notify(message);
   }
 
@@ -631,7 +630,6 @@ export class Agent {
   }
 
   message(text) {
-    if (this.controllerVersion !== 2) throw new Error("Restart with the upgraded AI-led controller.");
     this.progressGuard.reset();
     this.messages.push(text);
     this.controlRevision += 1;
@@ -697,7 +695,7 @@ export class Agent {
     let results = [];
     /** @type {Record<string, any>} */
     let extra = {};
-    let wantScreenshot = this.controllerVersion === 2;
+    let wantScreenshot = true;
     let annotateScreenshot = false;
     let focusQuery = "";
     let observationFailures = 0;
@@ -718,7 +716,7 @@ export class Agent {
         if (!this.driver.dialog) {
           try {
             observed = await observeTab(this.driver, {
-              screenshot: wantScreenshot, annotate: annotateScreenshot, extended: this.controllerVersion === 2, query: focusQuery,
+              screenshot: wantScreenshot, annotate: annotateScreenshot, extended: true, query: focusQuery,
             });
           } catch (error) {
             if (!(error instanceof Error && error.name === "DialogOpenError")) {
@@ -740,22 +738,22 @@ export class Agent {
         if (this.stopped) break;
         if (this.paused) continue;
         this.url = observation.url;
-        if (this.controllerVersion === 2) {
-          const origin = new URL(observation.url).origin;
-          if (!this.trustedOrigins.size) this.trustedOrigins.add(origin);
-          if (!this.trustedOrigins.has(origin)) {
-            this.last = { ...this.last, question: { kind: "click", text: `The application moved to ${origin}. Continue only if this is the intended employer or ATS.` } };
-            this.status = "waiting";
-            this.emit();
-            const input = await this.waitForUser();
-            if (input.kind === "stop") break;
-            const message = this.messages.shift() || "";
-            if (input.kind === "resume" || /^(continue|resume|go ahead)\b/i.test(message)) this.trustedOrigins.add(origin);
-            this.status = "running";
-            wantScreenshot = true;
-            continue;
-          }
+
+        const origin = new URL(observation.url).origin;
+        if (!this.trustedOrigins.size) this.trustedOrigins.add(origin);
+        if (!this.trustedOrigins.has(origin)) {
+          this.last = { ...this.last, question: { kind: "click", text: `The application moved to ${origin}. Continue only if this is the intended employer or ATS.` } };
+          this.status = "waiting";
+          this.emit();
+          const input = await this.waitForUser();
+          if (input.kind === "stop") break;
+          const message = this.messages.shift() || "";
+          if (input.kind === "resume" || /^(continue|resume|go ahead)\b/i.test(message)) this.trustedOrigins.add(origin);
+          this.status = "running";
+          wantScreenshot = true;
+          continue;
         }
+
         // Fill accessible application fields first. Only a challenge without an accessible
         // form blocks the run here; embedded widgets are left for the user at submission.
         const documentKey = observation.document_id ?? observation.url;
@@ -778,7 +776,7 @@ export class Agent {
           // Explicit editing/continuation instructions may mutate; page questions remain read-only.
           extra.inspect_only = !isEditingInstruction(extra.user_message);
         }
-        const stalled = this.controllerVersion === 2 && this.progressGuard.check(observation);
+        const stalled = this.progressGuard.check(observation);
         if (stalled) {
           if (/without progress/.test(stalled)) {
             // The page stopped changing: either the same fills keep failing, or the platform keeps answering with
@@ -815,7 +813,7 @@ export class Agent {
         let res;
         try {
           res = await this.planningStep({
-          ...(this.controllerVersion === 2 ? { controller_version: 2, request_id: crypto.randomUUID() } : {}),
+          guarded_commands: true, request_id: crypto.randomUUID(),
           ...(this.verifiedCommands ? { verified_commands: true } : {}),
           session_id: sessionId,
           application_id: this.appId,
@@ -844,7 +842,7 @@ export class Agent {
         }
         if (!res) break;
         sessionId = res.session_id;
-        if (res.controller_version !== 2) this.controllerVersion = 1;
+        if (res.guarded_commands !== true) throw new Error("Update ApplyShortly before starting the form agent; this server does not support guarded commands.");
         if (this.stopped) break;
         if (this.paused || controlRevision !== this.controlRevision) {
           // The user took control while the model was deciding. Never execute that plan.
@@ -866,40 +864,36 @@ export class Agent {
         for (const [index, action] of (res.actions ?? []).entries()) {
           if (this.stopped || this.paused || controlRevision !== this.controlRevision) break;
           try {
-            if (this.controllerVersion === 2) {
-              if (!action.command_id || action.observation_id !== observation.observation_id) throw new Error("Stale browser command; fresh observation required.");
-              if (this.executedCommands.has(action.command_id)) throw new Error("Duplicate command refused; inspect current page.");
-              this.executedCommands.add(action.command_id);
-            }
+            if (!action.command_id || action.observation_id !== observation.observation_id) throw new Error("Stale browser command; fresh observation required.");
+            if (this.executedCommands.has(action.command_id)) throw new Error("Duplicate command refused; inspect current page.");
+            this.executedCommands.add(action.command_id);
+
             let outcome = null;
-            if (this.controllerVersion === 2) {
-              this.runner.observed = observed;
-              if (action.type === "switch_tab") {
-                const tab = observation.tabs?.find((t) => t.id === action.tab_id);
-                if (tab) this.trustedOrigins.add(new URL(tab.url).origin);
-              }
-              if (["fill_form", "options", "review"].includes(action.type)) {
-                outcome = await this.runner.compound(action.type, { fields: action.fields, ref: action.ref }, { observationId: action.observation_id, commandId: action.command_id });
-              } else if (action.type === "wait") {
-                await execute(this.driver, refs, frames, action, this.files);
-              } else {
-                // Same document, same control (not edited by the user, not replaced), not a password.
-                await this.runner.guard(action);
-                outcome = await executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files));
-              }
-            } else {
-              await execute(this.driver, refs, frames, action, this.files);
+            this.runner.observed = observed;
+            if (action.type === "switch_tab") {
+              const tab = observation.tabs?.find((t) => t.id === action.tab_id);
+              if (tab) this.trustedOrigins.add(new URL(tab.url).origin);
             }
+            if (["fill_form", "options", "review"].includes(action.type)) {
+              outcome = await this.runner.compound(action.type, { fields: action.fields, ref: action.ref }, { observationId: action.observation_id, commandId: action.command_id });
+            } else if (action.type === "wait") {
+              await execute(this.driver, refs, frames, action, this.files);
+            } else {
+              // Same document, same control (not edited by the user, not replaced), not a password.
+              await this.runner.guard(action);
+              outcome = await executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files));
+            }
+
             this.say(action.label);
             const shown = this.verifiedCommands && outcome && typeof outcome === "object"
               ? ["fill_form", "options", "review"].includes(action.type) ? outcome : CommandRunner.shape(action, outcome) : null;
             const failed = shown?.verified === false || (action.type === "fill_form" && shown && shown.done < shown.requested_count);
-            results.push({ index, ok: !failed, ...(this.controllerVersion === 2 ? { command_id: action.command_id, effect: "Input dispatched; verify committed result in next observation." } : {}),
+            results.push({ index, ok: !failed, command_id: action.command_id, effect: "Input dispatched; verify committed result in next observation.",
               ...(shown ? { result: boundedResult(shown) } : {}), ...(failed ? { detail: "The page did not show the requested value." } : {}) });
             if (failed) { this.say(`Didn't stick: ${action.label || action.type}`); break; } // later actions assume this one stuck
           } catch (error) {
             this.say(`Couldn't: ${action.label || action.type} (${error.message})`);
-            results.push({ index, ...(this.controllerVersion === 2 ? { command_id: action.command_id } : {}), ok: false, detail: String(error.message).slice(0, 290) });
+            results.push({ index, command_id: action.command_id, ok: false, detail: String(error.message).slice(0, 290) });
             break; // later actions assume this one succeeded; re-observe before continuing
           }
           await sleep(ACTION_PAUSE_MS);
@@ -919,7 +913,7 @@ export class Agent {
           // The panel only sees the top document; tell it what this frame-aware observation found.
           this.emit({ captchaPending, readiness: readinessOf(observation, refs) });
           await this.report("filled", res, this.url);
-          if (this.controllerVersion !== 2) break;
+
           const input = await this.waitForUser();
           if (input.kind === "stop") break;
           this.status = "running";
@@ -948,7 +942,7 @@ export class Agent {
           if (input.kind === "reply") extra = { user_reply: input.text };
           else if (input.kind === "skip") extra = { skip_question: true };
           else extra = { resumed: true };
-          wantScreenshot = this.controllerVersion === 2 || wantScreenshot;
+          wantScreenshot = true;
           this.say(input.kind === "reply" ? "Thanks, continuing." : "Continuing…");
           results = [];
         }

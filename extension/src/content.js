@@ -336,7 +336,7 @@
         state = { appId: ctx.app?.id ?? appId, ctx, resume, results: [] };
         if (!quiet) await report("opened");
       }
-      if (!quiet && state.ctx.controllerVersion === 2) { panel.idle(); return true; }
+      if (!quiet && state.ctx.agentAvailable) { panel.idle(); return true; }
       if (quiet) {
         // Readback only: the controller owns writes, including during completion refresh.
         state.results = F.collectFields(document).map((field) => {
@@ -543,7 +543,7 @@
     // act on the page directly, as they do without an agent. Sent to the agent they would arrive as a
     // read-only chat question and nothing would be ticked.
     const finishedChip = agent?.status === "ready" && P.LOCAL_REPLIES.includes(message);
-    if (agent?.controller_version === 2 && !["failed", "stopped"].includes(agent.status) && !finishedChip) {
+    if (agent && !["failed", "stopped"].includes(agent.status) && !finishedChip) {
       // The chips on the agent's own question are the panel's: "Draft it for me" drafts the answer
       // and "I'll fill it on the page" skips it. Sent as replies they would be taken as the answer.
       if (agent.status === "waiting" && agent.question?.kind === "question" && (P.isDraftRequest(message) || message === P.ON_PAGE_REPLY || message === P.SKIP_REPLY)) {
@@ -926,7 +926,7 @@
     panel.setRetry(appId);
     await panel.restore(opts);
     if (!(await run(appId)) || agentLive()) return;
-    if (state?.ctx.controllerVersion === 2 && !opts.unattended) return startAgent(opts);
+    if (state?.ctx.agentAvailable && !opts.unattended) return startAgent(opts);
     // A page that needs clicking through (an Apply pop-up, Next steps, a form in a frame): carry on.
     const reason = handedOff ? null : P.navigationNeeded(pageShape());
     // Autopilot's window has nobody watching: no agent (it spends a run's credits behind a debugging
