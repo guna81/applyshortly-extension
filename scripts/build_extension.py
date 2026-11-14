@@ -75,7 +75,7 @@ def build(destination, base_url=None, source=False):
     base_url = configured_origin(base_url)
     ext = ROOT / "extension"
     files = {"manifest.json": (ext / "manifest.json").read_bytes()}
-    for folder, suffixes in [("src", {".js", ".html", ".css"}), ("icons", {".svg", ".png"})]:
+    for folder, suffixes in [("src", {".js", ".html", ".css", ".json"}), ("icons", {".svg", ".png"})]:
         # src/ has subfolders (src/agent/); nothing reached through a symlink is packaged.
         for item in sorted((ext / folder).rglob("*")):
             inside = [ext / parent for parent in item.relative_to(ext).parents if parent != Path(".")]
@@ -115,7 +115,7 @@ def build(destination, base_url=None, source=False):
         source_files["scripts/test_build_extension.py"] = (
             ROOT / "scripts/test_build_extension.py"
         ).read_bytes()
-        for name in ["Makefile", "package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py"]:
+        for name in ["Makefile", "package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py", "scripts/agent_rules.py"]:
             source_files[name] = (ROOT / name).read_bytes()
         for item in (ROOT / "docs").rglob("*.md"):
             if item.is_file() and not item.is_symlink():

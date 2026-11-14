@@ -11,7 +11,7 @@
     "test": "node --test extension/test/*.test.mjs",
     "typecheck": "tsc -p extension-bridge/tsconfig.json && tsc -p tsconfig.extension.json",
     "test:packaging": "python3 -m unittest discover -s scripts -p 'test_build_extension.py'",
-    "check": "npm test && npm run typecheck && npm run test:packaging",
+    "check": "python3 scripts/agent_rules.py --check && npm test && npm run typecheck && npm run test:packaging",
     "build": "python3 scripts/build_extension.py",
     "build:source": "python3 scripts/build_extension.py --source"
   },

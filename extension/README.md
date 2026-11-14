@@ -175,13 +175,13 @@ The server gate defaults on. Reload the updated extension and start a new sessio
 upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
 mechanics, but representative real-model ATS reliability has not been established.
 
-### Use an OpenAI-compatible endpoint on this device
+### Configure an endpoint on this device
 
 The current source build supports a custom endpoint for answer drafting and assistant chat. Availability in the
 Chrome Web Store depends on a future release. An ApplyShortly account and server connection are
-still required to retrieve the profile and check saved answers.
+still required to retrieve the profile and saved answers.
 
-1. In extension settings, open **Use an OpenAI-compatible endpoint on this device**.
+1. In extension settings, open **My AI provider**.
 2. Enter the API **base URL**, including its API prefix, a model identifier, and an API key if the
    service requires one. The extension appends `/chat/completions` to the base URL. The endpoint
    must support OpenAI-style chat completions; provider implementations and model capabilities vary.
@@ -197,13 +197,13 @@ use HTTPS; HTTP is allowed only for localhost and loopback addresses. URLs canno
 credentials, query parameters or fragments.
 
 The background worker sends the question and relevant professional profile and job information
-directly to the selected endpoint. It checks the profile and answer bank first, does not fall back
+directly to the selected endpoint. The provider receives the saved profile and answers as context, does not fall back
 to ApplyShortly AI on provider failure, and marks generated answers for review. Custom endpoint mode
 uses the method selected in extension settings on this device. With AI-led selected, the extension sends page observations, the candidate profile, job context, previous actions and conversation directly to the custom provider for planning, and runs returned commands through the same verified controller. Screenshots are not sent to the custom provider. The provider must follow the requested JSON format; an invalid response stops the run rather than switching providers or engines. Chat sends the conversation, form fields and values, and relevant professional profile information directly to the custom provider. No ApplyShortly AI credits are used for these requests. The server must support custom-planner negotiation.
 The provider's own billing and data policies apply.
 
 The key stays in trusted extension-local storage on this device and is removed on sign-out or when
-the custom provider is removed. Selecting ApplyShortly credits or a saved ApplyShortly provider
+the custom provider is removed. Selecting ApplyShortly credits
 also removes the custom configuration. Re-enter the key when saving changes. Local extension storage
 is not an encrypted credential vault.
 
@@ -213,21 +213,26 @@ fictional local form filled profile fields and a reviewed draft via the LLM CLI 
 submitted only to the local test page. This is one tested flow, not a guarantee for all providers,
 models or job forms.
 
-### Choose how AI drafts are paid for
+### My AI provider
 
-In extension setup, expand **Advanced: use your own AI key**, choose OpenAI, Anthropic Claude,
-or Google Gemini, then enter your personal API key and required model identifier. **Save and use**
-selects that provider. Use **AI funding** to choose a saved provider or ApplyShortly credits.
-You can also manage the same settings in ApplyShortly **Settings → Extension AI**.
-Personal-key mode is available on every account tier. Your provider bills those requests directly;
-no ApplyShortly credits are deducted and there is no automatic fallback to credits.
+In extension Settings → **My AI provider**, choose OpenAI, Gemini, Anthropic or Custom URL.
+The preset supplies the base URL and a default model; a model override is optional for presets.
+Custom URLs require a model. Grant access to that origin, save your key, then test the connection.
+The key stays in trusted extension-local storage, never Chrome sync, and is removed on sign-out.
+Chat, **Draft it for me**, and AI-led planning send their context directly to your provider.
+There is no fallback to platform credits. In-app browser, Autopilot and scheduled AI stay on
+platform credits. Choose credits explicitly to return to the platform flow.
 
-Personal keys are sent to ApplyShortly, stored encrypted there, and never returned to
-the browser or employer site. Replace or delete them in extension setup or website Settings. Deleting a selected key leaves
-personal mode selected: restore the key or explicitly choose credits. Facts and lexical answer-bank
-fills remain available without an AI key. AI drafts are always marked for review; automatic drafts
-are on by default, like the website's agent (turn *Let AI answer questions it can't find* off in
-the popup or Settings). Turning it on drafts the open questions on a panel that's already open. A provider may reject an invalid key, unsupported model, quota, or schema.
+Gemini uses its OpenAI-compatible endpoint. Anthropic uses a small native Messages adapter with
+its API-key, version and direct-browser headers. Both planners request JSON actions as text;
+provider-native tool calling is not needed for this path. Mocked tests validate the wire formats,
+not real credentials, model availability, or browser CORS. **Test connection** makes a real billable
+request from your installed extension; organizations can restrict direct-browser requests.
+
+Existing encrypted server keys are retained but cannot be used or replaced. Re-enter a key on the
+device, save it, then test it. Only after a successful test does **Delete retained server key**
+allow you to remove the matching provider's old server key. No server key is copied to the device.
+Generated answers need review. Profile fills remain free.
 
 ### Standalone source archive
 
@@ -442,7 +447,11 @@ Signing out discards this queue so it cannot sync to another account.
 
 ## External AI assistant control (pilot)
 
-Compatible servers can enable application-only MCP control. Open **Let your assistant fill applications**
+> [!WARNING]
+> **Status: Feature Disabled**
+> External assistant browser control (connecting ChatGPT, Claude or Codex to drive the extension) is currently disabled and disconnected. The extension will not connect to the external relay or permit external agent control. Basic autofill from your profile and answers continues to work natively for free.
+
+Compatible servers can enable application-only MCP control. When enabled, users can open **Let your assistant fill applications**
 from the popup, connect the browser, and approve the assistant's exact batch locally. Keep the
 control page open. New answers require review; submission needs explicit batch submission
 permission, validation and a cancellable countdown. Stop ends browser control. Login, CAPTCHA,
@@ -490,3 +499,12 @@ and resolving the attempt in ApplyShortly before retrying.
 Embedded CAPTCHA widgets do not pause the form agent before filling accessible application
 fields. Complete any verification the site requires at final review and submit on the page.
 A challenge-only page that prevents access to the form still asks for your help immediately.
+
+### Planning-session recovery
+
+Transient protocol-2 planning failures retry the same request ID. After retries are exhausted,
+the agent pauses and Resume retries that request; taking control invalidates its returned plan.
+An expired platform session asks for Resume before creating a fresh session from the current
+form. Previous skipped questions and answer permissions must be given again. Stop ends recovery.
+The shared executor fixture corpus lives in `test/executor-contract.json`; both real-browser
+executors are exercised by the platform's `backend/tests/browser/test_executor_contract.py`.

@@ -32,6 +32,7 @@ export interface ExtensionPreferences {
   willing_to_relocate: boolean;
   requires_sponsorship: boolean | null; // null: not answered yet
   work_authorization: Record<string, string>;
+  time_zone_regions?: string[];
 }
 
 export interface ExtensionProfile {
@@ -356,9 +357,7 @@ export class JobHuntBridge {
     return this.request("/api/extension/ai", { method: "PUT", body: JSON.stringify(body) });
   }
 
-  saveAIProvider(provider: "openai" | "anthropic" | "gemini", body: { api_key: string; model: string }): Promise<ExtensionAccount["ai"]> {
-    return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "PUT", body: JSON.stringify(body) });
-  }
+
 
   deleteAIProvider(provider: "openai" | "anthropic" | "gemini"): Promise<ExtensionAccount["ai"]> {
     return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "DELETE" });

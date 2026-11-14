@@ -34,6 +34,31 @@ function page(html, url = "https://careers.example.com/apply") {
 
 const byName = (obs, name) => obs.elements.find((e) => e.name === name);
 
+test("an attached resume with an empty replacement input is already answered", () => {
+  const { observe, doc } = page(`<form>
+    <div id="upload"><label for="resume">Resume Replace file</label>
+      <div><span>Candidate_Resume.pdf</span><button type="button">Preview</button></div>
+      <div><input id="resume" type="file" required><label for="resume">Replace file</label></div>
+    </div>
+    <div><label for="cover">Cover letter</label><input id="cover" type="file"></div>
+    <input aria-label="Current salary">
+  </form>`);
+  let files = observe().elements.filter((el) => el.role === "file");
+  assert.equal(files[0].value, "Candidate_Resume.pdf");
+  assert.equal(files[0].required, true);
+  assert.equal(files[1].value, "");
+  doc.querySelector('#upload span').hidden = true;
+  files = observe().elements.filter((el) => el.role === "file");
+  assert.equal(files[0].value, "");
+});
+
+test("a resume filename elsewhere in the form does not answer an empty upload", () => {
+  const { observe } = page(`<form><p>Previous_Resume.pdf</p>
+    <div><label for="resume">Replace file</label><input id="resume" type="file"></div>
+  </form>`);
+  assert.equal(observe().elements.find((el) => el.role === "file").value, "");
+});
+
 test("AX fallback preserves native input types for excluded search and password controls", () => {
   const { doc, A } = page('<input type="search" aria-label="Search"><input type="password" aria-label="Password">');
   for (const input of doc.querySelectorAll("input")) {

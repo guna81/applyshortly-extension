@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "html": "<!doctype html><title>Executor contract</title><form onsubmit='window.submissions++; return false'><label>First name<input id='first' name='first' required></label><label>Country of residence<select id='country' name='country' required><option value=''>Choose</option><option>India</option><option>Canada</option></select></label><label><input id='consent' type='checkbox'>Privacy consent</label><label>Phone<input id='phone' type='tel'></label><label>Masked number<input id='masked' inputmode='numeric' oninput=\"this.value=this.value.replace(/[^0-9]/g,'').replace(/(\\d{3})(?=\\d)/g,'$1-')\"></label><label>Password<input id='secret' type='password'></label><label>Resume<input id='resume' type='file'></label><button type='submit'>Submit application</button></form><script>window.submissions=0;</script>",
+  "cases": [
+    {
+      "id": "text-readback",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "First name",
+          "text": "Fixture"
+        }
+      ],
+      "done": 1,
+      "values": {
+        "#first": "Fixture"
+      }
+    },
+    {
+      "id": "native-picker",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "Country of residence",
+          "text": "India"
+        }
+      ],
+      "done": 1,
+      "values": {
+        "#country": "India"
+      }
+    },
+    {
+      "id": "checkbox-readback",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "Privacy consent",
+          "checked": true
+        }
+      ],
+      "done": 1,
+      "checked": {
+        "#consent": true
+      }
+    },
+    {
+      "id": "partial-batch",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "First name",
+          "text": "Fixture"
+        },
+        {
+          "name": "Password",
+          "text": "never-write"
+        },
+        {
+          "name": "Country of residence",
+          "text": "India"
+        }
+      ],
+      "done": 1,
+      "values": {
+        "#first": "Fixture",
+        "#country": ""
+      }
+    },
+    {
+      "id": "dependent-reset",
+      "setup": "document.querySelector('#country').addEventListener('change', () => { document.querySelector('#first').value = ''; });document.querySelector('#first').addEventListener('input', () => { if (document.querySelector('#country').value) document.querySelector('#first').value = ''; });",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "First name",
+          "text": "Fixture"
+        },
+        {
+          "name": "Country of residence",
+          "text": "India"
+        }
+      ],
+      "done": 1,
+      "values": {
+        "#first": "",
+        "#country": "India"
+      }
+    },
+    {
+      "id": "stale-observation",
+      "type": "type",
+      "name": "First name",
+      "text": "Fixture",
+      "stale": true,
+      "reject": true,
+      "values": {
+        "#first": ""
+      }
+    },
+    {
+      "id": "password-refusal",
+      "type": "type",
+      "name": "Password",
+      "text": "never-write",
+      "reject": true,
+      "values": {
+        "#secret": ""
+      }
+    },
+    {
+      "id": "submit-refusal",
+      "type": "click",
+      "name": "Submit application",
+      "reject": true
+    },
+    {
+      "id": "replaced-control",
+      "type": "type",
+      "name": "First name",
+      "text": "Fixture",
+      "before": "document.querySelector('#first').remove()",
+      "reject": true
+    },
+    {
+      "id": "required-review",
+      "type": "review",
+      "missing": 2
+    },
+    {
+      "id": "native-options",
+      "type": "options",
+      "name": "Country of residence",
+      "options": [
+        "India",
+        "Canada"
+      ]
+    },
+    {
+      "id": "phone-readback",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "Phone",
+          "text": "+916381868258"
+        }
+      ],
+      "done": 1,
+      "values": {
+        "#phone": "+916381868258"
+      }
+    },
+    {
+      "id": "masked-readback",
+      "type": "fill_form",
+      "fields": [
+        {
+          "name": "Masked number",
+          "text": "123456789"
+        }
+      ],
+      "done": 1,
+      "values": {
+        "#masked": "123-456-789"
+      }
+    },
+    {
+      "id": "upload-readback",
+      "type": "upload",
+      "name": "Resume",
+      "upload": true
+    },
+    {
+      "id": "user-edit",
+      "type": "type",
+      "name": "First name",
+      "text": "overwrite",
+      "before_fill": true,
+      "reject": true,
+      "values": {
+        "#first": "User edit"
+      }
+    }
+  ]
+}

@@ -996,3 +996,10 @@ test("a legal fieldset retains independent required acknowledgements", () => {
   assert.equal(fields.length, 2);
   assert.ok(fields.every((f) => f.required && !f.options));
 });
+
+test("a text box parked far off-screen (honeypot) is not a field", () => {
+  const { doc, F } = page(`<form><label for="w">Leave this field empty</label><input id="w" type="text" tabindex="-1" name="website">
+    <label for="n">Full name</label><input id="n" type="text" name="name"></form>`);
+  doc.getElementById("w").getBoundingClientRect = () => ({ left: -9999, right: -9812, top: 667, bottom: 691, width: 187, height: 24 });
+  assert.deepEqual(plain(F.collectFields(doc, { checkLayout: false }).map((f) => f.label)), ["Full name"]);
+});

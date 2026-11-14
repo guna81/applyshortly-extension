@@ -1,3 +1,4 @@
+import { PROVIDER_PRESETS } from "../src/custom-ai.js";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -23,7 +24,7 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
           case 'connectionSettings': data = { configured: connected }; break;
           case 'test': data = connected ? { connected, configured: true, connectionType: 'automatic', name: 'Fixture', email: 'fixture@example.com', plan: 'pro', credits: 42, billingEnabled, ai } : { configured: false }; break;
           case 'browserSignIn': connected = autoConnect || message.interactive; data = { state: connected ? 'connected' : 'signin_required' }; break;
-          case 'saveAIProvider': ai.configured = [{ provider: message.provider, model: message.model }]; data = ai; break;
+          case 'saveCustomAI': custom = { enabled: true, baseUrl: message.baseUrl, model: message.model }; data = true; break;
           case 'selectAI': ai = { ...ai, mode: message.mode, provider: message.provider ?? null }; data = ai; break;
           case 'customAISettings': data = custom; break;
           case 'disableCustomAI': custom = { ...custom, enabled: false }; data = true; break;
@@ -37,7 +38,9 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
     commands: { getAll: async () => [] },
     storage: { session: { get: async () => ({}) }, local: { set: async (values) => Object.assign(stored, values) }, onChanged: { addListener: (fn) => { storageListener = fn; } } },
   };
-  window.eval(readFileSync(new URL('../src/options.js', import.meta.url), 'utf8'));
+  window.PROVIDER_PRESETS = PROVIDER_PRESETS;
+  window.chrome.permissions = { request: async () => true };
+  window.eval(readFileSync(new URL('../src/options.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, ''));
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
   await flush();
   return { window, document: window.document, calls, stored, flush, setConnected: (value) => { connected = value; }, storageChanged: (changes) => storageListener(changes, 'local'), close: () => window.close() };
@@ -66,8 +69,8 @@ test('setup hides URL configuration and silently connects an existing web sessio
     assert.equal(h.calls.find((item) => item.type === 'browserSignIn').interactive, false);
     assert.match(h.document.querySelector('#connTitle').textContent, /Connected/);
     assert.match(h.document.querySelector('#accountSummary').textContent, /Pro plan · 42 credits/);
-    assert.equal(h.document.querySelector('#providerKey').type, 'password');
-    assert.equal(h.document.querySelector('#advancedAI').open, false);
+    assert.equal(h.document.querySelector('#customKey').type, 'password');
+    assert.equal(h.document.querySelector('#customDetails').open, false);
   } finally { h.close(); }
 });
 
@@ -84,27 +87,23 @@ test('signed-out setup shows a sign-in button; it opens interactive sign-in only
   } finally { h.close(); }
 });
 
-test('provider dropdown saves required key and model, selects it, and clears the input', async () => {
+test('provider preset saves only on device with a default model and clears the key', async () => {
   const h = await setup({ signedIn: true });
   try {
-    assert.deepEqual(Array.from(h.document.querySelector('#provider').options, (option) => option.value), ['openai', 'anthropic', 'gemini']);
-    const form = h.document.querySelector('#providerForm');
-    h.document.querySelector('#provider').value = 'anthropic';
-    h.document.querySelector('#providerKey').value = 'fixture-personal-key';
-    form.dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    const preset = h.document.querySelector('#providerPreset');
+    assert.deepEqual(Array.from(preset.options, (option) => option.value), ['openai', 'gemini', 'anthropic', 'custom']);
+    preset.value = 'anthropic';
+    preset.dispatchEvent(new h.window.Event('change'));
+    h.document.querySelector('#customKey').value = 'fixture-personal-key';
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
     await h.flush();
+    const saved = h.calls.find((item) => item.type === 'saveCustomAI');
+    assert.equal(saved.baseUrl, PROVIDER_PRESETS.anthropic.baseUrl);
+    assert.equal(saved.model, PROVIDER_PRESETS.anthropic.model);
+    assert.equal(h.document.querySelector('#customKey').value, '');
     assert.equal(h.calls.some((item) => item.type === 'saveAIProvider'), false);
-    h.document.querySelector('#providerModel').value = 'fixture-model';
-    form.dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
-    await h.flush();
-    assert.deepEqual(JSON.parse(JSON.stringify(h.calls.find((item) => item.type === 'saveAIProvider'))), { type: 'saveAIProvider', provider: 'anthropic', apiKey: 'fixture-personal-key', model: 'fixture-model' });
-    assert.equal(h.document.querySelector('#providerKey').value, '');
-    assert.equal(h.document.body.textContent.includes('fixture-personal-key'), false);
-    assert.equal(h.document.querySelector('#aiFunding').value, 'anthropic');
-    h.document.querySelector('#savedProviders button').click();
-    await h.flush();
-    assert.equal(h.document.querySelector('#aiFunding').value, 'anthropic');
-    assert.match(h.document.querySelector('#aiFunding').selectedOptions[0].textContent, /missing/);
+    assert.equal(h.document.querySelector('#providerForm'), null);
+    assert.equal(h.document.querySelector('#aiFunding').value, 'custom');
   } finally { h.close(); }
 });
 

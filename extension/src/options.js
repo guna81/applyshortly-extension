@@ -1,3 +1,4 @@
+import { PROVIDER_PRESETS } from "./custom-ai.js";
 /** The page's own elements, mostly form controls. @type {(id: string) => any} */
 const $ = (id) => document.getElementById(id);
 const P = globalThis.JobHuntPanel;
@@ -8,7 +9,7 @@ let connected = false;
 let connecting;
 let currentAI;
 let currentCustomAI;
-const providerNames = { openai: "OpenAI", anthropic: "Anthropic Claude", gemini: "Google Gemini" };
+
 
 async function send(type, extra = {}) {
   const result = await chrome.runtime.sendMessage({ type, ...extra });
@@ -28,27 +29,10 @@ function setMsg(text, kind = "") {
 function renderAI(ai = currentAI) {
   currentAI = ai;
   $("aiFunding").replaceChildren(new Option("ApplyShortly credits", "platform"));
-  if (currentCustomAI?.enabled) $("aiFunding").add(new Option(`Custom endpoint (${currentCustomAI.model})`, "custom"));
-  $("savedProviders").replaceChildren();
-  for (const item of ai?.configured ?? []) {
-    $("aiFunding").add(new Option(`${providerNames[item.provider]} (${item.model})`, item.provider));
-    const row = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = `${providerNames[item.provider]} · ${item.model} · Key stored `;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = `Delete ${providerNames[item.provider]} key`;
-    remove.disabled = aiBusy || !connected;
-    remove.addEventListener("click", () => void aiAction(() => send("deleteAIProvider", { provider: item.provider })));
-    row.append(label, remove);
-    $("savedProviders").append(row);
-  }
-  if (ai?.mode === "personal" && !ai.configured?.some((item) => item.provider === ai.provider)) {
-    $("aiFunding").add(new Option("Personal key missing — add a key or choose credits", ai.provider));
-  }
-  $("aiFunding").value = currentCustomAI?.enabled ? "custom" : ai?.mode === "personal" ? ai.provider : "platform";
+  if (currentCustomAI?.enabled) $("aiFunding").add(new Option(`My AI provider (${currentCustomAI.model})`, "custom"));
+  if (ai?.mode === "personal" && !currentCustomAI?.enabled) $("aiFunding").add(new Option("Re-enter your key on this device", "migration"));
+  $("aiFunding").value = currentCustomAI?.enabled ? "custom" : ai?.mode === "personal" ? "migration" : "platform";
   $("aiFunding").disabled = aiBusy || !connected;
-  $("saveProvider").disabled = aiBusy || !connected;
 }
 async function aiAction(action) {
   aiBusy = true;
@@ -77,7 +61,7 @@ async function test() {
     showConn("good", `Connected as ${s.name ?? s.email ?? "your account"}`, "You're ready to autofill.");
     const plan = s.plan ? s.plan[0].toUpperCase() + s.plan.slice(1) : "Account";
     $("accountSummary").textContent = s.billingEnabled === false ? `${s.email} · No credit charges` : `${s.email} · ${plan} plan · ${s.credits ?? 0} credits available`;
-    $("aiMode").textContent = s.ai?.mode === "personal" ? `Personal key: ${providerNames[s.ai.provider] ?? s.ai.provider}. No ApplyShortly credits used.` : s.billingEnabled === false ? "ApplyShortly AI — no credit charges." : `ApplyShortly credits: ${s.credits ?? 0} available.`;
+    $("aiMode").textContent = s.ai?.mode === "personal" ? "Server-stored keys are disabled. Re-enter your key below to use it on this device, or explicitly choose credits." : s.billingEnabled === false ? "ApplyShortly AI — no credit charges." : `ApplyShortly credits: ${s.credits ?? 0} available.`;
     // Automatic connections share this browser's website session; manual keys stand alone.
     $("logoutHint").textContent = s.connectionType === "automatic" ? "Logging out also signs this browser out of the ApplyShortly website." : "Logging out revokes this extension's API key.";
     const custom = await send("customAISettings");
@@ -113,6 +97,7 @@ async function load() {
   const custom = await send("customAISettings");
   if (custom?.enabled) {
     $("customDetails").open = true;
+    $("providerPreset").value = Object.keys(PROVIDER_PRESETS).find((key) => PROVIDER_PRESETS[key].baseUrl === custom.baseUrl) || "custom";
     $("customBaseUrl").value = custom.baseUrl;
     $("customModel").value = custom.model;
     $("customStatus").textContent = "Custom provider is active for AI chat, drafts and AI-led planning. Re-enter the key when saving changes.";
@@ -179,7 +164,7 @@ $("logout").addEventListener("click", async () => {
   $("logout").disabled = true;
   try {
     await send("disconnect");
-    $("providerKey").value = "";
+    $("customKey").value = "";
     $("pairingMsg").textContent = "Logged out.";
     await test();
   } catch (error) { $("pairingMsg").textContent = `Could not log out: ${error.message}`; }
@@ -196,27 +181,14 @@ $("form").addEventListener("submit", async (event) => {
     await test();
   } catch (error) { setMsg(error.message, "bad"); }
 });
-$("providerForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!$("providerForm").reportValidity()) return;
-  await aiAction(async () => {
-    const provider = $("provider").value;
-    await send("disableCustomAI");
-    currentCustomAI = undefined;
-    $("customStatus").textContent = "Using ApplyShortly provider settings.";
-    await send("saveAIProvider", { provider, apiKey: $("providerKey").value.trim(), model: $("providerModel").value.trim() });
-    $("providerKey").value = "";
-    return send("selectAI", { mode: "personal", provider });
-  });
-});
 $("aiFunding").addEventListener("change", () => {
   const selection = $("aiFunding").value;
-  if (selection === "custom") return;
+  if (selection !== "platform") { $("customDetails").open = true; return; }
   void aiAction(async () => {
     await send("disableCustomAI");
     currentCustomAI = undefined;
     $("customStatus").textContent = "Using ApplyShortly provider settings.";
-    return send("selectAI", selection === "platform" ? { mode: "platform" } : { mode: "personal", provider: selection });
+    return send("selectAI", { mode: "platform" });
   });
 });
 $("retest").addEventListener("click", () => void connect());
@@ -264,7 +236,8 @@ $("customAIForm").addEventListener("submit", async (event) => {
     if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) || url.username || url.password || url.search || url.hash) throw new Error("Use an HTTPS URL or a local HTTP URL without credentials, query or fragment.");
     const allowed = await chrome.permissions.request({ origins: [`${url.origin}/*`] });
     if (!allowed) throw new Error("Provider access was not granted.");
-    await send("saveCustomAI", { baseUrl: raw, model: $("customModel").value.trim(), apiKey: $("customKey").value.trim() });
+    $("deleteRetainedKey").disabled = true;
+    await send("saveCustomAI", { baseUrl: raw, model: $("customModel").value.trim() || PROVIDER_PRESETS[$("providerPreset").value]?.model || "", apiKey: $("customKey").value.trim() });
     $("customKey").value = "";
     $("customStatus").textContent = "Custom provider saved and active for AI chat, drafts and AI-led planning.";
     await test();
@@ -272,10 +245,31 @@ $("customAIForm").addEventListener("submit", async (event) => {
 });
 $("customTest").addEventListener("click", async () => {
   $("customStatus").textContent = "Testing…";
-  try { await send("testCustomAI"); $("customStatus").textContent = "Connection successful."; }
+  try {
+    await send("testCustomAI");
+    $("customStatus").textContent = "Connection successful. You can now delete this provider's retained server key.";
+    $("deleteRetainedKey").disabled = false;
+  }
   catch (error) { $("customStatus").textContent = error.message; }
 });
 $("customDisable").addEventListener("click", async () => {
   try { await send("disableCustomAI"); $("customKey").value = ""; $("customStatus").textContent = "Custom provider removed."; await test(); }
   catch (error) { $("customStatus").textContent = error.message; }
+});
+
+$("providerPreset").addEventListener("change", () => {
+  const preset = PROVIDER_PRESETS[$("providerPreset").value];
+  $("customBaseUrl").value = preset?.baseUrl || "";
+  $("customModel").value = "";
+  $("customModel").placeholder = preset?.model || "Enter a model identifier";
+  $("customKey").value = "";
+});
+if (!$("customBaseUrl").value) $("customBaseUrl").value = PROVIDER_PRESETS.openai.baseUrl;
+
+$("deleteRetainedKey").addEventListener("click", async () => {
+  try {
+    await send("deleteAIProvider");
+    $("deleteRetainedKey").disabled = true;
+    $("customStatus").textContent = "Retained server key deleted. Your on-device provider remains active.";
+  } catch (error) { $("customStatus").textContent = error.message; }
 });

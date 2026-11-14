@@ -116,7 +116,7 @@ export class JobHuntBridge {
 
   selectAI(body) { return this.request("/api/extension/ai", { method: "PUT", body: JSON.stringify(body) }); }
 
-  saveAIProvider(provider, body) { return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "PUT", body: JSON.stringify(body) }); }
+
 
   deleteAIProvider(provider) { return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "DELETE" }); }
 

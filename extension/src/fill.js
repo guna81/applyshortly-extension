@@ -302,12 +302,19 @@
     return !el.closest('footer, nav, [role="contentinfo"], [role="navigation"], [role="search"]');
   }
 
+  // Anti-spam honeypot: a text box people never see because it is parked far off-screen (left:-9999px),
+  // often labelled "Leave this field empty". Filling it flags the submission as a bot, so it is never a question.
+  function isHoneypot(el) {
+    const r = el.getBoundingClientRect?.();
+    return Boolean(r && (r.width || r.height) && (r.right < -1000 || r.bottom < -1000));
+  }
+
   function collectFields(doc, { checkLayout = true } = {}) {
     const fields = [];
     const visible = (el) => applicationControl(el) && isVisible(el, checkLayout);
 
     for (const el of doc.querySelectorAll(TEXT_INPUT)) {
-      if (!visible(el) || !isEditable(el) || selectLikeInput(el)) continue;
+      if (!visible(el) || !isEditable(el) || selectLikeInput(el) || isHoneypot(el)) continue;
       // Airtable's focus helper is not a separate application question.
       if (el.matches('input.editableFix') && el.parentElement?.querySelector('[role="textbox"][contenteditable]')) continue;
       // React Select (including Greenhouse) adds an invisible input for native required

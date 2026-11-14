@@ -52,9 +52,10 @@ const KEEP = "externalBrowser"; // { wanted, device, autoApprove } kept across s
 /**
  * @typedef {{ get: (key: string) => Promise<Record<string, any>>, set: (value: Record<string, any>) => Promise<void> }} KeyValueStore
  */
-/** @param {{ settings: any, sources: any, resume: any, report: any, makeDriver?: any, store?: KeyValueStore, hasAccess?: (origins: string[]) => Promise<boolean>, http?: (url: string, init?: any) => Promise<any>, timers?: { setTimeout: (fn: () => void, ms: number) => any, clearTimeout: (id: any) => void } }} options */
+/** @param {{ settings: any, sources: any, resume: any, report: any, enabled?: boolean, makeDriver?: any, store?: KeyValueStore, hasAccess?: (origins: string[]) => Promise<boolean>, http?: (url: string, init?: any) => Promise<any>, timers?: { setTimeout: (fn: () => void, ms: number) => any, clearTimeout: (id: any) => void } }} options */
 export function externalBrowser({
   settings, sources, resume, report,
+  enabled = true,
   makeDriver = (tabId, code) => new TabDriver(tabId, code),
   // Small persistent store (chrome.storage.local in the extension) and the "has the user already
   // allowed these sites" check. Without them nothing is remembered and nothing is auto-approved.
@@ -459,6 +460,7 @@ export function externalBrowser({
     }, delay);
   }
   async function connect() {
+    if (!enabled) throw new Error("External assistant control is currently disabled.");
     clearTimeout(reconnectTimer); reconnectTimer = null; attempts = 0;
     const result = await open();
     wanted = true;
@@ -468,7 +470,7 @@ export function externalBrowser({
   }
   /** Reconnects on its own after a browser start, an extension reload or a service-worker restart. */
   async function resumeIfWanted() {
-    if (wanted || socket) return false;
+    if (!enabled || wanted || socket) return false;
     const kept = (await store.get(KEEP))[KEEP] ?? {};
     autoApprove = kept.autoApprove === true;
     if (!kept.wanted || !(await settings()).token) return false;
@@ -494,7 +496,7 @@ export function externalBrowser({
     ownsTab: (tabId) => Boolean((driver && (driver.tabId === tabId || driver.candidateTabs.has(tabId))) || released?.tabId === tabId),
     /** The application tab the assistant is working in (or let go of while idle/paused), for the panel. */
     workingTab: () => driver?.tabId ?? released?.tabId ?? null,
-    status: () => ({ device_id: device, autoApprove, standing, wanted, batches, submissionState, pendingReview, pendingNavigation, connected: timer !== null, paused: userPaused, activity: activity.slice(-60) }),
+    status: () => ({ enabled, device_id: device, autoApprove, standing, wanted, batches, submissionState, pendingReview, pendingNavigation, connected: timer !== null, paused: userPaused, activity: activity.slice(-60) }),
     /** The user takes the form by hand: let go of the tab and refuse commands until they continue. */
     async pauseForUser() {
       if (userPaused) return true;

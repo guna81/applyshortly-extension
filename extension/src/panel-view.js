@@ -79,6 +79,10 @@
       .body { flex: 1 1 auto; overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
       .chip { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 99px; background: var(--bg);
         color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+      .recheck { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+      .recheck-h { font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+      .recheck-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+      .recheck-chips .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
       .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
       button.b { font: inherit; font-size: 12.5px; border-radius: 8px; padding: 5px 10px; border: 1px solid var(--line);
         background: var(--bg); color: var(--fg); cursor: pointer; white-space: nowrap; }
@@ -330,7 +334,9 @@
       for (const line of steps.slice(-14)) log.append(el("li", {}, line));
       const review = (ctl.agent.filled ?? []).filter((f) => f.needs_review);
       return el("div", { class: "activity" },
-        review.length ? el("div", { class: "filled" }, "Double-check:", review.map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label.length > 40 ? `${f.label.slice(0, 40)}…` : f.label))) : null,
+        review.length ? el("div", { class: "recheck" },
+          el("div", { class: "recheck-h" }, `Double-check ${review.length === 1 ? "this answer" : `these ${review.length} answers`}`),
+          el("div", { class: "recheck-chips" }, review.map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label)))) : null,
         el("details", {}, el("summary", {}, "What I did on the page"), log));
     }
 

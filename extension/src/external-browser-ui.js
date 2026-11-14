@@ -91,6 +91,25 @@ function renderAttention(data) {
 async function refresh() {
   try {
     const data = await send("status");
+    if (data.enabled === false) {
+      const banner = $("disabled-banner");
+      if (banner) banner.hidden = false;
+      $("dot").className = "status-dot bad";
+      $("state").textContent = "Feature disabled";
+      $("recovery").textContent = "External assistant browser control is currently disabled. Connected agents (such as ChatGPT, Claude or Codex) cannot connect to or control this browser.";
+      const connectBtn = /** @type {HTMLButtonElement} */ ($("connect"));
+      connectBtn.hidden = false;
+      connectBtn.disabled = true;
+      connectBtn.textContent = "Disabled";
+      $("stop").hidden = true;
+      $("continue").hidden = true;
+      trust.disabled = true;
+      standing.disabled = true;
+      const sitesBtn = /** @type {HTMLButtonElement} */ ($("sites"));
+      sitesBtn.disabled = true;
+      $("activity").replaceChildren(activityList([], 30));
+      return;
+    }
     $("dot").className = `status-dot ${data.connected ? "good" : "bad"}`;
     const state = connectionState(data);
     $("state").textContent = state.label;

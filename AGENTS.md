@@ -63,3 +63,14 @@ source of truth, `PUT /api/extension/browser/standing-approval`). While on, a `s
 reviewed and skips the countdown, and **Stop access** turns it off. Do not extend it to skip validation,
 blockers, the existing-confirmation check, new-domain approval or unconfirmed-attempt locking, and never to job
 boards beyond one job at a time or to CAPTCHA/sign-in pages.
+
+
+## Paired form-agent fixes
+
+For planner behavior changes, fix Python first and mirror `extension/src/custom-agent.js`.
+Add a page snapshot and scripted replies to the extension's `test/agent-scenarios.json` and run
+both the Node replay and backend `test_shared_scenario_replay`. Runtime policy data is in
+`extension/src/agent-rules.json`; regenerate `src/agent-rules.js` with
+`python3 scripts/agent_rules.py` in the extension and keep the backend `services/agent/rules.json`
+copy identical. Shared tests check all copies. See the platform's
+`docs/development/shared-agent-rules.md`. Never restore server-stored personal-key calls.

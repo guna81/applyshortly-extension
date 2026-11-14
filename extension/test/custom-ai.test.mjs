@@ -37,3 +37,42 @@ test('assistant validates untrusted updates and preserves form options', async (
   assert.match(result.warnings[0], /Unknown options/);
   await assert.rejects(customAssist({}, input, {}, async () => 'not json'), /invalid assistant response/);
 });
+
+test('panel chat receives identity, preferences and saved answers even with long work history', async () => {
+  const profile = { full_name: 'Candidate', email: 'candidate@example.test', gender: 'Male', date_of_birth: '2000-01-01', experience: [{ highlights: ['x'.repeat(7000)] }], preferences: { time_zone_regions: ['US', 'Europe'] }, answers: [{ question_pattern: 'Start date', answer: 'Immediately' }], resume_url: '/private/resume' };
+  await customAssist({}, { fields: [{ key: 'name', label: 'Name', kind: 'text' }] }, profile, async (_config, messages) => {
+    const candidate = JSON.parse(JSON.parse(messages[1].content).candidate);
+    assert.equal(candidate.full_name, profile.full_name);
+    assert.equal(candidate.email, profile.email);
+    assert.deepEqual(candidate.preferences.time_zone_regions, ['US', 'Europe']);
+    assert.deepEqual(candidate.answers, profile.answers);
+    assert.equal(candidate.has_resume_file, true);
+    assert.equal(candidate.resume_url, undefined);
+    return JSON.stringify({ reply: 'Known', updates: [], done: true, asking: '', choices: [] });
+  });
+});
+
+test('Gemini uses its compatible endpoint and Anthropic uses a native Messages adapter', async () => {
+  const { PROVIDER_PRESETS } = await import('../src/custom-ai.js');
+  const original = globalThis.fetch;
+  const calls = [];
+  try {
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, init, body: JSON.parse(init.body) });
+      return { ok: true, json: async () => url.endsWith('/messages') ? { content: [{ type: 'text', text: '{"status":"continue"}' }] } : { choices: [{ message: { content: '{"status":"continue"}' } }] } };
+    };
+    const messages = [{ role: 'system', content: 'Rules' }, { role: 'user', content: 'Page snapshot' }];
+    for (const provider of ['gemini', 'anthropic']) {
+      assert.equal(await complete({ ...PROVIDER_PRESETS[provider], apiKey: 'fixture-secret' }, messages), '{"status":"continue"}');
+    }
+    assert.equal(calls[0].url, PROVIDER_PRESETS.gemini.baseUrl + '/chat/completions');
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer fixture-secret');
+    assert.equal(calls[1].url, PROVIDER_PRESETS.anthropic.baseUrl + '/messages');
+    assert.equal(calls[1].init.headers['x-api-key'], 'fixture-secret');
+    assert.equal(calls[1].init.headers['anthropic-dangerous-direct-browser-access'], 'true');
+    assert.equal(calls[1].body.system, 'Rules');
+    assert.deepEqual(calls[1].body.messages, messages.slice(1));
+    assert.equal(calls[1].init.credentials, 'omit');
+    assert.equal(calls[1].init.redirect, 'error');
+  } finally { globalThis.fetch = original; }
+});

@@ -67,36 +67,25 @@
       <label>Active AI provider
         <select id="aiFunding" disabled><option value="platform">ApplyShortly credits</option></select>
       </label>
-      <p class="hint funding-hint">Choose which provider powers AI chat and drafts. Selecting an ApplyShortly option turns off the custom endpoint.</p>
-      <details class="settings-details" id="advancedAI">
-        <summary>Use a personal provider key <span>Managed by ApplyShortly</span></summary>
-        <form id="providerForm">
-          <label>Provider
-            <select id="provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select>
-          </label>
-          <label>Personal API key<input id="providerKey" type="password" autocomplete="off" spellcheck="false" required minlength="10" maxlength="4096"></label>
-          <label>Model identifier<input id="providerModel" type="text" autocomplete="off" spellcheck="false" required maxlength="100" pattern="[a-zA-Z0-9._:/\-]+"></label>
-          <button type="submit" id="saveProvider" disabled>Save and use</button>
-        </form>
-        <ul id="savedProviders"></ul>
-        <p class="hint">Provider requests are billed directly by your provider. Personal mode never automatically switches to ApplyShortly credits.</p>
-      </details>
+      <p class="hint funding-hint">Choose ApplyShortly credits or your provider for AI chat, drafts and AI-led planning.</p>
       <details class="settings-details custom-details" id="customDetails">
-        <summary>OpenAI-compatible endpoint <span>Configured on this device</span></summary>
+        <summary>My AI provider <span>Stored on this device</span></summary>
         <form id="customAIForm">
-          <label>API base URL<input id="customBaseUrl" type="url" placeholder="http://127.0.0.1:11434/v1" required></label>
-          <label>Model identifier<input id="customModel" type="text" required maxlength="200"></label>
+          <label>Provider preset<select id="providerPreset"><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic Claude</option><option value="custom">Custom URL</option></select></label>
+          <label>API base URL<input id="customBaseUrl" type="url" placeholder="http://localhost:11434/v1" required></label>
+          <label>Model identifier<input id="customModel" type="text" placeholder="Preset default (optional)" maxlength="200"></label>
           <label>API key (optional for local servers)<input id="customKey" type="password" autocomplete="off" maxlength="4096"></label>
           <div class="actions custom-actions"><button class="primary" type="submit">Save and use for AI</button>
           <button type="button" id="customTest">Test connection</button>
-          <button type="button" id="customDisable">Remove custom provider</button></div>
+          <button type="button" id="deleteRetainedKey" disabled>Delete retained server key after successful test</button>
+          <button type="button" id="customDisable">Use ApplyShortly credits</button></div>
         </form>
         <p id="customStatus" role="status"></p>
-        <p class="hint">The key stays on this device and is removed on sign-out. AI chat, drafts, and AI-led form planning use this endpoint. The provider receives relevant profile, job, and form details; screenshots are not sent.</p>
+        <p class="hint">The key stays on this device and is removed on sign-out. AI chat, drafts, and AI-led form planning use this endpoint. The provider receives relevant profile, job, and form details; screenshots are not sent. Select AI-led under Preferences to use your provider for form navigation.</p>
       </details>
       <p id="aiMessage" role="status" aria-live="polite"></p>
       <button type="button" id="manageAI">Open AI settings in ApplyShortly</button>
-      <p class="hint">Personal keys are stored encrypted by ApplyShortly. Your provider bills those requests directly. Profile and answer-bank fills are free.</p>
+      <p class="hint">Your key stays in the extension and is never sent to ApplyShortly. In-app browser, Autopilot and scheduled AI use platform credits. Profile and answer-bank fills are free.</p>
     </section>
     <section class="card settings-card preferences-card" id="preferences">
       <span class="eyebrow">YOUR WORKFLOW</span><h2>Preferences</h2>
@@ -141,7 +130,7 @@
 
     </aside>
     </div>
-    <footer class="muted foot-page">Version <span id="version"></span> · Connection credentials stay inside the extension. Personal AI keys are stored encrypted by ApplyShortly.</footer>
+    <footer class="muted foot-page">Version <span id="version"></span> · Connection credentials stay inside the extension. AI provider keys stay on this device.</footer>
   </main>
   <script src="panel-model.js"></script>
   <script src="options.js" type="module"></script>

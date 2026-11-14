@@ -1,0 +1,172 @@
+{
+  "_about": "Rules every form-agent planner must apply the same way. Run by extension/test/agent-rules.test.mjs (custom-provider planner) and apply-assistant/backend/tests/test_agent_rules_shared.py (platform engine). Change a case here and both must still pass.",
+  "standing_consent_labels": [
+    {
+      "label": "I have read the Applicant Privacy Notice and agree to Neon Link using my information as it describes, including review with the help of automated tools and considering me for this and future roles.",
+      "tick": true
+    },
+    {
+      "label": "I consent to storing my information in line with the Privacy Policy.",
+      "tick": true
+    },
+    {
+      "label": "I accept the Terms and Privacy Policy",
+      "tick": true
+    },
+    {
+      "label": "I agree to the data processing terms",
+      "tick": true
+    },
+    {
+      "label": "I acknowledge the privacy notice",
+      "tick": true
+    },
+    {
+      "label": "I certify that the above is true and correct",
+      "tick": false
+    },
+    {
+      "label": "I agree I am authorized to work in India",
+      "tick": false
+    },
+    {
+      "label": "I confirm I am over 18 and accept the terms",
+      "tick": false
+    },
+    {
+      "label": "I confirm my age is over 21 and accept the privacy policy",
+      "tick": false
+    },
+    {
+      "label": "I do not require visa sponsorship and accept the privacy policy",
+      "tick": false
+    },
+    {
+      "label": "I identify as a veteran and accept the terms",
+      "tick": false
+    },
+    {
+      "label": "I am Hispanic or Latino and accept the terms",
+      "tick": false
+    },
+    {
+      "label": "My pronouns are shared in line with the privacy policy",
+      "tick": false
+    },
+    {
+      "label": "I have not been convicted of a crime and accept the terms",
+      "tick": false
+    },
+    {
+      "label": "Tick to confirm you are not a robot (CAPTCHA) and accept the terms",
+      "tick": false
+    },
+    {
+      "label": "I am not a robot and accept the privacy policy",
+      "tick": false
+    },
+    {
+      "label": "Enter the code shown and accept the privacy policy",
+      "tick": false
+    },
+    {
+      "label": "My information is correct and I accept the terms",
+      "tick": false
+    },
+    {
+      "label": "I am over 25 and accept the terms",
+      "tick": false
+    },
+    {
+      "label": "I consent to marketing phone calls",
+      "tick": false
+    },
+    {
+      "label": "I acknowledge the employee handbook",
+      "tick": false
+    },
+    {
+      "label": "I accept the company attendance policy",
+      "tick": false
+    }
+  ],
+  "typed_links": [
+    {
+      "typed": "fetch data from here - https://guna81.netlify.app/",
+      "links": [
+        "https://guna81.netlify.app"
+      ]
+    },
+    {
+      "typed": "Read https://github.com/guna81/applyshortly-extension.",
+      "links": [
+        "https://github.com/guna81/applyshortly-extension"
+      ]
+    },
+    {
+      "typed": "see (https://Guna81.Netlify.app/) please",
+      "links": [
+        "https://guna81.netlify.app"
+      ]
+    },
+    {
+      "typed": "HTTPS://A.COM/Path",
+      "links": [
+        "https://a.com/Path"
+      ]
+    },
+    {
+      "typed": "https://a.com/x#section",
+      "links": [
+        "https://a.com/x"
+      ]
+    },
+    {
+      "typed": "https://a.com/x?y=1!",
+      "links": [
+        "https://a.com/x?y=1"
+      ]
+    },
+    {
+      "typed": "http://plain.example/page",
+      "links": []
+    },
+    {
+      "typed": "https://a.com/x and again https://a.com/x/",
+      "links": [
+        "https://a.com/x"
+      ]
+    },
+    {
+      "typed": "no link here",
+      "links": []
+    }
+  ],
+  "typed_link_probes": [
+    {
+      "typed": "https://guna81.netlify.app/",
+      "probe": "https://guna81.netlify.app",
+      "allowed": true
+    },
+    {
+      "typed": "https://guna81.netlify.app/",
+      "probe": "https://GUNA81.netlify.app/",
+      "allowed": true
+    },
+    {
+      "typed": "https://guna81.netlify.app/",
+      "probe": "https://guna81.netlify.app.evil.example",
+      "allowed": false
+    },
+    {
+      "typed": "https://guna81.netlify.app/",
+      "probe": "https://evil.example",
+      "allowed": false
+    },
+    {
+      "typed": "https://a.com/x",
+      "probe": "https://a.com/y",
+      "allowed": false
+    }
+  ]
+}

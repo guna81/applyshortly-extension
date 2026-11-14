@@ -2030,6 +2030,11 @@
       },
       "ExtensionPreferences": {
         "properties": {
+          "auto_consent": {
+            "default": false,
+            "title": "Auto Consent",
+            "type": "boolean"
+          },
           "available_from": {
             "anyOf": [
               {
@@ -2096,6 +2101,13 @@
               }
             ],
             "title": "Requires Sponsorship"
+          },
+          "time_zone_regions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Time Zone Regions",
+            "type": "array"
           },
           "willing_to_relocate": {
             "title": "Willing To Relocate",
@@ -2369,32 +2381,6 @@
           "text"
         ],
         "title": "NoteBody",
-        "type": "object"
-      },
-      "ProviderKeyIn": {
-        "additionalProperties": false,
-        "properties": {
-          "api_key": {
-            "format": "password",
-            "maxLength": 4096,
-            "minLength": 10,
-            "title": "Api Key",
-            "type": "string",
-            "writeOnly": true
-          },
-          "model": {
-            "maxLength": 100,
-            "minLength": 1,
-            "pattern": "^[a-zA-Z0-9._:/-]+$",
-            "title": "Model",
-            "type": "string"
-          }
-        },
-        "required": [
-          "api_key",
-          "model"
-        ],
-        "title": "ProviderKeyIn",
         "type": "object"
       },
       "ProviderKeyStatus": {
@@ -2926,77 +2912,6 @@
           }
         },
         "summary": "Ai Delete Provider",
-        "tags": [
-          "extension"
-        ]
-      },
-      "put": {
-        "operationId": "extensionAISaveProvider",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "provider",
-            "required": true,
-            "schema": {
-              "enum": [
-                "gemini",
-                "anthropic",
-                "openai"
-              ],
-              "title": "Provider",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProviderKeyIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExtensionAIOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ai Save Provider",
         "tags": [
           "extension"
         ]

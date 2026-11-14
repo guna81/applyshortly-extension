@@ -15,6 +15,7 @@ const DROPDOWN_WAIT_MS = 350;
 const OPTION_SCROLL_WAIT_MS = 120;
 const MAX_OPTION_PAGES = 80;
 const ACTION_PAUSE_MS = 120;
+const WAIT_ACTION_MS = 4000; // one "wait": the planner asked for the page to finish loading
 const CAPTCHA_HANDOFF = "There's a CAPTCHA on this page. Please solve it yourself.";
 // An embedded verification widget must not prevent filling the accessible application.
 // Challenge-only pages still need the user's intervention before any work can continue.
@@ -41,7 +42,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function isEditingInstruction(message) {
   const text = String(message).trim().replace(/^please\s+/i, "");
   if (/^(do not|don't|never)\b/i.test(text) || text.endsWith("?")) return false;
-  return /^(fill|set|change|select|choose|pick|upload|attach|click|tick|check|mark|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify|put|type|enter|write|input|insert|paste|use|answer|make|leave|switch|turn)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
+  return /^(fill|set|change|select|choose|pick|upload|attach|click|tick|check|mark|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify|put|type|enter|write|input|insert|paste|use|answer|make|leave|switch|turn|fetch|read|look|visit|browse|pull|take|get)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
 }
 
 // Ignore transient IDs and screenshot bytes when detecting stalled planning.
@@ -80,13 +81,17 @@ const BUSY_RETRIES = [1000, 2500];
  * while it still finishes this very decision. Sent again with the same request_id, the finished
  * decision comes back from its cache instead of the run ending. Other 409s are not retried.
  */
+export function transientStepError(error) {
+  return error instanceof TypeError || [408, 429, 502, 503, 504].includes(error?.status);
+}
+
 export async function stepWithRetry(step, body, waits = BUSY_RETRIES) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await step(body);
     } catch (error) {
       const busy = error?.status === 409 && /already running/i.test(String(error?.message ?? ""));
-      if (!busy || !body.request_id || attempt >= waits.length) throw error;
+      if ((!busy && !transientStepError(error)) || !body.request_id || attempt >= waits.length) throw error;
       await sleep(waits[attempt]);
     }
   }
@@ -399,6 +404,9 @@ export async function execute(driver, refs, frames, action, files) {
   const target = action.ref ? refs.get(action.ref) : null;
   if (action.ref && !target) throw new Error("That element is no longer on the page.");
   switch (action.type) {
+    case "wait": // the page is still loading: give it time, touch nothing
+      await sleep(WAIT_ACTION_MS);
+      return null;
     case "switch_tab":
       if (!driver.switchTab) throw new Error("Application tab switching is unavailable.");
       await driver.switchTab(action.tab_id);
@@ -668,6 +676,22 @@ export class Agent {
     return true;
   }
 
+  async planningStep(body) {
+    // Local custom planners mutate their own transcript and have no platform request cache.
+    if (this.planner !== "platform") return this.step(body);
+    try { return await stepWithRetry(this.step, body); }
+    catch (error) {
+      if (!transientStepError(error) || !body.request_id || this.stopped) throw error;
+      this.pause();
+      this.say("The planning service is temporarily unavailable. Resume to retry the same request without repeating page actions.");
+      this.emit({ message: this.log.at(-1) });
+      while (this.paused && !this.stopped) await this.waitForUser();
+      if (this.stopped) return null;
+      // The same id returns a cached decision if the original request actually completed.
+      return stepWithRetry(this.step, body);
+    }
+  }
+
   async run() {
     let sessionId = null;
     let results = [];
@@ -676,6 +700,8 @@ export class Agent {
     let wantScreenshot = this.controllerVersion === 2;
     let annotateScreenshot = false;
     let focusQuery = "";
+    let observationFailures = 0;
+    let recoveries = 0;
     let captchaClearedFor = ""; // the document whose CAPTCHA the user cleared; another page or a new challenge starts over
     try {
       await this.driver.attach();
@@ -695,7 +721,13 @@ export class Agent {
               screenshot: wantScreenshot, annotate: annotateScreenshot, extended: this.controllerVersion === 2, query: focusQuery,
             });
           } catch (error) {
-            if (!(error instanceof Error && error.name === "DialogOpenError")) throw error;
+            if (!(error instanceof Error && error.name === "DialogOpenError")) {
+              // Navigation can destroy an execution context mid-observation. No plan exists yet.
+              if (++observationFailures > 2) throw error;
+              this.runner.reset();
+              await sleep(500);
+              continue;
+            }
           }
         }
         if (this.driver.dialog || !observed) {
@@ -703,6 +735,7 @@ export class Agent {
           wantScreenshot = true;
           continue;
         }
+        observationFailures = 0;
         const { observation, refs, frames } = observed;
         if (this.stopped) break;
         if (this.paused) continue;
@@ -779,7 +812,9 @@ export class Agent {
           continue;
         }
         const controlRevision = this.controlRevision;
-        const res = await stepWithRetry(this.step, {
+        let res;
+        try {
+          res = await this.planningStep({
           ...(this.controllerVersion === 2 ? { controller_version: 2, request_id: crypto.randomUUID() } : {}),
           ...(this.verifiedCommands ? { verified_commands: true } : {}),
           session_id: sessionId,
@@ -788,7 +823,26 @@ export class Agent {
           results,
           in_user_tab: true,
           ...extra,
-        });
+          });
+        } catch (error) {
+          if (this.planner !== "platform" || error?.status !== 410 || ++recoveries > 1) throw error;
+          // Lost planner state includes skips and answer consent. Never silently recreate it.
+          // Keep local call/progress/command limits and trusted origins; drop all pending work.
+          this.runner.reset();
+          results = [];
+          extra = {};
+          sessionId = null;
+          captchaClearedFor = "";
+          this.pause();
+          this.say("The planning session expired. Resume to start a fresh session from the current form. Previous skipped questions and answer permissions must be given again.");
+          this.emit({ message: this.log.at(-1) });
+          const input = await this.waitForUser();
+          if (input.kind === "stop" || this.stopped) break;
+          if (this.paused) continue;
+          wantScreenshot = true;
+          continue;
+        }
+        if (!res) break;
         sessionId = res.session_id;
         if (res.controller_version !== 2) this.controllerVersion = 1;
         if (this.stopped) break;
@@ -826,6 +880,8 @@ export class Agent {
               }
               if (["fill_form", "options", "review"].includes(action.type)) {
                 outcome = await this.runner.compound(action.type, { fields: action.fields, ref: action.ref }, { observationId: action.observation_id, commandId: action.command_id });
+              } else if (action.type === "wait") {
+                await execute(this.driver, refs, frames, action, this.files);
               } else {
                 // Same document, same control (not edited by the user, not replaced), not a password.
                 await this.runner.guard(action);
@@ -849,7 +905,7 @@ export class Agent {
           await sleep(ACTION_PAUSE_MS);
         }
         const looks = (res.actions ?? []).length
-          ? res.actions.every((a) => ["review", "options", "observe", "read_page"].includes(a.type))
+          ? res.actions.every((a) => ["review", "options", "observe", "read_page", "wait"].includes(a.type))
           : Boolean(res.want_screenshot);
         this.progressGuard.noteReading(looks && results.every((r) => r.ok));
         // The field's name, not the verb the action's label starts with ("Filled Phone" → "Phone").

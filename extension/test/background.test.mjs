@@ -1,3 +1,4 @@
+import { candidateContext } from "../src/candidate-context.js";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -77,8 +78,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, customPlanner } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { endpoint, canDraft, customPlanner, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, customPlanner, candidateContext } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { endpoint, canDraft, customPlanner, candidateContext, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -342,9 +343,10 @@ test('AI settings are available only to trusted UI and return metadata', async (
     assert.equal((await h.send({ type }, h.content)).ok, false);
   }
   const saved = await h.send({ type: 'saveAIProvider', provider: 'openai', apiKey: 'fixture-provider-secret', model: 'fixture-model' });
-  assert.equal(saved.ok, true);
+  assert.equal(saved.ok, false);
+  assert.equal(h.calls.some((call) => call.savedProvider), false);
   assert.equal(JSON.stringify(saved).includes('fixture-provider-secret'), false);
-  assert.equal((await h.send({ type: 'selectAI', mode: 'personal', provider: 'openai' })).ok, true);
+  assert.equal((await h.send({ type: 'selectAI', mode: 'personal', provider: 'openai' })).ok, false);
   const status = await h.send({ type: 'test' });
   assert.equal(status.data.plan, 'pro');
   assert.equal(status.data.credits, 30);
@@ -652,7 +654,7 @@ test('employer pages cannot connect, approve or control the external browser', a
 });
 
 
-test('custom provider uses profile lookup and directs only drafts to the configured endpoint', async () => {
+test('custom provider sends draft context directly without a platform question lookup', async () => {
   const h = harness();
   const saved = await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret' });
   assert.equal(saved.ok, true);
@@ -662,7 +664,7 @@ test('custom provider uses profile lookup and directs only drafts to the configu
   const result = await h.send({ type: 'suggest', appId: null, question: 'Why do you want this role?', allowGenerate: true }, h.content);
   assert.equal(result.data.answer, 'Fixture draft');
   assert.equal(result.data.needs_review, true);
-  assert.equal(h.calls.find((x) => x.suggest).suggest.allow_generate, false);
+  assert.equal(h.calls.some((x) => x.suggest), false);
   assert.equal(h.calls.filter((x) => x.customRequest).length, 1);
   assert.equal((await h.send({ type: 'suggest', appId: null, question: 'What is your salary?', allowGenerate: true }, h.content)).data.answer, null);
   assert.equal(h.calls.filter((x) => x.customRequest).length, 1);
@@ -756,4 +758,19 @@ test('platform-managed extension planner sends the extension engine to each step
   assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
   await h.agentInstances[0].step({ observation: {} });
   assert.equal(h.calls.find((call) => call.agentStep).agentStep.extension_engine, 'ai_led');
+});
+
+
+test('retained server key deletion requires a successful test of the current device provider', async () => {
+  const h = harness();
+  assert.equal((await h.send({ type: 'deleteAIProvider' })).ok, false);
+  await h.send({ type: 'saveCustomAI', baseUrl: 'https://api.openai.com/v1', model: 'fixture', apiKey: 'fixture-secret' });
+  assert.equal((await h.send({ type: 'deleteAIProvider' })).ok, false);
+  assert.equal((await h.send({ type: 'testCustomAI' })).ok, true);
+  assert.equal((await h.send({ type: 'deleteAIProvider' })).ok, true);
+  assert.equal(h.local.customAI.apiKey, 'fixture-secret');
+  assert.equal((await h.send({ type: 'deleteAIProvider' })).ok, false);
+  await h.send({ type: 'testCustomAI' });
+  await h.send({ type: 'saveCustomAI', baseUrl: 'https://api.openai.com/v1', model: 'changed', apiKey: 'fixture-new' });
+  assert.equal((await h.send({ type: 'deleteAIProvider' })).ok, false);
 });

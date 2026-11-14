@@ -227,6 +227,13 @@
   // A question about one of these is answered by choosing or doing, never by drafted text.
   const TYPED_ROLES = ["textbox", "textarea", "searchbox"];
 
+  // A message that opens like a question or a command is for the agent to act on, not the answer to its question.
+  // "fetch data from https://…" must reach it as an instruction, or the sentence itself is typed into the form.
+  const INSTRUCTION = /^(?:please\s+)?(?:can|could|do|does|why|what|how|where|is|are|fill|set|change|select|choose|upload|click|continue|open|scroll|update|replace|fetch|read|look|visit|browse|pull|take|get|go|see|check)\b/i;
+
+  /** True when the message answers the agent's question rather than telling it to do something. */
+  const isPlainAnswer = (message) => !INSTRUCTION.test(String(message).trim());
+
   /** The chat line for the agent waiting on the user: its question, or what to do on the page. */
   function agentAsk(question) {
     if (!question) return null;
@@ -430,6 +437,6 @@
 
   globalThis.JobHuntPanel = {
     summarize, autoApplyBlockers, readinessNote, loginWall, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
-    nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
+    nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isPlainAnswer, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

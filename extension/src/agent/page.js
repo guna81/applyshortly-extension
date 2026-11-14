@@ -145,6 +145,24 @@
   const ATTACHED_FILE = /^[^\\/\n]{1,200}\.(?:pdf|docx?|rtf|txt|odt|pages)$/i;
   const REMOVE_FILE = /^(?:remove|delete|clear)\b/i;
 
+  // Some ATSs keep an empty replacement input after an upload (including after a
+  // reload). Only use attachment evidence inside this input's own upload area.
+  function uploadedFileName(input) {
+    if (input.files?.length) return input.files[0].name;
+    for (let area = input.parentElement, depth = 0; area && depth < 5; area = area.parentElement, depth++) {
+      if (area.matches('form, body, html') || area.querySelectorAll('input[type=file]').length !== 1 ||
+          area.querySelector('input:not([type=file]):not([type=hidden]), textarea, select')) break;
+      const replacement = [...area.querySelectorAll('button, [role="button"], label, a')]
+        .some((node) => isVisible(node, false) && /^(?:replace\s+file|remove\b|delete\b|clear\b)/i.test(clean(node.textContent || node.getAttribute('aria-label') || '')));
+      if (!replacement) continue;
+      const names = [...area.querySelectorAll('span, a, p, div')]
+        .filter((node) => !node.children.length && isVisible(node, false))
+        .map((node) => clean(node.textContent)).filter((name) => ATTACHED_FILE.test(name));
+      if (new Set(names).size === 1) return names[0];
+    }
+    return '';
+  }
+
   /**
    * An upload whose input the site took away once the file was attached: Greenhouse replaces
    * "Attach" and its <input type=file> with the file's name and a "Remove file" button. The group
@@ -212,7 +230,7 @@
     }
     if (field.kind === "file") {
       const named = uploadGroupLabel(el, label);
-      return [base(el, { role: "file", name: named.name, value: el.files?.[0]?.name ?? "", required: required || named.required, in_viewport: true })];
+      return [base(el, { role: "file", name: named.name, value: uploadedFileName(el), required: required || named.required, in_viewport: true })];
     }
     if (field.kind === "dropdown") {
       const options = listedOptions(el).slice(0, 100).map((t) => clip(t, 500));

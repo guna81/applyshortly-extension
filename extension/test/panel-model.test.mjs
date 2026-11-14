@@ -289,3 +289,8 @@ test("readinessNote: names the first required fields left empty", () => {
   assert.equal(P.readinessNote({ missing: [{ name: "Email" }] }), "Still empty and required: “Email”.");
   assert.equal(P.readinessNote({ missing: ["A", "B", "C", "D", "E"].map((name) => ({ name })) }), "Still empty and required: “A”, “B”, “C” and 2 more.");
 });
+
+test("a typed instruction is not taken as the answer to the agent's question", () => {
+  for (const m of ["fetch data from here - https://guna81.netlify.app/", "Read https://github.com/guna81/applyshortly-extension", "look at my site", "what does this mean", "Please open the link"]) assert.equal(P.isPlainAnswer(m), false, m);
+  for (const m of ["https://guna81.netlify.app/", "ApplyShortly is a job-application tool", "5 years", "Yes"]) assert.equal(P.isPlainAnswer(m), true, m);
+});

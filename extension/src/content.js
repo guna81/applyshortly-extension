@@ -551,8 +551,7 @@
       }
       chat.lines.push({ role: "user", text: message });
       chat.draft = "";
-      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" &&
-        !/^(can|could|do|does|why|what|how|where|is|are|fill|set|change|select|choose|upload|click|continue|open|scroll|update|replace)\b/i.test(message);
+      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" && P.isPlainAnswer(message);
       await agentControl(plainAnswer ? "reply" : "message", message);
       return panel.idle();
     }

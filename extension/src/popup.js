@@ -83,7 +83,7 @@ async function render(s, { notFound = false } = {}) {
     setConn("off", "Not connected");
     return show(el("div", { class: "card" },
       el("b", {}, "Connect to your ApplyShortly account"),
-      el("p", { class: "muted" }, "Sign in with ApplyShortly to use your profile, credits or personal AI keys."),
+      el("p", { class: "muted" }, "Sign in with ApplyShortly to use your profile, credits or your on-device AI provider."),
       button("Set up now", () => { chrome.runtime.openOptionsPage(); window.close(); }, "primary block"),
     ));
   }
@@ -108,7 +108,7 @@ async function render(s, { notFound = false } = {}) {
   setConn("good", `Connected as ${s.name ?? "you"}`);
   $("aiDrafts").checked = Boolean(s.aiDrafts);
   $("prefs").hidden = false;
-  $("connText").textContent += s.ai?.mode === "personal" ? ` · Personal ${s.ai.provider} key` : ` · ${s.credits ?? 0} credits`;
+  $("connText").textContent += s.ai?.mode === "personal" ? ` · Re-enter AI key in extension settings` : ` · ${s.credits ?? 0} credits`;
   const key = await shortcut();
   $("foot").replaceChildren(
     el("a", { href: "#", onclick: (e) => { e.preventDefault(); openTab(`${s.baseUrl}/applications`); } }, "Open ApplyShortly"),
@@ -162,14 +162,21 @@ const openControl = (e) => { e?.preventDefault(); void chrome.tabs.create({ url:
 /** The connected assistant's live steps. Quiet link when nothing is connected. */
 async function renderAssistant() {
   const box = $("assist");
+  if (!box) return false;
   let data = null;
   try {
     const res = await chrome.runtime.sendMessage({ type: "externalBrowser", action: "status" });
     data = res?.ok ? res.data : null;
   } catch { data = null; }
+  if (data?.enabled === false) {
+    box.hidden = true;
+    box.replaceChildren();
+    return false;
+  }
+  box.hidden = false;
   if (!data?.connected) {
     box.replaceChildren(el("a", { href: controlUrl, onclick: openControl }, "Let your assistant fill applications"));
-    return;
+    return true;
   }
   const waiting = attention(data);
   box.replaceChildren(
@@ -179,6 +186,8 @@ async function renderAssistant() {
     activityList(data.activity ?? [], 6),
     el("a", { href: controlUrl, onclick: openControl }, waiting ? "Review and approve" : "Open full view"),
   );
+  return true;
 }
-await renderAssistant();
-setInterval(renderAssistant, 1500);
+if (await renderAssistant()) {
+  setInterval(renderAssistant, 1500);
+}

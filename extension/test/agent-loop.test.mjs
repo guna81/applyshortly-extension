@@ -7,7 +7,7 @@ import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, is
 import { customPlanner } from "../src/custom-agent.js";
 
 test("recovery commands allow edits while questions and negations remain read-only", () => {
-  for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year"]) {
+  for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year", "fetch data from here - https://guna81.netlify.app/", "Read https://github.com/guna81/applyshortly-extension and answer"]) {
     assert.equal(isEditingInstruction(text), true, text);
   }
   for (const text of ["Can you see City?", "What would you change?", "Don't change anything", "Please do not edit", "Do not fill this", "Go away", "Why did you pick that?", "Check what? Did you use it?"]) {
@@ -525,6 +525,23 @@ test("custom planner drives a verified AI-led run without submitting", async () 
   assert.equal(driver.calls.some(([name]) => name === "submit"), false);
 });
 
+test("a wait action pauses on the page without touching it, then the run carries on", async () => {
+  const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc" }) });
+  const bodies = [];
+  const started = Date.now();
+  await new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, controllerVersion: 2,
+    step: async (req) => {
+      bodies.push(structuredClone(req));
+      return bodies.length === 1
+        ? { controller_version: 2, session_id: "s", status: "continue", actions: [{ type: "wait", label: "Waiting for the page to load", command_id: "w", observation_id: req.observation.observation_id }] }
+        : { controller_version: 2, session_id: "s", status: "failed", actions: [] };
+    } }).run();
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].results[0].ok, true);
+  assert.ok(Date.now() - started >= 3500);
+  assert.equal(driver.calls.some(([name]) => ["click", "insertText", "submit"].includes(name)), false);
+});
+
 for (const scenario of ["stale", "navigation", "message"]) test(`v2 rejects outdated plans: ${scenario}`, async () => {
   const driver = new V2Driver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc", viewport_width: 1000, viewport_height: 800 }) });
   let calls = 0;
@@ -920,4 +937,71 @@ test("Agent: an embedded CAPTCHA does not interrupt accessible application field
   assert.equal(agent.status, "ready");
   assert.match(agent.log.at(-1), /complete any CAPTCHA/);
   assert.equal(updates.find((u) => u.status === "ready").captchaPending, true);
+});
+
+test("transient planning failures retry the identical request, including cached receipt identity", async () => {
+  const body = { request_id: "same-decision", session_id: "s", results: [{ command_id: "c", ok: true }] };
+  const seen = [];
+  const result = await stepWithRetry(async (request) => {
+    seen.push(request);
+    if (seen.length < 3) throw new TypeError("Failed to fetch");
+    return { session_id: "s", actions: [] };
+  }, body, [0, 0]);
+  assert.equal(result.session_id, "s");
+  assert.equal(seen.length, 3);
+  assert.ok(seen.every(request => request === body));
+  for (const status of [400, 401, 403, 410]) {
+    let calls = 0;
+    await assert.rejects(stepWithRetry(async () => { calls++; throw { status }; }, body, [0]));
+    assert.equal(calls, 1);
+  }
+});
+
+test("an exhausted network retry pauses then preserves the request when resumed", async () => {
+  const body = { request_id: "resume-identical" };
+  const seen = [];
+  const agent = new Agent({ driver: {}, step: async request => {
+    seen.push(request);
+    if (seen.length <= 3) throw Object.assign(new Error("Unavailable"), { status: 503 });
+    return { session_id: "s" };
+  }, notify() {}, report() {} });
+  const emit = agent.emit.bind(agent);
+  agent.emit = (...args) => { emit(...args); if (agent.paused) queueMicrotask(() => agent.resume()); };
+  assert.equal((await agent.planningStep(body)).session_id, "s");
+  assert.ok(seen.every(request => request === body));
+  assert.equal(agent.controlRevision, 1, "the old plan is invalidated by the pause");
+});
+
+test("expired sessions require Resume and restart from a fresh observation without pending permissions", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([]) });
+  const bodies = [];
+  let agent;
+  agent = new Agent({ tabId: 1, appId: null, driver,
+    step: async body => {
+      bodies.push(body);
+      if (bodies.length === 1) return { controller_version: 2, session_id: "expired", status: "continue", actions: [] };
+      if (bodies.length === 2) throw new BridgeError(410, "gone");
+      return { controller_version: 2, session_id: "replacement", status: "ready_for_review", actions: [] };
+    }, controllerVersion: 2,
+    files: async () => null, report: async () => { setTimeout(() => agent.input("stop"), 0); },
+    notify: async message => {
+      if (message.status === "paused" && /planning session expired/.test(message.message ?? "")) queueMicrotask(() => agent.resume());
+    },
+  });
+  await agent.run();
+  assert.equal(agent.status, "ready");
+  assert.equal(bodies[1].session_id, "expired");
+  assert.equal(bodies[2].session_id, null);
+  assert.notEqual(bodies[2].observation.observation_id, bodies[1].observation.observation_id);
+  assert.deepEqual(bodies[2].results, []);
+  assert.equal(bodies[2].resumed, undefined);
+  assert.equal(bodies[2].user_reply, undefined);
+});
+
+test("platform recovery does not replay a stateful custom planner", async () => {
+  let calls = 0;
+  const agent = new Agent({ driver: {}, step: async () => { calls++; throw new TypeError("provider unavailable"); }, notify() {}, report() {} });
+  agent.planner = "custom";
+  await assert.rejects(agent.planningStep({ request_id: "local" }), /provider unavailable/);
+  assert.equal(calls, 1);
 });
