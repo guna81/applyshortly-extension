@@ -78,6 +78,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     alarms: { get: async () => undefined, create: (name, info) => calls.push({ alarm: name, info }), onAlarm: { addListener: (fn) => { alarmListener = fn; } } },
     windows: { create: async (options) => { calls.push({ window: options }); return { id: 99, tabs: [{ id: 55 }] }; } },
     commands: { onCommand: { addListener() {} } }, scripting: {},
+    action: { setBadgeText: async (value) => { calls.push({ badge: value }); }, setBadgeBackgroundColor: async (value) => { calls.push({ badgeColor: value }); } },
   };
   const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, extensionPlanner, candidateContext } = fixtures;\n');
   vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { endpoint, canDraft, extensionPlanner, candidateContext, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
@@ -116,6 +117,17 @@ test('agent handoff carries Auto apply once to the same tab, never through statu
   assert.deepEqual(messages.map((m) => m.message.autoSubmit), [false, true, false]);
   agent.status = 'ready';
   assert.notEqual((await h.send({ type: 'agentStatus' }, h.content)).data.autoSubmit, true);
+});
+
+test('the toolbar shows "!" on the tab while the agent waits for an answer, and clears it after', async () => {
+  const h = harness();
+  await h.send({ type: 'agentStart', appId: null }, h.content);
+  const agent = h.agentInstances[0];
+  await agent.notify({ type: 'agentUpdate', status: 'waiting', appId: 91 });
+  await agent.notify({ type: 'agentUpdate', status: 'running', appId: 91 });
+  const badges = JSON.parse(JSON.stringify(h.calls.filter((c) => c.badge).map((c) => c.badge)));
+  assert.deepEqual(badges, [{ tabId: 10, text: '!' }, { tabId: 10, text: '' }]);
+  assert.equal(h.calls.filter((c) => c.badgeColor).length, 1);
 });
 
 test('ordinary agent runs and stopped or failed Auto apply runs cannot authorize submission', async () => {

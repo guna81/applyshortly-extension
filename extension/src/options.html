@@ -6,6 +6,7 @@
   <title>Apply Shortly Form Agent · Settings</title>
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="options.css">
+  <script src="theme.js"></script>
 </head>
 <body class="page settings-page">
   <main>
@@ -97,15 +98,25 @@
       <label class="switch-row">
         <span>Let AI answer questions it can't find
           <small class="muted">When enabled, the selected AI provider drafts answers missing from your profile and answer bank. Drafts are always marked “Check”. You can still request a draft when this is off.</small></span>
-        <input id="aiDrafts" type="checkbox" class="switch">
+        <input id="aiDrafts" type="checkbox" class="switch" role="switch">
       </label>
       <label class="switch-row">
-        <span>Let Autopilot open sign-in jobs in a window
-          <small class="muted">When Autopilot's auto-submit is on and a job needs your signed-in browser
-            (Workday, Taleo and similar), a window opens here, applies with Fill and submit and closes shortly
-            after. Anything it can't finish stays open for you. Needs Chrome running at your Autopilot hour.
-            Job boards are never opened this way.</small></span>
-        <input id="autopilotWindows" type="checkbox" class="switch">
+        <span>Let Autopilot apply to sign-in jobs in a window
+          <small class="muted">For jobs that need your signed-in browser (Workday, Taleo and similar), Autopilot opens
+            a window here and runs Auto apply. Anything it can't finish stays open for you.</small></span>
+        <input id="autopilotWindows" type="checkbox" class="switch" role="switch">
+      </label>
+      <details class="more">
+        <summary>When this runs</summary>
+        <p class="hint">Only when Autopilot's auto-submit is on, at your Autopilot hour, and only while Chrome is
+          running. The window closes shortly after it submits. Job boards are never opened this way.</p>
+      </details>
+      <label>Appearance
+        <select id="theme">
+          <option value="system">Match my browser</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
       </label>
       <span id="prefMsg" class="hint good" role="status"></span>
     </section>
@@ -122,7 +133,7 @@
         <li><b>Review.</b> A panel at the bottom right lists what was filled and what still needs you. Click a row to
           jump to that field. Green means filled, amber means check it, red means it's your turn.</li>
         <li><b>Submit.</b> Click the form's own Submit button. ApplyShortly moves the job to <i>Submitted</i> for you.
-          Or use <b>Fill and submit</b>: once every required field is answered, it clicks Submit for you after a
+          Or use <b>Auto apply</b>: once every required field is answered, it clicks Submit for you after a
           3-second countdown you can cancel.</li>
       </ol>
       <p class="hint"><a href="#" id="shortcuts">Change the keyboard shortcut</a></p>

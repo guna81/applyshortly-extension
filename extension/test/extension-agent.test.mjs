@@ -189,3 +189,24 @@ test('manual upload recovery does not relax wrong-role and stale-ref guards', as
     await assert.rejects(planner(orderedBody(elements)), /profile résumé|no longer on the page/);
   }
 });
+
+test('a click on an option of an open dropdown becomes a select on its combobox', async () => {
+  const combo = { ref: 'loc', role: 'combobox', name: 'Location', required: true, value: 'Tiruchirappalli', popup: true };
+  const option = { ref: 'opt', role: 'button', name: 'Tiruchirappalli, Tamil Nadu, India' };
+  const planner = extensionPlanner({}, {}, {}, async () => JSON.stringify({ status: 'continue', message: 'Pick', action: { type: 'click', ref: 'opt' } }));
+  const b = body();
+  b.observation.elements = [combo, option];
+  const result = await planner(b);
+  assert.equal(result.actions[0].type, 'select');
+  assert.equal(result.actions[0].ref, 'loc');
+  assert.equal(result.actions[0].text, 'Tiruchirappalli, Tamil Nadu, India');
+});
+
+test('a click on an unrelated button is still refused', async () => {
+  const combo = { ref: 'loc', role: 'combobox', name: 'Location', required: true, value: 'Tiruchirappalli', popup: true };
+  const other = { ref: 'x', role: 'button', name: 'Something else' };
+  const planner = extensionPlanner({}, {}, {}, async () => JSON.stringify({ status: 'continue', message: 'Go', action: { type: 'click', ref: 'x' } }));
+  const b = body();
+  b.observation.elements = [combo, other];
+  await assert.rejects(planner(b), /direct approval/);
+});

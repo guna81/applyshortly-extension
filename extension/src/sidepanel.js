@@ -1,7 +1,5 @@
-import { activityList, attention } from "./external-activity.js";
+import { createAssistantBox, createLauncher, $, el, button } from "./launcher.js";
 
-/** The page's own elements, mostly form controls. @type {(id: string) => any} */
-const $ = (id) => document.getElementById(id);
 const P = globalThis.JobHuntPanel;
 
 // Lucide icons
@@ -32,39 +30,6 @@ function icon(paths) {
   return svg;
 }
 
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k === "onclick") node.addEventListener("click", v);
-    else if (k === "class") node.className = v;
-    else node.setAttribute(k, v === true ? "" : v);
-  }
-  for (const c of children.flat(Infinity)) if (c != null && c !== false) node.append(c);
-  return node;
-}
-const button = (label, onclick, cls = "") => el("button", { type: "button", class: cls, onclick }, label);
-
-function show(...nodes) {
-  $("view").replaceChildren(...nodes);
-}
-
-function setConn(kind, text) {
-  $("dot").className = `status-dot ${kind}`;
-  $("connText").textContent = text;
-}
-
-async function openTab(url) {
-  const u = new URL(url);
-  const path = u.pathname === "/applications" && u.searchParams.has("add") ? u.pathname + u.search : u.pathname;
-  const result = await chrome.runtime.sendMessage({ type: "openWebsite", path });
-  if (!result?.ok) { setConn("bad", result?.error || "Could not open ApplyShortly."); return; }
-}
-
-$("settings").addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
-});
-
 let currentTab = null;
 let activePanelState = null;
 
@@ -92,58 +57,26 @@ async function updateActiveTab() {
   await refresh();
 }
 
-async function shortcut() {
-  try {
-    const cmd = (await chrome.commands.getAll()).find((c) => c.name === "autofill");
-    return cmd?.shortcut || null;
-  } catch {
-    return null;
-  }
-}
-
-/** A full-width option: a bold title and one plain line on what it does. */
-const choice = (title, detail, onclick, cls = "") =>
-  el("button", { type: "button", class: `choice block ${cls}`, onclick }, el("span", { class: "t" }, title), el("span", { class: "d" }, detail));
-
-const FILL_DETAIL = "Fills from your profile and asks you the rest. You submit.";
-const AUTO_DETAIL = "Fills it, then submits after a 3-second countdown you can cancel.";
-
-async function start(allowUntracked, btn, autoSubmit = false) {
-  if (!currentTab?.id) return;
-  btn.disabled = true;
-  (btn.querySelector(".t") ?? btn).textContent = "Starting…";
-  const r = await chrome.runtime.sendMessage({
-    type: "start",
-    tabId: currentTab.id,
-    url: currentTab.url,
-    allowUntracked,
-    autoSubmit,
-  });
-  if (!r?.ok) {
-    const e = P.friendlyError(r?.error, r?.status);
-    show(el("div", { class: "card bad" }, el("b", {}, e.title), el("p", {}, e.detail)));
-    return;
-  }
-  if (!r.data?.found) return renderLauncher(await status(), { notFound: true });
-
-  // Inform content script to hide in-page panel and request active panel state
-  try {
-    await chrome.tabs.sendMessage(currentTab.id, { type: "sidepanelStatus", active: true });
-    const stateRes = await chrome.tabs.sendMessage(currentTab.id, { type: "panelGetState" });
-    if (stateRes?.ok && stateRes.data) {
-      activePanelState = stateRes.data;
-      renderAssistant(activePanelState);
-      return;
-    }
-  } catch { /* fallback */ }
-
-  await refresh();
-}
-
-async function status() {
-  const res = await chrome.runtime.sendMessage({ type: "status", tabId: currentTab?.id, url: currentTab?.url });
-  return res?.data ?? { configured: false };
-}
+const launcher = createLauncher({
+  getTab: () => currentTab,
+  wrap: (n) => el("div", { class: "launcher-view" }, n),
+  openHint: "Go to an application form (or use Apply in ApplyShortly) in any tab to fill with this sidebar.",
+  async afterStart() {
+    // Tell the content script to hide the in-page panel and ask for the active panel state.
+    try {
+      await chrome.tabs.sendMessage(currentTab.id, { type: "sidepanelStatus", active: true });
+      const stateRes = await chrome.tabs.sendMessage(currentTab.id, { type: "panelGetState" });
+      if (stateRes?.ok && stateRes.data) {
+        activePanelState = stateRes.data;
+        renderAssistant(activePanelState);
+        return;
+      }
+    } catch { /* fall back to a refresh */ }
+    await refresh();
+  },
+});
+const { show, setConn, status, loadSwitches } = launcher;
+const renderLauncher = launcher.render;
 
 function paragraphs(text) {
   const blocks = String(text).split(/\n+/).map((p) => p.trim()).filter(Boolean);
@@ -155,6 +88,19 @@ function paragraphs(text) {
 }
 
 // ------------------------------------------------------------------ Assistant View
+
+// Small on/off chips in the chat input; same storage keys the page's panel listens to.
+let chatPinned = true;
+function prefChip(key, label, title, on) {
+  const b = el("button", { type: "button", class: `chip ${on ? "on" : ""}`, role: "switch", "aria-checked": String(on), title }, label);
+  b.addEventListener("click", () => {
+    const next = b.getAttribute("aria-checked") !== "true";
+    b.setAttribute("aria-checked", String(next));
+    b.classList.toggle("on", next);
+    void chrome.storage.local.set({ [key]: next });
+  });
+  return b;
+}
 
 function renderAssistant(data) {
   $("prefs").hidden = true;
@@ -169,7 +115,7 @@ function renderAssistant(data) {
 
   // Header & Subtitle
   const title = data.title || app?.title || "Job Application";
-  const subtitle = [data.company || app?.company_name, agent?.planner === "custom" ? "Run by: Your custom AI provider" : (agent ? "Run by: ApplyShortly" : null)]
+  const subtitle = [data.company || app?.company_name, !app ? "Not tracked in ApplyShortly" : null, agent?.planner === "custom" ? "Using your own AI provider" : null]
     .filter(Boolean).join(" · ");
 
   const headerCard = el("div", { class: "card" },
@@ -188,11 +134,29 @@ function renderAssistant(data) {
         ? (agent.status === "waiting" ? "Needs you" : agent.status === "paused" ? "Paused" : "Working through the form…")
         : summary.headline;
 
+  // Until the form has been read there is no count to show: say what's happening and animate the bar
+  // instead of "0/?". Every step itself is told in the chat below.
+  // While the agent works, the page's field list isn't re-read, so count what it has filled so far.
+  const filledCount = agent?.filled_count ?? 0;
+  const total = summary.total;
+  const live = agentWorking ? Math.max(summary.answered, filledCount) : summary.answered;
+  const done = full && total ? total : total ? Math.min(live, total) : live;
+  const pct = full ? 100 : total ? Math.round((done / total) * 100) : 0;
+  const reading = agentBusy && !full && !total && !filledCount;
+  const unknownTotal = agentBusy && !full && !total && filledCount > 0;
+  const meta = data.submittedReported ? "Tracked in ApplyShortly"
+    : reading ? "Reading the form to see what it asks…"
+    : !total ? `${filledCount} ${filledCount === 1 ? "step" : "steps"} done`
+    : `${done}/${total} steps`;
   const progressSection = el("div", { class: "hero" },
-    el("strong", {}, headline),
-    el("div", { class: `bar ${full ? "full" : ""}`, role: "progressbar" },
-      el("i", { style: `width:${full ? 100 : Math.round(summary.progress * 100)}%` })),
-    el("div", { class: "meta" }, data.submittedReported ? "Tracked in ApplyShortly" : `${summary.answered} of ${summary.total || "?"} answered`),
+    el("div", { class: "hero-top" },
+      el("strong", {}, headline),
+      !reading && total ? el("span", { class: "count", "aria-label": `${done} of ${total} steps completed` }, `${done}/${total}`) : null),
+    el("div", {
+      class: `bar ${full ? "full" : ""} ${reading || unknownTotal ? "indeterminate" : ""}`, role: "progressbar", "aria-label": "Form progress",
+      ...(reading || unknownTotal ? {} : { "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) }),
+    }, el("i", { style: reading || unknownTotal ? "" : `width:${pct}%` })),
+    el("div", { class: "meta", role: "status" }, meta),
   );
 
   // Chat conversation
@@ -204,6 +168,13 @@ function renderAssistant(data) {
   lines.forEach((line, i) => {
     if (line.role === "user") {
       chatLog.append(el("div", { class: "bubble user" }, line.text));
+      return;
+    }
+    // One thing the agent just did on the page, told as it happens; together they are the history.
+    if (line.step) {
+      chatLog.append(el("div", { class: "turn step-turn" },
+        el("span", { class: "avatar" }, icon(BOT)),
+        el("div", { class: "said" }, el("div", { class: "bubble assistant stepline" }, line.text))));
       return;
     }
     const q = line.question;
@@ -234,16 +205,14 @@ function renderAssistant(data) {
     chatLog.append(el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), "Thinking…"));
   }
 
-  // Agent activity logs & review chips
-  if (agent?.log?.length) {
-    const logList = el("ul", { class: "alog" });
-    for (const line of agent.log.slice(-10)) logList.append(el("li", {}, line));
-    const reviewChips = (data.review ?? []).map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label));
-    chatLog.append(el("div", { class: "activity" },
-      reviewChips.length ? el("div", { class: "recheck" },
-        el("div", { class: "recheck-h" }, `Double-check ${reviewChips.length === 1 ? "this answer" : `these ${reviewChips.length} answers`}`),
-        el("div", { class: "recheck-chips" }, reviewChips)) : null,
-      el("details", {}, el("summary", {}, "What I did on the page"), logList)));
+  // Nothing in the chat yet: say what is going on instead of leaving the panel blank.
+  if (!lines.length && !data.chat?.pending && agentWorking) {
+    chatLog.append(el("div", { class: "turn" },
+      el("span", { class: "avatar" }, icon(BOT)),
+      el("div", { class: "said" }, el("div", { class: "bubble assistant" },
+        el("p", {}, agent.status === "paused" ? "Paused. Nothing on the page changes until you resume."
+          : agent.status === "waiting" ? "I need an answer from you to carry on."
+            : "I'm filling in what your profile already covers. If something is missing I'll ask you here, and nothing is submitted without your say-so.")))));
   }
 
   // Composer / Input Box
@@ -267,6 +236,10 @@ function renderAssistant(data) {
     }
   });
 
+  const chipRow = el("div", { class: "chips" });
+  void chrome.storage.local.get(["aiDrafts", "autoApply"]).then((p) => chipRow.append(
+    prefChip("autoApply", "Auto apply", "Submit once every required answer is in, after a 3-second countdown you can cancel", p.autoApply === true),
+    prefChip("aiDrafts", "Let AI answer", "Draft what your profile doesn't cover (uses AI credits; drafts are marked Check)", p.aiDrafts !== false)));
   const composerBox = el("div", { class: "composer" },
     el("div", { class: "box" },
       textarea,
@@ -276,7 +249,6 @@ function renderAssistant(data) {
         disabled: data.chat?.pending || agentBusy,
         onclick: handleSend,
       }, icon(SEND))),
-    el("small", { class: "hint" }, "AI chat, drafts and AI-led planning use your selected provider."),
   );
 
   // Footer Actions
@@ -284,7 +256,7 @@ function renderAssistant(data) {
   if (data.countdown != null) {
     actionsBox.append(el("div", { class: "countdown-alert", style: "width: 100%;" },
       el("span", {}, `Submitting in ${data.countdown}s…`),
-      button("Cancel", () => void sendTabAction("agentControl", { subAction: "cancel" }), "primary")));
+      button("Cancel", () => void sendTabAction("cancelCountdown"), "primary")));
   } else if (agentWorking) {
     if (agent.status === "paused") {
       actionsBox.append(button("Resume", () => void sendTabAction("agentControl", { subAction: "resume" }), "primary"));
@@ -294,118 +266,39 @@ function renderAssistant(data) {
     actionsBox.append(el("span", { class: "grow" }));
     actionsBox.append(button("Stop and take over", () => void sendTabAction("agentControl", { subAction: "stop" }), "ghost"));
   } else if (!data.submittedReported) {
-    actionsBox.append(button("I already submitted it", () => void sendTabAction("markSubmitted"), "ghost"));
-    actionsBox.append(el("span", { class: "grow" }));
     const blockers = data.blockers ?? [];
+    // The user's own Submit: same required-field checks and 3-second cancellable countdown as Auto apply.
+    if (blockers.length) actionsBox.append(el("small", { class: "hint submit-hint" }, `${blockers[0]}.`));
+    actionsBox.append(button("Already submitted", () => void sendTabAction("markSubmitted"), "ghost submit-main secondary"));
     actionsBox.append(el("button", {
-      type: "button",
-      class: "primary",
-      disabled: blockers.length > 0,
-      title: blockers.length ? `Not ready: ${blockers.join(". ")}` : "Clicks the form's Submit button for you",
+      type: "button", class: "primary submit-main", disabled: blockers.length > 0 || null,
+      title: blockers.length ? blockers.join(". ") : "Submit the application after a 3-second countdown you can cancel",
       onclick: () => void sendTabAction("autoApply"),
-    }, "Submit for me"));
+    }, "Submit application"));
   } else {
     actionsBox.append(button("Re-check page", () => void sendTabAction("run"), "primary block"));
   }
 
   const topArea = el("div", { class: "assistant-top" }, headerCard, progressSection);
   const bodyArea = el("div", { class: "assistant-body" }, chatLog);
-  const bottomArea = el("div", { class: "assistant-bottom" }, composerBox, actionsBox);
+  const bottomArea = el("div", { class: "assistant-bottom" }, composerBox, actionsBox, chipRow);
   const assistantView = el("div", { class: "assistant-view" }, topArea, bodyArea, bottomArea);
 
+  // The view is rebuilt on every update: stay at the bottom if the user was there (or this is the
+  // first draw), otherwise keep the place they scrolled to.
+  const oldBody = document.querySelector(".assistant-body");
+  const keepTop = oldBody ? oldBody.scrollTop : 0;
+  // "Pinned" = the reader hasn't scrolled up; set by their own scrolling, so a long new message
+  // can't unpin the view the way a distance check on the old, shorter page would.
+  const stick = !oldBody || chatPinned;
+  bodyArea.addEventListener("scroll", () => {
+    chatPinned = bodyArea.scrollHeight - bodyArea.scrollTop - bodyArea.clientHeight < 60;
+  }, { passive: true });
   show(assistantView);
-
-  queueMicrotask(() => {
-    bodyArea.scrollTop = bodyArea.scrollHeight;
-  });
-}
-
-// ------------------------------------------------------------------ Launcher View
-
-async function renderLauncher(s, { notFound = false } = {}) {
-  $("prefs").hidden = true;
-  $("foot").hidden = true;
-
-  if (!s.configured) {
-    setConn("off", "Not connected");
-    return show(el("div", { class: "launcher-view" },
-      el("div", { class: "card" },
-        el("b", {}, "Connect to your ApplyShortly account"),
-        el("p", { class: "muted" }, "Sign in with ApplyShortly to use your profile, credits or your on-device AI provider."),
-        button("Set up now", () => chrome.runtime.openOptionsPage(), "primary block"),
-      )
-    ));
-  }
-
-  if (!s.connected) {
-    const e = P.friendlyError(s.error, s.status, s.baseUrl);
-    setConn("bad", "Can't connect");
-    return show(el("div", { class: "launcher-view" },
-      el("div", { class: "card bad" },
-        el("b", {}, e.title),
-        el("p", {}, e.detail),
-        el("div", { class: "row-btns" },
-          button("Try again", async () => {
-            show(el("div", { class: "loading" }, el("span", { class: "spin" }), "Reconnecting…"));
-            await chrome.runtime.sendMessage({ type: "test" });
-            renderLauncher(await status());
-          }, "primary"),
-          button("Settings", () => chrome.runtime.openOptionsPage()),
-        ),
-      )
-    ));
-  }
-
-  setConn("good", `Connected as ${s.name ?? "you"}`);
-  $("aiDrafts").checked = Boolean(s.aiDrafts);
-  $("prefs").hidden = false;
-  $("connText").textContent += s.ai?.mode === "personal" ? ` · Re-enter AI key in extension settings` : ` · ${s.credits ?? 0} credits`;
-  const key = await shortcut();
-  $("foot").replaceChildren(
-    el("a", { href: "#", onclick: (e) => { e.preventDefault(); openTab(`${s.baseUrl}/applications`); } }, "Open ApplyShortly"),
-    key ? el("span", {}, "Shortcut ", el("kbd", {}, key)) : null,
-  );
-  $("foot").hidden = false;
-
-  const fillable = Boolean(currentTab?.url && /^https?:/.test(currentTab.url));
-  if (!fillable) {
-    return show(el("div", { class: "launcher-view" },
-      el("div", { class: "card" },
-        el("b", {}, "Open a job application to get started"),
-        el("p", { class: "muted" }, "Go to an application form (or use Apply in ApplyShortly) in any tab to fill with this sidebar."),
-        button("Go to Applications", () => openTab(`${s.baseUrl}/applications`), "block"),
-      )
-    ));
-  }
-
-  if (s.app) {
-    const sent = !["saved", "queued", "filling", "ready_for_review"].includes(s.app.status);
-    return show(el("div", { class: "launcher-view" },
-      el("div", { class: "card" },
-        el("div", { class: "eyebrow" }, "This page is in ApplyShortly"),
-        el("b", { class: "title" }, s.app.title || "Application"),
-        el("div", { class: "muted" }, s.app.company_name ?? ""),
-        s.app.status ? el("span", { class: "pill" }, s.app.status.replace(/_/g, " ")) : null,
-        sent ? el("p", { class: "hint good" }, "✓ You've already applied to this job.") : null,
-        sent
-          ? button("Fill it again anyway", (e) => void start(false, e.currentTarget), "block")
-          : [
-            choice("Fill this form", FILL_DETAIL, (e) => void start(false, e.currentTarget), "primary"),
-            choice("Fill and submit", AUTO_DETAIL, (e) => void start(false, e.currentTarget, true)),
-          ],
-      )
-    ));
-  }
-
-  return show(el("div", { class: "launcher-view" },
-    el("div", { class: "card" },
-      el("b", {}, notFound ? "Not in ApplyShortly yet" : "Fill this page"),
-      el("p", { class: "muted" }, "You can fill it, but it won't be tracked."),
-      choice("Fill this form", FILL_DETAIL, (e) => void start(true, e.currentTarget), "primary"),
-      choice("Fill and submit", AUTO_DETAIL, (e) => void start(true, e.currentTarget, true)),
-      button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/applications?${new URLSearchParams({ add: "1", url: currentTab?.url || "" })}`), "ghost block"),
-    )
-  ));
+  const settle = () => { bodyArea.scrollTop = stick ? bodyArea.scrollHeight : keepTop; };
+  settle();
+  requestAnimationFrame(() => { settle(); requestAnimationFrame(settle); });
+  setTimeout(settle, 150);
 }
 
 async function refresh() {
@@ -424,9 +317,6 @@ async function refresh() {
   await renderLauncher(await status());
 }
 
-$("aiDrafts").addEventListener("change", async (e) => {
-  await chrome.storage.local.set({ aiDrafts: /** @type {HTMLInputElement} */ (e.target).checked });
-});
 
 // React dynamically to active tab switches and page navigations
 chrome.tabs?.onActivated?.addListener(() => {
@@ -463,40 +353,7 @@ window.addEventListener("pagehide", () => {
 
 await updateActiveTab();
 
-const controlUrl = chrome.runtime.getURL("src/external-browser.html");
-const openControl = (e) => { e?.preventDefault(); void chrome.tabs.create({ url: controlUrl }); };
-
-/** The connected assistant's live steps. Quiet link when nothing is connected. */
-async function renderExternalAssistant() {
-  if (activePanelState?.active) return false;
-  const box = $("assist");
-  if (!box) return false;
-  let data = null;
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "externalBrowser", action: "status" });
-    data = res?.ok ? res.data : null;
-  } catch { data = null; }
-  if (data?.enabled === false) {
-    box.hidden = true;
-    box.replaceChildren();
-    return false;
-  }
-  box.hidden = false;
-  if (!data?.connected) {
-    box.replaceChildren(el("a", { href: controlUrl, onclick: openControl }, "Let your assistant fill applications"));
-    return true;
-  }
-  const waiting = attention(data);
-  box.replaceChildren(
-    el("div", { class: "row-head" },
-      el("b", {}, "Assistant activity"),
-      waiting ? el("span", { class: "badge" }, "Needs you") : el("span", { class: "muted" }, "Connected")),
-    activityList(data.activity ?? [], 6),
-    el("a", { href: controlUrl, onclick: openControl }, waiting ? "Review and approve" : "Open full view"),
-  );
-  return true;
-}
-
+const renderExternalAssistant = createAssistantBox({ skip: () => Boolean(activePanelState?.active) });
 if (await renderExternalAssistant()) {
   setInterval(renderExternalAssistant, 1500);
 }

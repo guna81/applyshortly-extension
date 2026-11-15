@@ -1,4 +1,4 @@
-// What the review panel and popup show, derived from fill results. Pure functions (no chrome.*,
+// What the review panel and side panel show, derived from fill results. Pure functions (no chrome.*,
 // no rendering) so they're tested in jsdom. Exposed as globalThis.JobHuntPanel.
 //
 // A result is {field, status, value?, source?, needsReview?, reviewed?, reason?, suggestion?}:
@@ -73,11 +73,11 @@
     };
   }
 
-  // Application statuses that mean nothing has been sent yet (matches the popup's check).
+  // Application statuses that mean nothing has been sent yet (matches the side panel check).
   const OPEN_STATUSES = ["saved", "queued", "filling", "ready_for_review"];
 
   /**
-   * Why "Fill and submit" must not click Submit yet; empty when it may. Every required question
+   * Why "Auto apply" must not click Submit yet; empty when it may. Every required question
    * has to be answered on the page, and a tracked application must not already be sent or
    * waiting for verification (retrying one could submit twice).
    */
@@ -122,7 +122,7 @@
 
   /**
    * Whether the page is asking the user to sign in: a password box is showing, or the path is a
-   * sign-in one. Fill and submit never submits there; the user signs in first.
+   * sign-in one. Auto apply never submits there; the user signs in first.
    * @param {string} pathname @param {boolean} passwordShown
    */
   function loginWall(pathname, passwordShown) {
@@ -219,7 +219,7 @@
     return [
       HANDOFF[reason] ?? HANDOFF.asked,
       "I'll ask here when I need you. Chrome shows a “started debugging” bar while I click through, and it uses one apply run of credits.",
-      autoSubmit ? "Once every required answer is complete, Fill and submit will resume with its cancellable countdown." : "",
+      autoSubmit ? "Once every required answer is complete, Auto apply will resume with its cancellable countdown." : "",
     ].filter(Boolean).join(" ");
   }
 
@@ -430,7 +430,7 @@
   /** The conversation as the API takes it: no greeting or error lines, capped. */
   function chatHistory(lines) {
     return lines
-      .filter((l) => !l.greeting && !l.error && (l.role === "user" || l.role === "assistant") && lineText(l))
+      .filter((l) => !l.greeting && !l.error && !l.step && (l.role === "user" || l.role === "assistant") && lineText(l))
       .map((l) => ({ role: l.role, text: lineText(l).slice(0, MAX_TEXT) }))
       .slice(-MAX_TURNS);
   }

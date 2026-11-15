@@ -21,7 +21,7 @@ Features
 - See fields that are filled, need input or need review.
 - Request optional AI drafts and use the on-page assistant.
 - Track supported applications in your ApplyShortly account.
-- Choose Auto apply (Submit for me in the panel) to click the employer website’s Submit button after a three-second countdown with Cancel. Closing or minimising the panel cancels it.
+- Turn on the Auto apply switch (bottom of the side panel; or use the panel footer button) to click the employer website’s Submit button after a three-second countdown with Cancel. Closing or minimising the panel cancels it.
 
 Auto apply checks detected required fields, browser-reported invalid fields, a single identifiable Submit button and tracked application status. It refuses when a tracked application was already sent or needs verification. Form support varies by website; custom controls, uploads, consent steps and embedded forms can need manual input. Checks do not guarantee correct answers or employer acceptance. Review AI drafts first: Auto apply can submit them as filled without separate approval of each draft. An attempted submission is not confirmed success.
 
@@ -47,7 +47,7 @@ Help users complete job application forms from their ApplyShortly profile and sa
 
 Scripting: Injects packaged scripts into the selected application tab to discover fields, insert answers and show the review panel. Auto apply clicks the page’s Submit button only after the user explicitly chooses it and the countdown completes.
 
-activeTab: Lets the toolbar action or shortcut operate on the user-selected application page, including injecting packaged scripts when needed. The popup offers autofill and an explicit Auto apply action.
+activeTab: Lets the toolbar action or shortcut operate on the user-selected application page, including injecting packaged scripts when needed. The side panel offers autofill and an explicit Auto apply action.
 
 Host permissions: The configured ApplyShortly origin supports authentication, profile retrieval, optional AI drafts and tracked application events. Employer pages use many domains; packaged content scripts discover/fill fields and display the panel, and explicitly requested Auto apply clicks Submit after checks and a cancellable countdown. On ApplyShortly, scripts relay a signed-in indicator for linked sign-in; credentials do not pass through the page. Localhost/loopback and optional origins support self-hosted servers.
 
@@ -78,10 +78,10 @@ Productivity / Tools. English.
 Stop retyping the same details into every job application. Apply Shortly Form Agent fills application forms from your ApplyShortly profile and saved answers: contact details, work history, education, links, work authorisation and the screening questions you have answered before. It handles multi-step applications, pop-ups and embedded forms too, and you stay in control of what gets submitted.
 
 HOW IT WORKS
-1. Open a job application and click Fill this form (or press Alt+Shift+F).
+1. Open a job application and click the toolbar icon: the chat opens and starts filling by itself (or press Alt+Shift+F).
 2. The assistant fills everything it knows and shows what is left: "1 thing left for you".
 3. Answer the remaining questions right in the chat panel. Your answers are saved, so the next form is faster.
-4. Review the form, then click the employer's Submit button yourself, or choose Submit for me (Auto apply).
+4. Review the form, then click the employer's Submit button yourself, or choose Auto apply.
 
 WHAT YOU GET
 • One-click autofill from your profile, résumé and answer bank
@@ -149,7 +149,7 @@ Generated from the fictional fixture (`scripts/extension_store_fixture.py`) at 1
 
 1. `1-fills-the-form.jpg`: the form filled from the profile, one question left in the panel.
 2. `2-ready-to-submit.jpg`: question answered in chat, "All set: review and submit", draft offer.
-3. `3-auto-apply-countdown.jpg`: Submit for me with the cancellable countdown.
+3. `3-auto-apply-countdown.jpg`: Auto apply with the cancellable countdown.
 
 Promo tiles: `promo-small-440x280.jpg` (small tile) and `promo-marquee-1400x560.jpg` (marquee),
 emerald brand gradient with the A/arrow logo. Screenshots carry the fixture's demonstration

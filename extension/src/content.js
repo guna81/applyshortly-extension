@@ -1,5 +1,5 @@
 // Runs on every page but stays idle unless the page was opened with #jobhunt-autofill=<id>,
-// is a later page of a form already being filled in this tab, or the popup says "Autofill".
+// is a later page of a form already being filled in this tab, or the side panel says "Autofill".
 // It fills and reports. It submits only on the user's explicit "Auto apply", once every required
 // field is answered and after a cancellable countdown; otherwise the user clicks the site's button.
 
@@ -507,10 +507,46 @@
     }
   }
 
-  /** Brings the agent's progress into the chat: its questions, and what happened when it stopped. */
+  let shownLog = []; // the agent's log lines already narrated in the chat
+  const checkedAnswers = new Set(); // answers already flagged for a second look
+
+  /** Every new line the agent logs becomes a chat message, so the chat is the full step history. */
+  function narrate(next) {
+    const log = Array.isArray(next?.log) ? next.log.map(String).filter(Boolean) : [];
+    if (!log.length) return false;
+    // The agent sends its last 40 lines: find where what we already showed ends in the new window.
+    let fresh = log;
+    for (let drop = 0; drop <= shownLog.length; drop += 1) {
+      const kept = shownLog.slice(drop);
+      if (kept.length <= log.length && kept.every((line, i) => line === log[i])) { fresh = log.slice(kept.length); break; }
+    }
+    shownLog = log;
+    for (const text of fresh) {
+      // The agent repeats generic lines (e.g. "Filling the next known answer…"); say each only once in a row.
+      const last = [...chat.lines].reverse().find((l) => l.step);
+      if (last?.text === text || /^Filling the next known answer/i.test(text)) continue;
+      chat.lines.push({ role: "assistant", local: true, step: true, text });
+    }
+    // An answer worth a second look is said where it happens, not collected in a box.
+    let flagged = false;
+    for (const f of next.filled ?? []) {
+      if (!f.needs_review || checkedAnswers.has(f.label)) continue;
+      checkedAnswers.add(f.label);
+      chat.lines.push({ role: "assistant", local: true, step: true, text: `Filled “${f.label}” with “${String(f.value ?? "").slice(0, 120)}”.` });
+      flagged = true;
+    }
+    return fresh.length > 0 || flagged;
+  }
+
+  /** Brings the agent's progress into the chat: every step it takes, its questions, and what happened when it stopped. */
   async function agentChanged(previous, next) {
+    const narrated = narrate(next);
     const key = (a) => (a?.status === "waiting" ? `waiting:${a.question?.kind}:${a.question?.text}` : a?.status);
-    if (key(previous) === key(next)) return panel.agent(false);
+    if (key(previous) === key(next)) {
+      panel.agent(false);
+      if (narrated) broadcastPanelState();
+      return;
+    }
     if (next.status === "waiting") {
       const ask = P.agentAsk(next.question);
       if (ask) chat.lines.push({ role: "assistant", local: true, ...ask });
@@ -537,7 +573,7 @@
     broadcastPanelState();
     // The agent never submits. Resume only this run's explicit Auto apply choice,
     // through the same required-field checks and cancellable countdown as a single page.
-    if (refreshed && next.status === "ready" && next.autoSubmit === true && !next.captchaPending && next.appId === state?.appId) await autoApply();
+    if (refreshed && next.status === "ready" && (next.autoSubmit === true || autoApplyOn) && !next.captchaPending && next.appId === state?.appId) await autoApply();
   }
 
   /** One chat turn. Like the web app's review assistant: it fills fields, the user submits. */
@@ -570,7 +606,7 @@
       return handOff("asked");
     }
     // The question the chat asked last; a plain answer to it is filled here, for free.
-    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant") ?? greeting())?.target;
+    const asked = ([...chat.lines].reverse().find((l) => l.role === "assistant" && !l.step) ?? greeting())?.target;
     // A draft request drafts the question just asked, required or optional.
     const target = P.isDraftRequest(message) ? asked ?? P.promptTarget(state.results) : P.LOCAL_REPLIES.includes(message) ? P.promptTarget(state.results) : null;
     const answer = target ? null : P.directAnswer(asked, message);
@@ -594,7 +630,7 @@
     }
     const { fields, current, rows } = P.assistantFields(state.results);
     if (!fields.length) {
-      panel.toast("There are no questions on this page the assistant can answer.");
+      panel.toast("There are no questions on this page the assistant can answer.", { persist: true });
       return;
     }
     const turn = chat;
@@ -616,7 +652,7 @@
       turn.lines.pop();
       if (turn.lines.length === 1 && turn.lines[0].greeting) turn.lines = [];
       turn.draft = message;
-      panel.toast(`Assistant unavailable: ${err.message}`);
+      panel.toast(`Assistant unavailable: ${err.message}`, { persist: true });
     } finally {
       turn.pending = false;
       panel.idle();
@@ -807,7 +843,7 @@
     if (!state?.ctx || autoSubmitting || submittedReported) return;
     // A sign-in page (or account creation) is the user's to complete: the window stays for them.
     if (P.loginWall(location.pathname, [...document.querySelectorAll("input[type=password]")].some((el) => !isHidden(el)))) {
-      return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Submit for me”.");
+      return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Auto apply”.");
     }
     recheck();
     const blocked = P.autoApplyBlockers(state.results, state.ctx.app, state.readiness, state.captchaPending);
@@ -879,6 +915,7 @@
       agent: agent ? {
         status: agent.status,
         log: agent.log ?? [],
+        filled_count: (agent.filled ?? []).length,
         agent_engine: agent.agent_engine,
         planner: agent.planner,
         filling_notice: agent.filling_notice,
@@ -934,6 +971,8 @@
 
   async function startAgent({ autoSubmit = false } = {}) {
     agent = { status: "starting", log: [], appId: state?.appId ?? null };
+    shownLog = [];
+    checkedAnswers.clear();
     panel.agent(true);
     try {
       await send({ type: "agentStart", appId: state?.appId ?? null, autoSubmit });
@@ -950,7 +989,7 @@
     try {
       await send({ type: "agentControl", action, text });
     } catch (err) {
-      panel.toast(err.message);
+      panel.toast(err.message, { persist: true });
     }
   }
 
@@ -967,11 +1006,23 @@
     panel.idle();
   }
 
-  // The popup's "Let AI answer questions it can't find" takes effect at once, also on an open panel.
+  // The side panel's two switches take effect at once, also on an open panel.
+  // "Let AI answer": draft what the profile doesn't cover. "Auto apply": send once everything is answered.
+  let autoApplyOn = false;
+  try { void chrome.storage?.local?.get?.("autoApply")?.then?.((v) => { autoApplyOn = v?.autoApply === true; }); } catch { /* storage unavailable */ }
   chrome.storage?.onChanged?.addListener((changes, area) => {
-    if (area !== "local" || !("aiDrafts" in changes) || !state?.ctx) return;
-    state.ctx.aiDrafts = changes.aiDrafts.newValue !== false;
-    if (state.ctx.aiDrafts && !agentLive() && !chat.pending && state.results.some((r) => ["unresolved", "optional"].includes(r.status) && P.draftable(r.field))) void draftOpen();
+    if (area !== "local") return;
+    if ("aiDrafts" in changes && state?.ctx) {
+      state.ctx.aiDrafts = changes.aiDrafts.newValue !== false;
+      if (state.ctx.aiDrafts && !agentLive() && !chat.pending && state.results.some((r) => ["unresolved", "optional"].includes(r.status) && P.draftable(r.field))) void draftOpen();
+    }
+    if ("autoApply" in changes) {
+      autoApplyOn = changes.autoApply.newValue === true;
+      if (!autoApplyOn) return panel.cancelCountdown?.();
+      // Switched on after the form is already filled: send it now, through the usual checks and countdown.
+      const idle = state?.ctx && !chat.pending && !agentLive() && (!agent || agent.status === "ready");
+      if (idle && state.results.length && !submittedReported) void autoApply();
+    }
   });
 
   async function start(appId, opts = {}) {
@@ -1009,6 +1060,8 @@
         void agentControl(msg.subAction, msg.text);
       } else if (msg.action === "autoApply") {
         void autoApply();
+      } else if (msg.action === "cancelCountdown") {
+        panel.cancelCountdown?.();
       } else if (msg.action === "markSubmitted") {
         void markSubmitted(msg.note || "marked from the extension sidebar");
       } else if (msg.action === "run") {
@@ -1055,6 +1108,7 @@
       handedOff = true;
       agent = await send({ type: "agentStatus" }).catch(() => null);
       if (!agent) return;
+      shownLog = (agent.log ?? []).map(String);
       await panel.restore({ show: true });
       chat.lines.push({ role: "assistant", local: true, text: "On to the next page of the form." });
       await agentChanged(null, agent);

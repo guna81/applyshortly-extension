@@ -49,9 +49,16 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
     sent.push(plain(msg));
     try { return { ok: true, data: await handlers[msg.type](msg) }; } catch (err) { return { ok: false, error: err.message, status: err.status, code: err.code }; }
   };
-  let onStorage;
+  const storageListeners = [];
+  const saved = {};
   win.chrome = {
-    storage: { onChanged: { addListener: (fn) => { onStorage = fn; } } },
+    storage: {
+      onChanged: { addListener: (fn) => { storageListeners.push(fn); } },
+      local: {
+        get: async (keys) => Object.fromEntries([].concat(keys).filter((k) => k in saved).map((k) => [k, saved[k]])),
+        set: async (values) => { Object.assign(saved, values); },
+      },
+    },
     runtime: {
       id: "fixture",
       lastError: undefined,
@@ -63,7 +70,7 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
   const shadow = () => win.document.querySelector("jobhunt-autofill-panel")?.shadowRoot;
   const start = (extra = {}) => onMessage({ type: "run", appId: 5, ...extra }, { id: "fixture" }, () => {});
   const message = (msg) => onMessage(msg, { id: "fixture" }, () => {});
-  return { win, sent, start, shadow, message, handlers, storage: (changes) => onStorage?.(changes, "local") };
+  return { win, sent, start, shadow, message, handlers, saved, storage: (changes) => storageListeners.forEach((fn) => fn(changes, "local")) };
 }
 
 async function until(check, label) {
@@ -365,7 +372,7 @@ test("Contact Form 7 required skills block submission until an option is selecte
   quick().find((b) => b.textContent === "I've done it").click();
   await until(() => /Select at least one option/.test(page.shadow().textContent), "missing selection message");
   assert.ok([...page.win.document.querySelectorAll('input[type="checkbox"]')].every((el) => !el.checked));
-  const submit = () => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === "Submit for me");
+  const submit = () => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === "Auto apply");
   assert.equal(submit().disabled, true);
   const sql = page.win.document.querySelector('input[value="SQL"]');
   sql.click();
@@ -412,7 +419,7 @@ test("a typeahead that clears an unselected value no longer counts as answered",
   input.value = "";
   input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
   await until(() => /needs your answer/.test(page.shadow()?.textContent ?? ""), "cleared typeahead question");
-  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me").disabled, true);
+  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Auto apply").disabled, true);
   page.win.close();
 });
 
@@ -422,7 +429,7 @@ function watchSubmits(page) {
   return submits;
 }
 
-test("Fill and submit submits a complete form after the countdown and reports the attempt once", async () => {
+test("Auto apply submits a complete form after the countdown and reports the attempt once", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -440,7 +447,7 @@ test("Fill and submit submits a complete form after the countdown and reports th
   assert.equal(submits.length, 1, "a repeat request cannot submit the same page twice");
 });
 
-test("Fill and submit tells the background it clicked Submit, so Autopilot's window can close", async () => {
+test("Auto apply tells the background it clicked Submit, so Autopilot's window can close", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -457,7 +464,7 @@ const CHECK_FORM = `
   </form>`;
 const noticeSuggest = (needsReview) => (msg) => (/notice/i.test(msg.question) ? { answer: "30 days", source: "answer_bank", needs_review: needsReview } : { answer: null });
 
-test("Autopilot's window leaves an answer that needs a check for the user, but a person's own Fill and submit sends it", async () => {
+test("Autopilot's window leaves an answer that needs a check for the user, but a person's own Auto apply sends it", async () => {
   const unattended = panelPage(() => ({}), { form: CHECK_FORM, suggest: noticeSuggest(true) });
   const quiet = watchSubmits(unattended);
   unattended.start({ autoSubmit: true, unattended: true });
@@ -482,7 +489,7 @@ test("Autopilot's window submits when every answer is certain", async () => {
   assert.equal(page.sent.filter((m) => m.type === "autoApplied").length, 1);
 });
 
-test("Fill and submit never submits on a sign-in page and leaves the window for the user", async () => {
+test("Auto apply never submits on a sign-in page and leaves the window for the user", async () => {
   const form = `<form><label for="name">Full name</label><input id="name" required>
     <label for="pw">Password</label><input id="pw" type="password">
     <button type="submit">Submit application</button></form>`;
@@ -496,7 +503,7 @@ test("Fill and submit never submits on a sign-in page and leaves the window for 
   assert.equal(page.sent.some((m) => m.type === "report" && m.event.event === "submission_attempted"), false);
 });
 
-test("Fill and submit can be cancelled, and never submits with a required field empty", async () => {
+test("Auto apply can be cancelled, and never submits with a required field empty", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -515,10 +522,83 @@ test("Fill and submit can be cancelled, and never submits with a required field 
   assert.equal(none.length, 0);
 });
 
+test("a message about why nothing was submitted stays until dismissed; a confirmation fades", async () => {
+  const incomplete = panelPage(() => ({}), { form: AUTO_FORM.replace('<label for="name">Full name</label>', '<label for="name">Favourite colour</label>') });
+  incomplete.start({ autoSubmit: true });
+  await until(() => incomplete.shadow()?.querySelector(".toast"), "blocked toast");
+  assert.equal(incomplete.shadow().querySelector(".toast").getAttribute("role"), "alert");
+  await tick(5300); // longer than the 5s a confirmation lasts
+  const toast = incomplete.shadow().querySelector(".toast");
+  assert.ok(toast, "the blocked message is still there");
+  [...toast.querySelectorAll("button")].find((b) => b.textContent === "Dismiss").click();
+  assert.equal(incomplete.shadow().querySelector(".toast"), null);
+
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start({ autoSubmit: true });
+  const cancel = await until(() => page.shadow()?.querySelector("[data-cancel]"), "cancel");
+  cancel.click();
+  await until(() => page.shadow()?.querySelector(".toast"), "cancelled toast");
+  assert.equal(page.shadow().querySelector(".toast").getAttribute("role"), "status");
+  await tick(5300);
+  assert.equal(page.shadow().querySelector(".toast"), null, "the confirmation faded");
+});
+
+test("the countdown ticks in place: Cancel keeps focus and is announced once", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start({ autoSubmit: true });
+  const cancel = await until(() => page.shadow()?.querySelector("[data-cancel]"), "cancel");
+  assert.equal(page.shadow().activeElement, cancel, "Cancel is focused so Enter stops it");
+  assert.equal(page.shadow().querySelectorAll('[role="alert"]').length, 1);
+  const label = page.shadow().querySelector(".cd");
+  assert.equal(label.getAttribute("aria-hidden"), "true");
+  const first = label.textContent;
+  await tick(1200);
+  assert.notEqual(page.shadow().querySelector(".cd").textContent, first, "the number moved");
+  assert.equal(page.shadow().querySelector("[data-cancel]"), cancel, "the same button, not a re-render");
+  assert.equal(page.shadow().activeElement, cancel);
+  cancel.click();
+  await tick(200);
+});
+
+test("the panel can dock left and shrink, and remembers both", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  const act = (name) => page.shadow().querySelector(`[data-act="${name}"]`);
+  assert.ok(!page.shadow().querySelector(".p").classList.contains("left"));
+  act("dock").click();
+  assert.ok(page.shadow().querySelector(".p").classList.contains("left"));
+  assert.equal(act("dock").getAttribute("aria-label"), "Move to the right");
+  assert.equal(page.shadow().activeElement, act("dock"), "focus stays on the button it used");
+  act("compact").click();
+  assert.ok(page.shadow().querySelector(".p").classList.contains("compact"));
+  assert.equal(act("compact").getAttribute("aria-pressed"), "true");
+  await tick(50);
+  assert.deepEqual({ dock: page.saved.panelDock, compact: page.saved.panelCompact }, { dock: "left", compact: true });
+
+  // A new page starts with what the user chose.
+  const next = panelPage(() => ({}), { form: AUTO_FORM });
+  Object.assign(next.saved, page.saved);
+  next.start();
+  await until(() => next.shadow()?.querySelector(".p"), "panel");
+  assert.ok(next.shadow().querySelector(".p").classList.contains("left"));
+  assert.ok(next.shadow().querySelector(".p").classList.contains("compact"));
+});
+
+test("the panel says in words why Auto apply isn't ready, and follows the theme setting", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM.replace('<label for="name">Full name</label>', '<label for="name">Favourite colour</label>') });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  assert.match(page.shadow().querySelector(".why").textContent, /Auto apply isn't ready: 1 required field still needs you/);
+  assert.equal(page.shadow().querySelector(".wrap").getAttribute("data-theme"), null);
+  page.storage({ theme: { newValue: "dark" } });
+  assert.equal(page.shadow().querySelector(".wrap").getAttribute("data-theme"), "dark");
+});
+
 test("the Submit button is enabled only when it would submit, and says why not", async () => {
   const submitButton = async (page) => {
     page.start();
-    return until(() => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Submit for me"), "Submit");
+    return until(() => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Auto apply"), "Submit");
   };
   const ready = await submitButton(panelPage(() => ({}), { form: AUTO_FORM, app: { title: "Engineer", status: "ready_for_review" } }));
   assert.equal(ready.disabled, false);
@@ -539,7 +619,7 @@ test("Submit sits at the bottom of the panel, disabled until every answer is in"
   await until(() => page.shadow()?.querySelector(".composer"), "panel");
   const buttons = () => [...page.shadow().querySelectorAll("button")];
   assert.ok(!buttons().some((b) => /Fill and submit/.test(b.textContent)));
-  const submit = buttons().find((b) => b.textContent === "Submit for me");
+  const submit = buttons().find((b) => b.textContent === "Auto apply");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /1 required field still needs you/);
   // The last thing in the panel, below the message box.
@@ -549,7 +629,7 @@ test("Submit sits at the bottom of the panel, disabled until every answer is in"
   // Answering the last question enables it.
   page.win.document.getElementById("name").value = "blue";
   page.win.document.getElementById("name").dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  await until(() => !buttons().find((b) => b.textContent === "Submit for me").disabled, "Submit enabled");
+  await until(() => !buttons().find((b) => b.textContent === "Auto apply").disabled, "Submit enabled");
 });
 
 test("the website's sign-in mark is relayed once per change, and other pages send nothing", async () => {
@@ -627,7 +707,7 @@ test("dropdowns are filled, values the site rejects are retried or flagged, and 
   assert.match(text, /1 thing left for you/);
   assert.doesNotMatch(text, /All set/);
 
-  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me");
+  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Auto apply");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /1 required field still needs you/);
 });
@@ -674,7 +754,7 @@ test("an unanswered custom dropdown's options are read once, offered as quick re
 });
 
 
-test("a prefilled application is recognized and Fill and submit reaches its cancellable countdown", async () => {
+test("a prefilled application is recognized and Auto apply reaches its cancellable countdown", async () => {
   const form = `<form>
     <label for="name">First name</label><input id="name" required value="Grace">
     <label for="city">Current location</label><input id="city" required value="Bengaluru">
@@ -703,11 +783,11 @@ test("a prefilled application is recognized and Fill and submit reaches its canc
   city.value = '';
   city.dispatchEvent(new page.win.Event('input', { bubbles: true }));
   await until(() => /1 thing left/.test(page.shadow().textContent), 'cleared answer');
-  assert.equal([...page.shadow().querySelectorAll('button')].find((b) => b.textContent === 'Submit for me').disabled, true);
+  assert.equal([...page.shadow().querySelectorAll('button')].find((b) => b.textContent === 'Auto apply').disabled, true);
   page.win.close();
 });
 
-test("prefilled answers rejected by the site still block Fill and submit", async () => {
+test("prefilled answers rejected by the site still block Auto apply", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM.replace('id="name" required', 'id="name" required value="Rejected" aria-invalid="true"') });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -730,7 +810,7 @@ test("rerunning a filled form preserves answer provenance and review requirement
   page.win.close();
 });
 
-test("Fill and submit rechecks newly required fields and changed submit buttons after the countdown", async () => {
+test("Auto apply rechecks newly required fields and changed submit buttons after the countdown", async () => {
   const changes = [
     (doc) => doc.querySelector("form").insertAdjacentHTML("beforeend", '<label>New required answer<input required></label>'),
     (doc) => doc.querySelector('button[type="submit"]').setAttribute("aria-disabled", "true"),
@@ -892,7 +972,7 @@ const STEP_FORM = `<form>
   <button type="button">Next</button>
 </form>`;
 
-test("explicit Fill and submit continues after the form agent is ready, through the usual countdown", async () => {
+test("explicit Auto apply continues after the form agent is ready, through the usual countdown", async () => {
   const page = panelPage(() => ({}), { form: STEP_FORM.replace('<button', '<label>Department<input required></label><button') });
   page.start({ autoSubmit: true });
   await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
@@ -910,7 +990,7 @@ test("explicit Fill and submit continues after the form agent is ready, through 
   assert.equal(submits.length, 1);
 });
 
-test("agent readiness without Fill and submit approval leaves the completed form for review", async () => {
+test("agent readiness without Auto apply approval leaves the completed form for review", async () => {
   const page = panelPage(() => ({}), { form: STEP_FORM });
   page.start();
   await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
@@ -924,7 +1004,7 @@ test("agent readiness without Fill and submit approval leaves the completed form
   page.win.close();
 });
 
-test("Fill and submit after the agent still blocks missing answers and supports cancellation", async () => {
+test("Auto apply after the agent still blocks missing answers and supports cancellation", async () => {
   for (const incomplete of [false, true]) {
     const page = panelPage(() => ({}), { form: STEP_FORM });
     page.start({ autoSubmit: true });
@@ -988,8 +1068,12 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
 
   page.message({ type: "agentUpdate", status: "ready", appId: 5, log: ["Filled Why"], filled: [{ label: "Why", value: "I build LLM systems.", needs_review: true }], unresolved: [] });
   await until(() => bubbles().filter((t) => /I've been through the form/.test(t)), "the wrap-up line");
-  assert.ok([...shadow().querySelectorAll("details summary")].some((node) => node.textContent === "What I did on the page"));
-  assert.ok(buttons().includes("Submit for me"));
+  // Every step is told in the chat, which is the history; there is no folded log or double-check box.
+  assert.ok(bubbles().some((t) => /Filled Notice period/.test(t)));
+  assert.ok(![...shadow().querySelectorAll("details summary")].some((node) => /What I did/.test(node.textContent)));
+  assert.equal(shadow().querySelector(".recheck"), null);
+  assert.ok(bubbles().some((t) => /Filled “Why” with/.test(t)));
+  assert.ok(buttons().includes("Auto apply"));
   assert.ok(!buttons().includes("Fill with the agent"));
   assert.equal(page.sent.filter((m) => m.type === "agentStart").length, 1);
 });
@@ -1061,7 +1145,7 @@ test("a hidden field the uploader fills is waited for, then named in words inste
     throw new Error(`Timed out waiting for ${label}`);
   };
 
-  // The upload finishes a moment later: Fill and submit waits for it and submits.
+  // The upload finishes a moment later: Auto apply waits for it and submits.
   const slow = withUploads(panelPage(() => ({}), { form }));
   slow.win.document.getElementById("fileName").getClientRects = () => [];
   const sent = watchSubmits(slow);
@@ -1178,7 +1262,7 @@ test("Ashby required questions block auto apply and Yes/No can be answered in ex
   await until(() => /Select the options that apply/.test(page.shadow().textContent), "provider group");
   assert.equal(submits.length, 0);
   assert.equal(page.win.document.querySelector("#consent").checked, false);
-  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me").disabled, true);
+  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Auto apply").disabled, true);
   page.win.close();
 });
 
@@ -1463,7 +1547,7 @@ test("stopped agent never reports all set or offers submission when fields are f
   await until(() => /Stopped: review the form/.test(page.shadow()?.textContent ?? ""), "stopped headline");
   assert.doesNotMatch(page.shadow().textContent, /All set/);
   assert.equal(page.sent.some((m) => m.type === "suggest" || m.type === "assist"), false);
-  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me");
+  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Auto apply");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /stopped before completing/);
   page.win.close();

@@ -49,8 +49,8 @@ Profile and saved-answer fills are 100% free forever with no credit card require
 
 1. [Install Apply Shortly Form Agent](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) from the Chrome Web Store.
 2. Sign in to [ApplyShortly](https://applyshortly.com), save your profile, résumé and application answers, then check your connection in extension settings.
-3. Open a job application and choose **Fill this form**, or press **Alt+Shift+F**.
-4. Answer remaining questions, review the form and attachments, then submit yourself or choose **Submit for me (Auto apply)**.
+3. Open a job application and click the toolbar icon: the chat opens and starts filling by itself (or press **Alt+Shift+F**).
+4. Answer remaining questions, review the form and attachments, then submit yourself or turn on the **Auto apply** switch.
 
 Then: **save your profile → open an application → autofill → review → submit.**
 

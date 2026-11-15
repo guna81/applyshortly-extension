@@ -222,6 +222,12 @@ $("autopilotWindows").addEventListener("change", async (event) => {
   $("prefMsg").textContent = "Saved";
   setTimeout(() => ($("prefMsg").textContent = ""), 1500);
 });
+try { void chrome.storage.local.get("theme").then((stored) => { $("theme").value = stored.theme ?? "system"; }).catch(() => {}); } catch { /* keep the default */ }
+$("theme").addEventListener("change", async (event) => {
+  await chrome.storage.local.set({ theme: /** @type {HTMLSelectElement} */ (event.target).value });
+  $("prefMsg").textContent = "Saved";
+  setTimeout(() => ($("prefMsg").textContent = ""), 1500);
+});
 $("shortcuts").addEventListener("click", (event) => { event.preventDefault(); void chrome.tabs.create({ url: "chrome://extensions/shortcuts" }); });
 $("manageAI").addEventListener("click", async () => { try { await send("openWebsite", { path: "/settings#extension-ai" }); } catch (error) { setMsg(error.message, "bad"); } });
 $("openWebsite").addEventListener("click", async () => { try { await send("openWebsite"); } catch (error) { setMsg(error.message, "bad"); } });

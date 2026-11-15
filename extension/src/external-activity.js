@@ -1,4 +1,4 @@
-// Shared by the popup and the control page: a readable timeline of what the connected
+// Shared by the side panel and the control page: a readable timeline of what the connected
 // assistant is doing. Entries carry only step names (never typed values or page text).
 const ICON = { running: "", done: "✓", error: "✕", warn: "!" };
 

@@ -102,7 +102,7 @@ export function extensionPlanner(config, profile, job, request = complete, looku
     if (observation.blockers?.length) return { guarded_commands: true, agent_engine: "ai_led", session_id: session, status: "ask_user", actions: [], filled: [...filled], unresolved: [], message: "This page needs your help.", question: { kind: "blocker", text: "Complete the sign-in or verification on the page, then Continue." } };
     const answerFor = (el) => userAnswers.get(identity(el))?.identity === identity(el) ? userAnswers.get(identity(el)).value : undefined;
     if (lookup) {
-      const labels = [...new Set(observation.elements.filter((el) => ["textbox", "textarea", "select", "combobox", "radio", "checkbox"].includes(el.role) && (el.role === "radio" || el.role === "checkbox" ? !el.checked : !el.value) && el.name).map((el) => String(el.name).slice(0, 1000)))].filter((label) => !savedAnswers.has(label)).slice(0, 25);
+      const labels = [...new Set(observation.elements.filter((el) => ["textbox", "textarea", "select", "combobox", "radio", "checkbox"].includes(el.role) && (el.role === "radio" || el.role === "checkbox" ? !el.checked : !el.value) && el.name).map((el) => String(el.name).slice(0, 1000)))].filter((label) => label.trim() && !savedAnswers.has(label)).slice(0, 25);
       await Promise.all(labels.map(async (label) => {
         try { const result = await lookup(label); savedAnswers.set(label, result?.needs_review ? null : result?.answer ?? null); }
         catch { /* Retry transient lookup errors on the next observation. */ }
@@ -203,7 +203,19 @@ export function extensionPlanner(config, profile, job, request = complete, looku
         waits += 1;
       } else waits = 0;
       if (action.type === "switch_tab" && !observation.tabs?.some((tab) => tab.id === action.tab_id)) throw new Error("That tab was not opened by this application.");
-      const el = refs.get(action.ref);
+      let el = refs.get(action.ref);
+      // An open dropdown shows its options as buttons. Picking one cannot submit anything, and the page's
+      // combobox is set with a select, so a click on an option of a combobox is turned into that select.
+      let optionPick = false;
+      if (action.type === "click" && el?.role === "button" && !el.href && !el.submit_like && el.name && !FORBIDDEN_CLICK.test(String(el.name))) {
+        const label = String(el.name).trim().toLowerCase();
+        const popups = observation.elements.filter((c) => (c.role === "combobox" || c.popup) && !c.disabled && c.input_type !== "password");
+        const typed = (c) => String(c.value ?? "").trim().toLowerCase();
+        const combo = popups.find((c) => c.options?.some((o) => String(o).trim().toLowerCase() === label) || (typed(c).length >= 2 && label.startsWith(typed(c))))
+          // The search box can be empty while its list shows (react-select style): the only empty popup field owns it.
+          ?? (popups.filter((c) => !typed(c)).length === 1 ? popups.find((c) => !typed(c)) : undefined);
+        if (combo) { action.type = "select"; action.ref = combo.ref; action.text = String(el.name).trim(); el = combo; optionPick = true; }
+      }
       if (!["review", "scroll", "switch_tab", "wait"].includes(action.type) && !el) throw new Error("The AI provider selected a field that is no longer on the page.");
       if (el && !AGENT_RULES.skip.allow_fill && (skippedIdentities.has(identity(el)) || skippedIdentities.has(questionKey(el.name))) && ["type", "select", "check", "upload", "click"].includes(action.type)) {
         response.status = "ask_user";
@@ -237,7 +249,7 @@ export function extensionPlanner(config, profile, job, request = complete, looku
         }
         const message = String(userInstruction).toLowerCase();
         const explicitEdit = /\b(?:change|replace|correct|update|clear)\b/.test(message) && String(el.name ?? "").length >= 3 && message.includes(String(el.name).toLowerCase());
-        if (!explicitEdit && (el.user_edited || (String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim())))) throw new Error("The agent will not overwrite an existing answer.");
+        if (!explicitEdit && !(optionPick && String(action.text).toLowerCase().startsWith(String(el.value ?? "").trim().toLowerCase())) && (el.user_edited || (String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim())))) throw new Error("The agent will not overwrite an existing answer.");
       }
       if (action.type === "check") {
         if (!["radio", "checkbox"].includes(el.role) || typeof action.checked !== "boolean" || (el.role === "radio" && !action.checked)) throw new Error("The AI provider returned an invalid choice.");

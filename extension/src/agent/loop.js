@@ -681,7 +681,7 @@ export class Agent {
     catch (error) {
       if (!transientStepError(error) || !body.request_id || this.stopped) throw error;
       this.pause();
-      this.say("The planning service is temporarily unavailable. Resume to retry the same request without repeating page actions.");
+      this.say(`The planning service is temporarily unavailable (${String(explain(error)).slice(0, 200)}). Resume to retry the same request without repeating page actions.`);
       this.emit({ message: this.log.at(-1) });
       while (this.paused && !this.stopped) await this.waitForUser();
       if (this.stopped) return null;

@@ -170,3 +170,17 @@ test('extension has its own engine selector, defaulting to AI-led', async () => 
     assert.equal(h.stored.extensionEngine, 'rules_led');
   } finally { h.close(); }
 });
+
+test('the appearance choice is saved for every extension page', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const select = h.document.querySelector('#theme');
+    assert.deepEqual([...select.options].map((o) => o.value), ['system', 'light', 'dark']);
+    select.value = 'dark';
+    select.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(h.stored.theme, 'dark');
+  } finally {
+    h.close();
+  }
+});

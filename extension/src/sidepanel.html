@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <title>Apply Shortly Form Agent</title>
   <link rel="stylesheet" href="ui.css">
+  <script src="theme.js"></script>
 </head>
 <body class="sidepanel">
   <header class="bar-head">
     <img class="mark" src="../icons/logo.svg" width="32" height="32" alt="" aria-hidden="true">
     <div class="grow">
-      <b>Apply Shortly Form Agent</b>
       <small id="conn" class="conn"><span class="status-dot" id="dot"></span><span id="connText">Checking connection…</span></small>
     </div>
     <button id="settings" class="icon" type="button" title="Settings" aria-label="Settings">⚙</button>
@@ -24,10 +24,17 @@
   <section id="prefs" class="prefs" hidden>
     <label class="switch-row">
       <span>
-        Let AI answer questions it can't find
-        <small class="muted">Uses AI credits. Drafts are marked “Check”.</small>
+        Auto apply
+        <small class="muted">Submits once every required answer is in, after a 3-second countdown you can cancel.</small>
       </span>
-      <input id="aiDrafts" type="checkbox" class="switch">
+      <input id="autoApply" type="checkbox" class="switch" role="switch">
+    </label>
+    <label class="switch-row">
+      <span>
+        Let AI answer
+        <small class="muted">Drafts what your profile doesn't cover. Uses AI credits; drafts are marked “Check”.</small>
+      </span>
+      <input id="aiDrafts" type="checkbox" class="switch" role="switch">
     </label>
   </section>
 

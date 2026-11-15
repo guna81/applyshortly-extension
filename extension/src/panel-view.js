@@ -37,22 +37,40 @@
       chatSeen: "",
     };
     let toastTimer = 0;
+    let watchingTheme = false;
 
     const css = `
       :host { all: initial; }
       :host::backdrop { display: none !important; }
       .wrap {
-        --bg: #ffffff; --fg: #18181b; --muted: #6b7280; --line: #e5e7eb; --soft: #f4f4f6; --hover: #ececf1;
-        --accent: #078651; --accent-soft: #ecfdf5; --accent-fg: #ffffff; --good: #15803d; --good-soft: #dcfce7;
-        --warn: #b45309; --warn-soft: #fef3c7; --bad: #b91c1c; --bad-soft: #fee2e2;
+        color-scheme: light dark;
+        --bg: light-dark(#ffffff, #17181e);
+        --fg: light-dark(#18181b, #ececf1);
+        --muted: light-dark(#6b7280, #9ca3af);
+        --line: light-dark(#e5e7eb, #2c2d36);
+        --soft: light-dark(#f4f4f6, #20212a);
+        --hover: light-dark(#ececf1, #2a2b35);
+        --accent: light-dark(#078651, #34d399);
+        --accent-soft: light-dark(#ecfdf5, #064e3b88);
+        --accent-fg: light-dark(#ffffff, #052e1f);
+        --good: light-dark(#15803d, #86efac);
+        --good-soft: light-dark(#dcfce7, #14532d55);
+        --warn: light-dark(#b45309, #fcd34d);
+        --warn-soft: light-dark(#fef3c7, #78350f66);
+        --bad: light-dark(#b91c1c, #fca5a5);
+        --bad-soft: light-dark(#fee2e2, #7f1d1d55);
+        --badge-bad: #b91c1c; --badge-ok: #15803d;
         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg);
       }
-      @media (prefers-color-scheme: dark) {
-        .wrap {
-          --bg: #17181e; --fg: #ececf1; --muted: #9ca3af; --line: #2c2d36; --soft: #20212a; --hover: #2a2b35;
-          --accent: #34d399; --accent-soft: #064e3b88; --accent-fg: #052e1f; --good: #86efac; --good-soft: #14532d55;
-          --warn: #fcd34d; --warn-soft: #78350f66; --bad: #fca5a5; --bad-soft: #7f1d1d55;
-        }
+      .wrap[data-theme="light"] { color-scheme: light; }
+      .wrap[data-theme="dark"] { color-scheme: dark; }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+        .spin { animation: none; border-top-color: var(--line); border-right-color: var(--accent); }
+      }
+      @media (forced-colors: active) {
+        .p { border: 1px solid CanvasText; }
+        .bar i { forced-color-adjust: none; }
       }
       .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 440px;
         max-width: calc(100vw - 32px); min-height: min(560px, calc(100vh - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
@@ -68,7 +86,7 @@
       .t { flex: 1; min-width: 0; }
       .t b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .t small { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .icon { border: 0; background: transparent; color: var(--muted); width: 28px; height: 28px; border-radius: 8px;
+      .icon { border: 0; background: transparent; color: var(--muted); width: 36px; height: 36px; border-radius: 8px;
         font-size: 18px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
       .icon:hover { background: var(--soft); color: var(--fg); }
       .hero { padding: 0 14px 12px; }
@@ -78,7 +96,7 @@
       .bar.full i { background: var(--good); }
       .meta { color: var(--muted); font-size: 12px; }
       .body { flex: 1 1 auto; overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
-      .chip { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 99px; background: var(--bg);
+      .chip { flex: none; font-size: 12px; padding: 1px 7px; border-radius: 99px; background: var(--bg);
         color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
       .recheck { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
       .recheck-h { font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
@@ -91,7 +109,8 @@
       button.b:disabled { opacity: .6; cursor: default; }
       button.b.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
       button.b.primary:hover { filter: brightness(1.08); background: var(--accent); }
-      button.b:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+      button.b:disabled { opacity: 1; cursor: not-allowed; filter: none; }
+      button.b.primary:disabled { background: var(--soft); border-color: var(--line); color: var(--muted); }
       button.b.ghost { border-color: transparent; background: transparent; color: var(--accent); padding: 5px 6px; }
       button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .f { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
@@ -103,7 +122,7 @@
       .xsteps li { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: start; }
       .xsteps li .ic { text-align: center; font-weight: 700; color: var(--good); }
       .xsteps li.error, .xsteps li.error .ic { color: var(--bad); }
-      .xsteps li.warn, .xsteps li.warn .ic { color: #b45309; }
+      .xsteps li.warn, .xsteps li.warn .ic { color: var(--warn); }
       .xsteps li.running { color: var(--fg); font-weight: 600; }
       .xsteps .spin { width: 12px; height: 12px; margin-top: 3px; }
       /* What the user wrote to the connected assistant, and whether it has been read */
@@ -124,11 +143,25 @@
         border-top-color: var(--accent); animation: spin .8s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
       .toast { margin: 0 12px 10px; padding: 8px 10px; border-radius: 8px; background: var(--fg); color: var(--bg);
-        font-size: 13px; animation: in .15s ease-out; }
+        font-size: 13px; animation: in .15s ease-out; display: flex; gap: 8px; align-items: flex-start; }
+      .toast .grow { flex: 1; min-width: 0; }
+      .toast.sticky { border-left: 4px solid var(--warn); }
+      .toast button.b { color: inherit; border-color: transparent; text-decoration: underline; padding: 0 4px; }
+      .toast button.b:hover:not(:disabled) { background: transparent; }
+      .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+      .p:focus { outline: none; }
+      .p.left, .pill.left { right: auto; left: 16px; }
+      .p.compact { width: 360px; min-height: 0; }
+      .p.compact .body, .p.compact .composer { display: none; }
+      .icon svg { width: 18px; height: 18px; }
+      .why { padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+      .f.counting { background: var(--warn-soft); }
+      .f.counting .cd { font-weight: 600; color: var(--warn); }
       .chat { display: flex; flex-direction: column; gap: 8px; min-height: 140px; }
       .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
       .bubble.assistant { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
       .bubble.assistant p { margin: 0; }
+      .bubble.assistant.stepline { font-size: 12.5px; padding: 6px 10px; opacity: .9; }
       .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
       .bubble.assistant { width: fit-content; max-width: 100%; box-sizing: border-box; background: var(--soft); border-top-left-radius: 4px; }
       .turn { display: flex; align-items: flex-start; gap: 8px; }
@@ -170,8 +203,8 @@
         box-shadow: 0 8px 24px rgba(0,0,0,.18); cursor: pointer; font: inherit; font-weight: 600; }
       .pill.enter { animation: in .15s ease-out; }
       .pill .mark { width: 26px; height: 26px; }
-      .pill .badge { background: #dc2626; color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
-      .pill .badge.ok { background: #16a34a; }
+      .pill .badge { background: var(--badge-bad); color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
+      .pill .badge.ok { background: var(--badge-ok); }
     `;
 
     function el(tag, attrs = {}, ...children) {
@@ -295,10 +328,19 @@
       );
     }
 
-    function toast(text) {
+    // A confirmation ("Submit cancelled") fades after a few seconds. A message the user has to act
+    // on or could miss (why nothing was submitted, an error) stays until they dismiss it.
+    function toast(text, { persist = false } = {}) {
       view.toast = text;
+      view.toastPersist = persist;
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { view.toast = null; render(); }, 5000);
+      if (!persist) toastTimer = setTimeout(() => { view.toast = null; render(); }, 5000);
+      render();
+    }
+
+    function dismissToast() {
+      clearTimeout(toastTimer);
+      view.toast = null;
       render();
     }
 
@@ -307,12 +349,28 @@
       view.minimized = value;
       chrome.runtime.sendMessage({ type: "panelPreference", minimized: value }).catch(() => {});
       render();
+      // Every caller is the user minimising or reopening: keep keyboard focus on what they act on.
+      root.querySelector(value ? ".pill" : ".p")?.focus({ preventScroll: true });
+    }
+
+    // Where the panel sits and how big it is are remembered across pages (the user's own layout).
+    function setPref(name, value) {
+      view[name] = value;
+      try { void chrome.storage.local.set({ [name === "dock" ? "panelDock" : "panelCompact"]: value }).catch(() => {}); } catch { /* not remembered */ }
+      render();
+      root.querySelector(`[data-act="${name}"]`)?.focus({ preventScroll: true });
     }
 
     function header(title, subtitle) {
       return el("div", { class: "h" },
         el("div", { class: "mark", "aria-hidden": "true" }),
         el("div", { class: "t" }, el("b", { title }, title), subtitle ? el("small", { title: subtitle }, subtitle) : null),
+        el("button", { class: "icon", type: "button", "data-act": "compact", title: view.compact ? "Show the full panel" : "Smaller panel",
+          "aria-label": view.compact ? "Show the full panel" : "Smaller panel", "aria-pressed": view.compact ? "true" : "false",
+          onclick: () => setPref("compact", !view.compact) }, icon(view.compact ? CHEVRONS_OUT : CHEVRONS_IN)),
+        el("button", { class: "icon", type: "button", "data-act": "dock", title: view.dock === "left" ? "Move to the right" : "Move to the left",
+          "aria-label": view.dock === "left" ? "Move to the right" : "Move to the left",
+          onclick: () => setPref("dock", view.dock === "left" ? "right" : "left") }, icon(view.dock === "left" ? PANEL_RIGHT : PANEL_LEFT)),
         el("button", { class: "icon", type: "button", title: "Minimise (Esc)", "aria-label": "Minimise", onclick: () => setMinimized(true) }, "–"),
         el("button", { class: "icon", type: "button", title: "Close", "aria-label": "Close", onclick: () => { view.countdown?.cancel(); host.remove(); } }, "×"),
       );
@@ -335,25 +393,14 @@
         el("div", { class: "meta" }, agentBusy() ? "I'll ask here when I need you. You still submit." : "Answer below, and I'll carry on."));
     }
 
-    /** While it clicks through: the latest step. Afterwards: what it did, folded away. */
+    /** While it clicks through: the latest step. Every step is also told in the chat, which is the history. */
     function agentActivity() {
-      if (!ctl.agent) return null;
+      if (!ctl.agent || !agentBusy()) return null;
       const steps = ctl.agent.log ?? [];
-      if (agentBusy()) {
-        const paused = ctl.agent.status === "paused";
-        // An automatic pause (stalled page, call limit) explains itself in its last log line.
-        const why = paused && /Paused to avoid/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
-        return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), paused ? why : steps.at(-1) ?? "Working…");
-      }
-      if (agentLive() || !steps.length) return null;
-      const log = el("ul", { class: "alog" });
-      for (const line of steps.slice(-14)) log.append(el("li", {}, line));
-      const review = (ctl.agent.filled ?? []).filter((f) => f.needs_review);
-      return el("div", { class: "activity" },
-        review.length ? el("div", { class: "recheck" },
-          el("div", { class: "recheck-h" }, `Double-check ${review.length === 1 ? "this answer" : `these ${review.length} answers`}`),
-          el("div", { class: "recheck-chips" }, review.map((f) => el("span", { class: "chip", title: `${f.label}: ${f.value}` }, f.label)))) : null,
-        el("details", {}, el("summary", {}, "What I did on the page"), log));
+      const paused = ctl.agent.status === "paused";
+      // An automatic pause (stalled page, call limit) explains itself in its last log line.
+      const why = paused && /Paused to avoid|temporarily unavailable/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
+      return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), paused ? why : steps.at(-1) ?? "Working…");
     }
 
     const STEP_ICON = { done: "✓", error: "✕", warn: "!" };
@@ -454,10 +501,10 @@
           ? el("div", { class: "quick", role: "group", "aria-label": "Quick replies" },
             line.choices.map((c) => el("button", { type: "button", disabled: ctl.chat.pending || agentBusy(), onclick: () => void ctl.askAssistant(c) }, c)))
           : null;
-        log.append(el("div", { class: "turn" },
+        log.append(el("div", { class: line.step ? "turn step-turn" : "turn" },
           el("span", { class: "avatar" }, icon(BOT)),
           el("div", { class: "said" },
-            line.text ? el("div", { class: "bubble assistant" }, ...paragraphs(line.text).map((t) => el("p", {}, t))) : null,
+            line.text ? el("div", { class: line.step ? "bubble assistant stepline" : "bubble assistant" }, ...paragraphs(line.text).map((t) => el("p", {}, t))) : null,
             line.filled?.length ? el("ul", { class: "filled", "aria-label": "Filled" }, line.filled.map((f) => el("li", { title: f }, icon(CHECK), el("span", {}, f)))) : null,
             q ? el("div", { class: "question" },
               q.step ? el("p", { class: "step" }, q.step) : null,
@@ -475,6 +522,10 @@
     const SEND = ["M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
       "m21.854 2.147-10.94 10.939"];
     const BOT = ["M12 8V4H8", "M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z", "M2 14h2", "M20 14h2", "M15 13v2", "M9 13v2"];
+    const PANEL_LEFT = ["M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", "M9 3v18"];
+    const PANEL_RIGHT = ["M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", "M15 3v18"];
+    const CHEVRONS_IN = ["m7 20 5-5 5 5", "m7 4 5 5 5-5"];
+    const CHEVRONS_OUT = ["m7 15 5 5 5-5", "m7 9 5-5 5 5"];
     const CHECK = ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "m9 12 2 2 4-4"];
 
     /** @param {string[]} paths */
@@ -546,12 +597,12 @@
       const subtitle = [app?.company_name, ctl.state && ctl.state.appId == null ? "Not tracked in ApplyShortly" : null]
         .filter(Boolean).join(" · ");
 
-      const wrap = el("div", { class: "wrap" });
+      const wrap = el("div", { class: "wrap", "data-theme": view.theme === "light" || view.theme === "dark" ? view.theme : null });
 
       if (view.minimized) {
         const badge = ctl.submittedReported ? "Submitted ✓" : summary.todo ? `${summary.todo} to do` : "All set";
         wrap.append(el("button", {
-          class: root.querySelector(".pill") ? "pill" : "pill enter", type: "button", title: "Open ApplyShortly autofill",
+          class: `${root.querySelector(".pill") ? "pill" : "pill enter"}${view.dock === "left" ? " left" : ""}`, type: "button", title: "Open ApplyShortly autofill",
           onclick: () => setMinimized(false),
         }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
           view.busy || (view.assistant?.active && !view.assistant.paused) ? el("span", { class: "spin" })
@@ -564,7 +615,7 @@
 
       // Slide in only when the panel appears, not on every re-render (agent updates, typing).
       const entering = !root.querySelector(".p");
-      const p = el("div", { class: entering ? "p enter" : "p", role: "dialog", "aria-label": "ApplyShortly autofill" });
+      const p = el("div", { class: `p${entering ? " enter" : ""}${view.dock === "left" ? " left" : ""}${view.compact ? " compact" : ""}`, role: "dialog", "aria-label": "ApplyShortly autofill", tabindex: "-1" });
       p.addEventListener("keydown", (e) => {
         if (e.key !== "Escape") return;
         e.preventDefault(); // inside a site's modal dialog, Escape would close the application too
@@ -630,24 +681,35 @@
         if (!ctl.submittedReported) view.chatSeen = seen;
         queueMicrotask(() => { body.scrollTop = newLines ? body.scrollHeight : prevScroll; });
 
-        if (view.toast) p.append(el("div", { class: "toast", role: "status" }, view.toast));
+        if (view.toast) {
+          p.append(el("div", { class: view.toastPersist ? "toast sticky" : "toast", role: view.toastPersist ? "alert" : "status" },
+            el("span", { class: "grow" }, view.toast),
+            view.toastPersist ? btn("Dismiss", dismissToast, "ghost", { "aria-label": "Dismiss message" }) : null));
+        }
 
         // Submit is in the footer (not while the agent is working). It runs the guarded flow: refuses and says why unless every required
         // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
-        const submit = () => {
+        const blockersNow = () => {
           const blockers = P.autoApplyBlockers(results, ctl.state.ctx.app, ctl.state.readiness, ctl.state.captchaPending);
           if (["stopped", "failed"].includes(ctl.agent?.status)) blockers.push("The form agent stopped before completing its review");
-          // Enabled only when every required answer is in; the tooltip says what's missing.
-          return btn("Submit for me", () => void ctl.autoApply(), "primary", {
+          return blockers;
+        };
+        const submit = () => {
+          const blockers = blockersNow();
+          // Enabled only when every required answer is in; the note above it and the tooltip say what's missing.
+          return btn("Auto apply", () => void ctl.autoApply(), "primary", {
             disabled: blockers.length > 0,
             title: blockers.length
               ? `Not ready: ${blockers.join(". ")}.`
               : `Clicks the form's Submit button for you after a ${ctl.AUTO_APPLY_DELAY_S}-second countdown.`,
           });
         };
-        const countdown = () => el("div", { class: "f", role: "alert" },
-          el("span", { class: "grow" }, `Submitting in ${view.countdown.left}s…`),
-          btn("Cancel", view.countdown.cancel, "primary"),
+        // Announced once, when it appears. The ticking number is hidden from screen readers and
+        // updated in place (see countdown() below), so Cancel keeps focus and nothing re-reads.
+        const countdown = () => el("div", { class: "f counting" },
+          el("span", { class: "sr", role: "alert" }, "Submitting soon. Press Cancel to stop it."),
+          el("span", { class: "grow cd", "aria-hidden": "true" }, `Submitting in ${view.countdown.left}s…`),
+          btn("Cancel", view.countdown.cancel, "primary", { "data-cancel": "" }),
         );
         // Sites where the confirmation can't be detected: the user says it was sent.
         const confirmSubmitted = () => el("div", { class: "f" },
@@ -660,9 +722,13 @@
           if (view.countdown) p.append(countdown());
           p.append(composer());
           if (view.confirmSubmit) p.append(confirmSubmitted());
-          else if (!view.countdown) p.append(el("div", { class: "f" }, el("span", { class: "grow" }),
+          else if (!view.countdown) {
+            const why = blockersNow();
+            if (why.length) p.append(el("div", { class: "why" }, `Auto apply isn't ready: ${why.join(". ")}.`));
+            p.append(el("div", { class: "f" }, el("span", { class: "grow" }),
             ctl.state.appId != null ? btn("I already submitted it", () => { view.confirmSubmit = true; render(); }, "ghost") : null,
             submit()));
+          }
         }
       }
 
@@ -700,12 +766,12 @@
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });
         render();
       },
-      /** Shows the panel with a message, e.g. why Fill and submit didn't submit. */
+      /** Shows the panel with a message, e.g. why Auto apply didn't submit. */
       stop(text) {
         view.minimized = false;
-        toast(text);
+        toast(text, { persist: true });
       },
-      /** Counts down before Fill and submit submits; resolves false if the user cancels. */
+      /** Counts down before Auto apply submits; resolves false if the user cancels. */
       countdown(seconds) {
         return new Promise((resolve) => {
           const c = { left: seconds };
@@ -717,9 +783,16 @@
             resolve(go);
           };
           c.cancel = () => finish(false);
-          c.timer = setInterval(() => (--c.left <= 0 ? finish(true) : render()), 1000);
+          c.timer = setInterval(() => {
+            if (--c.left <= 0) return finish(true);
+            // Change the number in place: re-rendering would replace the Cancel button each second.
+            const label = root.querySelector(".cd");
+            if (label) label.textContent = `Submitting in ${c.left}s…`;
+            else render();
+          }, 1000);
           Object.assign(view, { countdown: c, minimized: false });
           render();
+          root.querySelector("[data-cancel]")?.focus({ preventScroll: true }); // Enter cancels
         });
       },
       focus: focusField,
@@ -735,7 +808,22 @@
         }
       },
       countdownLeft() { return view.countdown?.left ?? null; },
+      cancelCountdown() { view.countdown?.cancel(); },
       async restore({ show = false } = {}) {
+        try {
+          const saved = await chrome.storage.local.get(["panelDock", "panelCompact", "theme"]);
+          view.dock = saved.panelDock === "left" ? "left" : "right";
+          view.compact = saved.panelCompact === true;
+          view.theme = saved.theme;
+          if (!watchingTheme) {
+            watchingTheme = true;
+            chrome.storage.onChanged.addListener((changes, area) => {
+              if (area !== "local" || !changes.theme) return;
+              view.theme = changes.theme.newValue;
+              if (host?.isConnected) render(); // a panel the user closed stays closed
+            });
+          }
+        } catch { /* no storage: right side, full size, the page's colour scheme */ }
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);
       },

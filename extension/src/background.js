@@ -1,6 +1,6 @@
 import { candidateContext } from "./candidate-context.js";
 // Background service worker: owns the API key and every request to the platform.
-// Content scripts and the popup talk to it with chrome.runtime messages ({type, ...}).
+// Content scripts and the side panel talk to it with chrome.runtime messages ({type, ...}).
 
 import { endpoint, complete, canDraft, customAssist } from "./custom-ai.js";
 import { extensionPlanner } from "./extension-agent.js";
@@ -161,7 +161,7 @@ async function claimAutoApply(appId, url) {
   }
 }
 
-/** Popup → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
+/** Side panel → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
 async function start(tabId, url, allowUntracked, autoSubmit = false) {
   await externalController.stop();
   const origin = new URL(url).origin;
@@ -212,7 +212,7 @@ async function context(appId, tabId, url, page) {
   return { agentAvailable: acknowledged, agentEngine: acknowledged ? capabilities.agent_engine : undefined, profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
 }
 
-/** What the popup shows: connection, and which application (if any) the tab's page is. */
+/** What the side panel shows: connection, and which application (if any) the tab's page is. */
 async function status(tabId, url) {
   const s = await settings();
   if (!s.token) return { configured: false, baseUrl: s.baseUrl };
@@ -535,7 +535,7 @@ async function agentReport(appId, event, res, url) {
   await (await bridge()).report(body).catch((err) => console.warn("[JobHunt] agent report failed:", err.message));
 }
 
-/** Starts the agent in a tab: from the popup (finds the application by URL) or the page's panel. */
+/** Starts the agent in a tab: from the side panel (finds the application by URL) or the page's panel. */
 async function agentStart(tabId, url, appId, autoSubmit = false) {
   const revision = customProviderRevision;
   if (customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
@@ -601,6 +601,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
       if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) autoSubmit = false;
       const submit = autoSubmit && message.status === "ready" && !message.captchaPending;
       if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
+      setAttentionBadge(agent.driver.tabId, message.status === "waiting");
       return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, planner: custom?.enabled ? "custom" : "platform", autoSubmit: submit }, { frameId: 0 }).catch(() => {});
     },
     report: (event, res, pageUrl) => agentReport(id, event, res, pageUrl),
@@ -630,6 +631,15 @@ function agentControl(tabId, action, text) {
     throw new Error("Unknown agent action.");
   }
   return true;
+}
+
+/** A "!" on the toolbar icon of the tab whose form agent is waiting for the user's answer. */
+function setAttentionBadge(tabId, waiting) {
+  if (tabId == null) return;
+  try {
+    void Promise.resolve(chrome.action?.setBadgeText?.({ tabId, text: waiting ? "!" : "" })).catch(() => {});
+    if (waiting) void Promise.resolve(chrome.action?.setBadgeBackgroundColor?.({ tabId, color: "#b45309" })).catch(() => {});
+  } catch { /* no toolbar badge here */ }
 }
 
 function agentStatus(tabId) {
@@ -852,7 +862,7 @@ const handlers = {
   // Auto apply clicked the form's Submit button in this tab.
   autoApplied: (msg, sender) => autopilotAttempted(sender.tab.id),
   status: (msg) => status(msg.tabId, msg.url),
-  // From the page's panel: its own tab. From the popup or options page: the tab they name.
+  // From the page's panel: its own tab. From the side panel or options page: the tab they name.
   agentStart: (msg, sender) => (fromPage(sender)
     ? agentStart(sender.tab.id, sender.url, msg.appId ?? null, msg.autoSubmit === true)
     : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true)),
@@ -869,13 +879,11 @@ const handlers = {
   panelSync: () => true,
 };
 
-// Keyboard shortcut (Alt+Shift+F by default): like the popup's button, but fills untracked
-// pages without asking, since there's no popup to ask in.
+// Keyboard shortcut (Alt+Shift+F by default): like the side panel button, but fills untracked
+// pages without asking, since there is no side panel open to ask in.
 chrome.commands?.onCommand.addListener((command, tab) => {
   if (command !== "autofill" || !tab?.id || !/^https?:/.test(tab.url ?? "")) return;
-  if (chrome.sidePanel?.open) {
-    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
-  }
+  openPanelForTab(tab.id);
   start(tab.id, tab.url, true).catch((err) => console.warn("[JobHunt] shortcut failed:", err.message));
 });
 
@@ -896,7 +904,7 @@ async function dispatch(msg, sender) {
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/options.html", "src/popup.html", "src/sidepanel.html", "src/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/options.html", "src/sidepanel.html", "src/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
@@ -925,21 +933,27 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   await storageReady;
   await platformOrigin();
   await ensureAutopilotAlarm();
-  if (chrome.sidePanel?.setPanelBehavior) {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-  }
+  await panelOffByDefault();
   if (reason === "install" && !(await settings()).token) await chrome.runtime.openOptionsPage();
 });
 
-if (chrome.sidePanel?.setPanelBehavior) {
-  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+// The side panel belongs to the tab the user clicked the icon on: it is off everywhere else, so
+// switching tabs never drags it along. The icon click enables it for that one tab and opens it.
+async function panelOffByDefault() {
+  if (!chrome.sidePanel) return;
+  await chrome.sidePanel.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
+  await chrome.sidePanel.setOptions?.({ enabled: false }).catch(() => {});
+}
+void panelOffByDefault();
+
+function openPanelForTab(tabId) {
+  if (!tabId || !chrome.sidePanel?.open) return;
+  // Both calls go out in the same tick so the click still counts as the user's gesture.
+  void chrome.sidePanel.setOptions?.({ tabId, path: "src/sidepanel.html", enabled: true }).catch(() => {});
+  chrome.sidePanel.open({ tabId }).catch(() => {});
 }
 
-chrome.action?.onClicked?.addListener((tab) => {
-  if (tab?.id && chrome.sidePanel?.open) {
-    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
-  }
-});
+chrome.action?.onClicked?.addListener((tab) => openPanelForTab(tab?.id));
 
 // The browser reconnects by itself once the user has connected it (a browser start, an
 // extension reload or a service-worker restart); Stop turns that off.

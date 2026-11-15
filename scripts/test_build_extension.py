@@ -52,7 +52,6 @@ class BuildTest(unittest.TestCase):
                     references = [
                         manifest["background"]["service_worker"],
                         manifest.get("side_panel", {}).get("default_path"),
-                        manifest.get("action", {}).get("default_popup"),
                         manifest["options_ui"]["page"],
                         *manifest["icons"].values(),
                     ]
