@@ -51,10 +51,12 @@ class BuildTest(unittest.TestCase):
                     manifest = json.loads(archive.read("manifest.json"))
                     references = [
                         manifest["background"]["service_worker"],
-                        manifest["action"]["default_popup"],
+                        manifest.get("side_panel", {}).get("default_path"),
+                        manifest.get("action", {}).get("default_popup"),
                         manifest["options_ui"]["page"],
                         *manifest["icons"].values(),
                     ]
+                    references = [r for r in references if r]
                     references.extend(
                         name for script in manifest["content_scripts"] for name in script["js"]
                     )

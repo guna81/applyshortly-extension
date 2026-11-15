@@ -96,11 +96,12 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     return { ok: true, json: async () => url.endsWith('/start') ? { secret: 'fixture-poll-secret', code: 'ABCDEF1234', expires_in: 600 } : { state: 'connected', key: 'fixture-new-bearer' } };
   } });
   const ui = { id: runtime.id, url: runtime.getURL('src/options.html') };
+  const sidepanel = { id: runtime.id, url: runtime.getURL('src/sidepanel.html') };
   const content = { id: runtime.id, url: 'https://example.com/apply', tab: { id: 10, url: 'https://example.com/apply' } };
   const website = { id: runtime.id, url: `${packagedOrigin}/dashboard`, tab: { id: 11, url: `${packagedOrigin}/dashboard` } };
   const send = (msg, sender = ui) => new Promise((resolve) => listener(msg, sender, resolve));
   const alarm = () => alarmListener({ name: 'autopilot' });
-  return { local, session, calls, access, send, content, website, alarm, timers, agentInstances };
+  return { local, session, calls, access, send, ui, sidepanel, content, website, alarm, timers, agentInstances };
 }
 
 test('agent handoff carries Auto apply once to the same tab, never through status replay', async () => {
@@ -782,4 +783,11 @@ test('platform AI fails closed against a backend without the model gateway', asy
   const result = await h.send({ type: 'agentStart', appId: null }, h.content);
   assert.equal(result.ok, false);
   assert.equal(h.agentInstances.length, 0);
+});
+
+test('sidepanel is recognised as a privileged extension UI page', async () => {
+  const h = harness();
+  const res = await h.send({ type: 'connectionSettings' }, h.sidepanel);
+  assert.equal(res.ok, true);
+  assert.equal(res.data.configured, true);
 });

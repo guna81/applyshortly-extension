@@ -7,7 +7,7 @@ import { ashbyYesNo, ashbyProviders, ashbyConsent } from "./ashby-fixture.mjs";
 
 // Values built inside the jsdom window have its prototypes; compare plain copies.
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
 
 function page(html, url = "https://example.com/apply") {
   const dom = new JSDOM(`<!doctype html><body>${html}</body>`, { url, runScripts: "outside-only" });

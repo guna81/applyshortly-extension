@@ -60,6 +60,9 @@ const AUTO_DETAIL = "Fills it, then submits after a 3-second countdown you can c
 async function start(allowUntracked, btn, autoSubmit = false) {
   btn.disabled = true;
   (btn.querySelector(".t") ?? btn).textContent = "Starting…";
+  if (chrome.sidePanel?.open && tab?.id) {
+    await chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  }
   const r = await chrome.runtime.sendMessage({ type: "start", tabId: tab.id, url: tab.url, allowUntracked, autoSubmit });
   if (!r?.ok) {
     const e = P.friendlyError(r?.error, r?.status);

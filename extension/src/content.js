@@ -514,12 +514,16 @@
     if (next.status === "waiting") {
       const ask = P.agentAsk(next.question);
       if (ask) chat.lines.push({ role: "assistant", local: true, ...ask });
-      return panel.agent(true);
+      panel.agent(true);
+      broadcastPanelState();
+      return;
     }
     if (!["ready", "failed", "stopped"].includes(next.status)) {
       // The agent is working again: what it reported at the last "ready" no longer holds.
       if (state) { state.readiness = null; state.captchaPending = false; }
-      return panel.agent(previous == null);
+      panel.agent(previous == null);
+      broadcastPanelState();
+      return;
     }
     // Done driving: read the page as it is now, so the chat can follow up and Submit knows the state.
     const lead = next.status === "ready" ? (next.captchaPending ? "I've been through the form. Complete any CAPTCHA the site requires, then submit the application on the page." : "I've been through the form.") : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
@@ -530,6 +534,7 @@
     const follow = next.status === "ready" && state ? P.nextPrompt(state.results) : null;
     chat.lines.push({ role: "assistant", local: true, ...(next.status === "ready" ? followedBy(framedNote ? `${lead} ${framedNote}` : lead, follow) : { text: lead, choices: [] }) });
     panel.agent(true);
+    broadcastPanelState();
     // The agent never submits. Resume only this run's explicit Auto apply choice,
     // through the same required-field checks and cancellable countdown as a single page.
     if (refreshed && next.status === "ready" && next.autoSubmit === true && !next.captchaPending && next.appId === state?.appId) await autoApply();
@@ -553,7 +558,9 @@
       chat.draft = "";
       const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" && P.isPlainAnswer(message);
       await agentControl(plainAnswer ? "reply" : "message", message);
-      return panel.idle();
+      panel.idle();
+      broadcastPanelState();
+      return;
     }
     if (agent?.status === "waiting") return replyToAgent(message);
     if (agentLive() || !state?.ctx) return; // it's clicking through the form; the box is off meanwhile
@@ -853,6 +860,51 @@
   };
   const panel = globalThis.JobHuntPanelView.create(ctl);
 
+  function getPanelPayload() {
+    const results = state?.results ?? [];
+    const app = state?.ctx?.app;
+    const summary = P.summarize(results, { submitted: submittedReported });
+    const blockers = (app && results.length) ? P.autoApplyBlockers(results, app, state?.readiness, state?.captchaPending) : [];
+    if (["stopped", "failed"].includes(agent?.status)) {
+      blockers.push("The form agent stopped before completing its review");
+    }
+    const review = (agent?.filled ?? []).filter((f) => f.needs_review).map((f) => ({ label: f.label, value: f.value }));
+    return {
+      active: Boolean(state || agent),
+      appId: state?.appId ?? null,
+      app: app ? { id: app.id, title: app.title, company_name: app.company_name ?? app.company, status: app.status } : null,
+      title: app?.title || document.title || "ApplyShortly autofill",
+      company: app?.company_name || "",
+      summary,
+      agent: agent ? {
+        status: agent.status,
+        log: agent.log ?? [],
+        agent_engine: agent.agent_engine,
+        planner: agent.planner,
+        filling_notice: agent.filling_notice,
+        message: agent.message,
+        question: agent.question,
+      } : null,
+      review,
+      chat: {
+        lines: chat.lines,
+        pending: chat.pending,
+        draft: chat.draft,
+        greeting: state?.ctx ? P.assistantGreeting(results) : null,
+      },
+      submittedReported,
+      blockers,
+      countdown: panel.countdownLeft?.() ?? null,
+    };
+  }
+
+  function broadcastPanelState() {
+    try {
+      const payload = getPanelPayload();
+      send({ type: "panelSync", data: payload }).catch(() => {});
+    } catch { /* extension context invalidated */ }
+  }
+
   // ------------------------------------------------------------------ lifecycle
 
   // A native form submit (the user clicked the site's submit button). Pages that submit with
@@ -941,6 +993,30 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sender.id !== chrome.runtime.id) return;
+    if (msg?.type === "panelGetState") {
+      sendResponse({ ok: true, data: getPanelPayload() });
+      return;
+    }
+    if (msg?.type === "sidepanelStatus") {
+      panel.setHiddenBySidebar?.(Boolean(msg.active));
+      sendResponse({ ok: true, data: getPanelPayload() });
+      return;
+    }
+    if (msg?.type === "panelAction") {
+      if (msg.action === "ask" && typeof msg.text === "string") {
+        void askAssistant(msg.text);
+      } else if (msg.action === "agentControl") {
+        void agentControl(msg.subAction, msg.text);
+      } else if (msg.action === "autoApply") {
+        void autoApply();
+      } else if (msg.action === "markSubmitted") {
+        void markSubmitted(msg.note || "marked from the extension sidebar");
+      } else if (msg.action === "run") {
+        void start(state?.appId ?? null, { show: true });
+      }
+      sendResponse({ ok: true });
+      return;
+    }
     if (msg?.type === "agentUpdate") {
       const previous = agent;
       agent = msg;
@@ -955,6 +1031,7 @@
       return;
     }
     if (msg?.type === "run") {
+      if (msg.useSidebar) panel.setHiddenBySidebar?.(true);
       // Same application: keep what's been filled and answered; another one starts over.
       if (state && state.appId !== (msg.appId ?? null)) { state = null; chat = newChat(); }
       void start(msg.appId ?? null, { show: true, autoSubmit: msg.autoSubmit === true, unattended: msg.unattended === true });
@@ -963,6 +1040,9 @@
   });
 
   async function boot() {
+    send({ type: "isSidepanelOpen" }).then((res) => {
+      if (res?.open) panel.setHiddenBySidebar?.(true);
+    }).catch(() => {});
     let hello;
     try {
       hello = await send({ type: "hello", url: location.href });

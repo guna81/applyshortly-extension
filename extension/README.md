@@ -157,6 +157,18 @@ including filling, selecting, checking, uploads, navigation, options, waits and 
 executor supports additional commands for other controllers; this does not make them available
 to the shared planner. Current AI-led model inputs exclude screenshots.
 
+The shared planner fills deterministic known answers first in observation/document order (not
+visual order across frames), passing unknown fields to reach later known answers. Saved and
+explicit answers, supported résumé/cover-letter uploads and preapproved privacy acknowledgements
+participate in that same order. Profile answers marked as needing review are not treated as
+confirmed facts. Inspection, explicit corrections and covering banners/modals retain their
+special handling; all writes still pass through guarded validation and page readback.
+Unsupported or unavailable file attachments are deferred, not treated as explicit skips: known
+fields continue before the agent asks you to attach files manually and Continue. Unknown answers
+and manual attachments are then requested in page order. A required attachment still missing
+on reobservation prevents readiness, even if you chose to handle it yourself. The planner never
+submits, and never puts a résumé in an ambiguous multi-upload or unrelated file control.
+
 Choose **Extension settings → Preferences → Extension form filling method** for new extension sessions. The platform has a separate account setting. AI-led is the default for both.
 Both Platform AI and My AI provider use the same JavaScript planner. It requires JSON responses,
 not native tool calls. Platform AI uses the authenticated model gateway; custom/local providers
@@ -336,7 +348,7 @@ Autopilot hour; otherwise the job waits and rolls to the next night.
 
 For each empty field, in order:
 
-1. **Profile facts** (`src/fill.js` → `profileAnswer`): name and first/last name, email, phone,
+1. **Profile facts** (`src/profile-answer.js` → `profileAnswer`, shared by the filler and planner): name and first/last name, email, phone,
    location, links, total experience, current company and title, highest qualification, college
    and branch, cover letter, summary.
    Annual compensation uses saved amounts in the matching currency. Questions explicitly in

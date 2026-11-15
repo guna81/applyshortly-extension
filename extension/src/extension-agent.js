@@ -1,3 +1,4 @@
+import "./profile-answer.js";
 import { AGENT_RULES } from "./agent-rules.js";
 import { candidateContext } from "./candidate-context.js";
 // Shared AI-led planner for platform, custom and local models. Only the request adapter differs.
@@ -37,7 +38,8 @@ export function extensionPlanner(config, profile, job, request = complete, looku
   const ledger = new Map();
   const skippedIdentities = new Set(); // by field identity and by question text: refs change between observations
   const skippedLabels = [];
-  const consentTried = new Set();
+  const knownTried = new Set();
+  const manualUploads = new Map();
   let askedText = null;
   const confirmed = new Map();
   const userAnswers = new Map();
@@ -99,22 +101,6 @@ export function extensionPlanner(config, profile, job, request = complete, looku
     }
     if (observation.blockers?.length) return { guarded_commands: true, agent_engine: "ai_led", session_id: session, status: "ask_user", actions: [], filled: [...filled], unresolved: [], message: "This page needs your help.", question: { kind: "blocker", text: "Complete the sign-in or verification on the page, then Continue." } };
     const answerFor = (el) => userAnswers.get(identity(el))?.identity === identity(el) ? userAnswers.get(identity(el)).value : undefined;
-    // The user's standing OK to tick privacy / terms boxes is applied here, not left to the model: a model
-    // that asks instead would hand them a box they already said to tick. Each box is tried once, and one the
-    // user touched or took on themselves is left alone.
-    const consentBox = profile.preferences?.auto_consent === true && body.inspect_only !== true
-      ? observation.elements.find((el) => el.role === "checkbox" && !el.checked && !el.disabled && !el.user_edited && el.name
-        && ACKNOWLEDGEMENT.test(`${el.group ?? ""} ${el.name}`) && !NOT_ACKNOWLEDGEMENT.test(`${el.group ?? ""} ${el.name}`)
-        && !consentTried.has(identity(el)) && !skippedIdentities.has(identity(el)) && !skippedIdentities.has(questionKey(el.name)))
-      : null;
-    if (consentBox) {
-      consentTried.add(identity(consentBox));
-      const response = { guarded_commands: true, agent_engine: "ai_led", session_id: session, status: "continue", message: "Ticking the privacy box, as you asked in your profile.",
-        actions: [{ type: "check", ref: consentBox.ref, checked: true, label: `Tick “${String(consentBox.name).slice(0, 120)}” (your standing OK for privacy and terms boxes)`, observation_id: observation.observation_id, command_id: crypto.randomUUID() }],
-        filled: [...filled], unresolved: [], question: null };
-      history.push({ status: response.status, message: response.message, question: null, actions: response.actions });
-      return response;
-    }
     if (lookup) {
       const labels = [...new Set(observation.elements.filter((el) => ["textbox", "textarea", "select", "combobox", "radio", "checkbox"].includes(el.role) && (el.role === "radio" || el.role === "checkbox" ? !el.checked : !el.value) && el.name).map((el) => String(el.name).slice(0, 1000)))].filter((label) => !savedAnswers.has(label)).slice(0, 25);
       await Promise.all(labels.map(async (label) => {
@@ -122,11 +108,48 @@ export function extensionPlanner(config, profile, job, request = complete, looku
         catch { /* Retry transient lookup errors on the next observation. */ }
       }));
     }
-    const data = { candidate, job: job && { title: job.title, company: job.company_name ?? job.company, description: job.description, cover_letter: job.cover_letter, has_cover_letter_file: Boolean(job.cover_letter) },
-      saved_answers: Object.fromEntries([...savedAnswers].filter(([, answer]) => answer)), user_answers_by_ref: Object.fromEntries(observation.elements.map((el) => [el.ref, answerFor(el)]).filter(([, answer]) => answer)), allow_drafts: allowDrafts, skipped_fields: skippedLabels, typed_links: typedLinks, web_pages: Object.fromEntries(pages), observation, results: body.results, user_reply: body.user_reply, user_message: body.user_message || userInstruction, user_instructions: [...userInstructions],
+    const empty = (el) => !el.disabled && !el.user_edited && (['checkbox', 'radio'].includes(el.role) ? !el.checked : !String(el.value ?? '').trim() || PLACEHOLDER.test(String(el.value).trim()));
+    const skipped = (el) => skippedIdentities.has(identity(el)) || skippedIdentities.has(questionKey(el.name));
+    const uploadFile = (el) => {
+      if (el.role !== 'file') return null;
+      if (/cover.?letter/i.test(el.name ?? '')) return job?.cover_letter ? 'cover_letter' : null;
+      const resume = /resume|résumé|\bcv\b|curriculum/i.test(el.name ?? '');
+      const sole = observation.elements.filter((e) => e.role === 'file' && !e.disabled).length === 1
+        && !/cover|letter|photo|picture|portfolio|certificate|id\b|passport|transcript/i.test(el.name ?? '');
+      return candidate.has_resume_file && (resume || sole) ? 'resume' : null;
+    };
+    for (const el of observation.elements) {
+      if (el.role === 'file' && empty(el) && !uploadFile(el)) manualUploads.set(identity(el), el.name || 'file');
+      else if (el.role === 'file') manualUploads.delete(identity(el));
+    }
+    const knownAction = (el) => {
+      if (!empty(el) || skipped(el) || knownTried.has(identity(el))) return null;
+      if (el.role === 'file') return uploadFile(el) ? { type: 'upload', ref: el.ref } : null;
+      const consentText = `${el.group ?? ''} ${el.name ?? ''}`;
+      if (el.role === 'checkbox' && profile.preferences?.auto_consent === true && ACKNOWLEDGEMENT.test(consentText) && !NOT_ACKNOWLEDGEMENT.test(consentText)) return { type: 'check', ref: el.ref, checked: true };
+      if (CONSENT.test(consentText) || NOT_ACKNOWLEDGEMENT.test(consentText)) return null;
+      const label = ['radio', 'checkbox'].includes(el.role) ? el.group || el.name : el.name;
+      const resolved = globalThis.JobHuntProfile.profileAnswer(String(label ?? ''), profile, job);
+      const answer = answerFor(el) ?? savedAnswers.get(label) ?? savedAnswers.get(el.name) ?? (resolved && !resolved.needsReview ? resolved.value : null);
+      if (!answer) return null;
+      if (['textbox', 'textarea'].includes(el.role)) return { type: 'type', ref: el.ref, text: String(answer) };
+      if (['select', 'combobox'].includes(el.role)) return { type: 'select', ref: el.ref, text: String(answer) };
+      if (['radio', 'checkbox'].includes(el.role) && String(answer).trim().toLowerCase() === String(el.name ?? '').trim().toLowerCase()
+        && !(el.group && observation.elements.some((member) => member.role === el.role && member.group === el.group && member.checked))) return { type: 'check', ref: el.ref, checked: true };
+      return null;
+    };
+    // A failed/no-receipt write is not retried forever. Fresh user replies may explicitly retry.
+    if (body.user_reply && askedIdentity) knownTried.delete(askedIdentity);
+    const correction = /\b(?:change|replace|correct|update|clear)\b/i.test(userInstruction);
+    const ordered = !body.inspect_only && !correction
+      ? observation.elements.map(knownAction).find(Boolean) : null;
+    const coveringUI = observation.dialog || observation.elements.some((el) => ['button', 'link'].includes(el.role) && COOKIE_DECLINE.test(String(el.name ?? '').trim()));
+    const data = { deferred_upload_policy: 'deferred_manual_uploads are genuine file controls requiring manual attachment, not user skips. Do not retry uploading to them. Continue other known answers first, then request missing answers and manual attachments in observation order. Required missing uploads block readiness.', candidate, job: job && { title: job.title, company: job.company_name ?? job.company, description: job.description, cover_letter: job.cover_letter, has_cover_letter_file: Boolean(job.cover_letter) },
+      deferred_manual_uploads: Object.fromEntries(manualUploads), saved_answers: Object.fromEntries([...savedAnswers].filter(([, answer]) => answer)), user_answers_by_ref: Object.fromEntries(observation.elements.map((el) => [el.ref, answerFor(el)]).filter(([, answer]) => answer)), allow_drafts: allowDrafts, skipped_fields: skippedLabels, typed_links: typedLinks, web_pages: Object.fromEntries(pages), observation, results: body.results, user_reply: body.user_reply, user_message: body.user_message || userInstruction, user_instructions: [...userInstructions],
       inspect_only: body.inspect_only, skip_question: body.skip_question, resumed: body.resumed, history: history.slice(-6) };
-    let plan;
-    for (let reads = 0; ; reads += 1) {
+    const orderedPlan = ordered ? { status: 'continue', message: 'Filling the next known answer in page order.', action: ordered } : null;
+    let /** @type {any} */ plan = coveringUI ? null : orderedPlan;
+    for (let reads = 0; !plan; reads += 1) {
       const raw = await request(config, [{ role: "system", content: SYSTEM }, { role: "user", content: JSON.stringify({ ...data, web_pages: Object.fromEntries(pages) }) }], 1400);
       try { plan = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); }
       catch { throw new Error("The AI provider returned an invalid form-agent response."); }
@@ -137,6 +160,13 @@ export function extensionPlanner(config, profile, job, request = complete, looku
       if (!isTypedLink(typedLinks, link)) pages.set(link || "(no link)", "Not read: web_fetch opens only a link the user typed in this chat. Ask them for the link.");
       else if (!pages.has(link)) pages.set(link, await fetchPage(link));
       while (pages.size > MAX_PAGES_KEPT) pages.delete(pages.keys().next().value);
+      plan = null;
+    }
+    if (orderedPlan && !['click', 'wait', 'scroll', 'switch_tab', 'options'].includes(plan.action?.type) && plan.question?.kind !== 'blocker') plan = orderedPlan;
+    if (!ordered && !body.inspect_only && !correction && !observation.dialog && (plan.status === 'ask_user' || plan.status === 'ready_for_review' || (plan.action?.type === 'upload' && observation.elements.some((el) => el.ref === plan.action.ref && el.role === 'file')))) {
+      const next = observation.elements.find((el) => FORM_ROLES.includes(el.role) && empty(el) && !skipped(el));
+      if (next && manualUploads.has(identity(next))) plan = { status: 'ask_user', message: 'This attachment needs your help on the page.', question: { kind: 'click', ref: next.ref, text: `Attach ${next.name || 'the file'} on the page, then Continue.`, optional: next.required === false } };
+      else if (next && ((plan.question?.kind === 'question' && plan.question.ref !== next.ref) || plan.status === 'ready_for_review')) plan = { status: 'ask_user', message: 'This field needs your answer.', question: { kind: 'question', ref: next.ref, text: `Please answer: ${next.group || next.name || 'the open field'}`, optional: next.required === false } };
     }
     if (!plan || !["continue", "ask_user", "ready_for_review"].includes(plan.status) || typeof plan.message !== "string") throw new Error("The AI provider returned an invalid form-agent response.");
     if (plan.status !== "continue") waits = 0;
@@ -240,14 +270,20 @@ export function extensionPlanner(config, profile, job, request = complete, looku
           navigations += 1;
         }
       }
-      // A lone upload whose own label is generic ("Click to upload PDF or Word document") is the résumé; with several uploads the name must say so.
-      const coverLetter = action.type === "upload" && /cover.?letter/i.test(el?.name ?? "") && Boolean(job?.cover_letter);
-      const soleUpload = action.type === "upload" && el?.role === "file" && observation.elements.filter((e) => e.role === "file" && !e.disabled).length === 1 && !/cover|letter|photo|picture|portfolio|certificate|id\b|passport|transcript/i.test(el.name ?? "");
-      if (action.type === "upload" && (el.role !== "file" || !(coverLetter || /resume|résumé|\bcv\b|curriculum/i.test(el.name ?? "") || soleUpload))) throw new Error("Only the profile résumé can be attached automatically.");
+      const coverLetter = action.type === 'upload' && uploadFile(el) === 'cover_letter';
+      if (action.type === 'upload' && el.role !== 'file') throw new Error("Only the profile résumé can be attached automatically.");
+      if (action.type === 'upload' && !uploadFile(el)) {
+        manualUploads.set(identity(el), el.name || 'file');
+        response.status = 'ask_user';
+        response.message = 'This attachment needs your help on the page.';
+        response.question = { kind: 'click', ref: el.ref, text: `Attach ${el.name || 'the file'} on the page, then Continue.`, optional: el.required === false };
+        return response;
+      }
       if (action.type === "scroll" && !["up", "down"].includes(action.direction)) throw new Error("The AI provider returned an invalid scroll direction.");
       response.actions = [{ type: action.type, ref: action.ref, text: action.text, checked: action.checked, direction: action.direction, tab_id: action.type === "switch_tab" ? action.tab_id : undefined,
         file: action.type === "upload" ? coverLetter ? "cover_letter" : "resume" : undefined, label: String(plan.message).slice(0, 200),
         observation_id: observation.observation_id, command_id: crypto.randomUUID() }];
+      if (ordered) knownTried.add(identity(el));
       pendingCommand = response.actions[0].command_id;
       pendingReviewSignature = action.type === "review" ? signature : "";
       if (!["review", "options", "wait"].includes(action.type)) reviewed = false;

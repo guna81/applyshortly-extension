@@ -70,9 +70,10 @@ test("saved answers are included without generating a platform answer", async ()
     calls.push(messages);
     return JSON.stringify({ status: "ready_for_review", message: "Ready" });
   }, async (question) => { lookedUp.push(question); return { answer: "Saved answer" }; });
-  await step(body());
+  const result = await step(body());
   assert.deepEqual(lookedUp, ["Describe a project"]);
-  assert.match(JSON.stringify(calls), /Saved answer/);
+  assert.equal(result.actions[0].text, 'Saved answer');
+  assert.equal(calls.length, 0);
 });
 
 test("when drafts are disabled the planner asks instead of writing a new draft", async () => {
@@ -103,7 +104,9 @@ test("explicit answers survive intermediate planner steps with drafts off", asyn
     : count === 2 ? { status: "continue", message: "Checking", action: { type: "review" } }
     : { status: "continue", message: "Writing", action: { type: "type", ref: "0.1", text: "My own answer" } }), undefined, false);
   await step(body());
-  await step(body(field, { user_reply: "My own answer" }));
+  const written = await step(body(field, { user_reply: "My own answer" }));
+  assert.equal(written.actions[0].text, 'My own answer');
+  await step(body()); // intermediate model review
   const result = await step(body());
   assert.equal(result.actions[0].text, "My own answer");
 });
@@ -179,10 +182,14 @@ test("custom planner follows a plain \"Submit Resume\" link on a job page, but s
 test("custom planner uploads the résumé to a lone generically-labelled file input, not to one of several", async () => {
   const file = { ref: "0.1", role: "file", name: "Click to upload PDF or Word document (max 5MB)" };
   const obs = (...els) => ({ observation: { observation_id: "obs", url: "https://jobs.example/apply", elements: els, tabs: [] }, results: [] });
-  const up = () => planner({ status: "continue", message: "Attach", action: { type: "upload", ref: "0.1" } });
+  const up = () => customPlanner({}, { resume_url: 'https://files.example.test/resume.pdf' }, {}, async () => JSON.stringify({ status: "continue", message: "Attach", action: { type: "upload", ref: "0.1" } }));
   assert.equal((await up()(obs(file))).actions[0].file, "resume");
-  await assert.rejects(up()(obs(file, { ...file, ref: "0.2" })), /profile résumé/);
-  await assert.rejects(up()(obs({ ...file, name: "Upload cover letter" })), /profile résumé/);
+  for (const input of [obs(file, { ...file, ref: '0.2' }), obs({ ...file, name: 'Upload cover letter' })]) {
+    const result = await up()(input);
+    assert.equal(result.status, 'ask_user');
+    assert.deepEqual(result.actions, []);
+    assert.match(result.question.text, /Attach/);
+  }
 });
 
 test("custom planner tells the model whether a profile résumé file exists, without sending its address", async () => {

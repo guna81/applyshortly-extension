@@ -59,7 +59,7 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
       onMessage: { addListener: (fn) => { onMessage = fn; } },
     },
   };
-  for (const name of ["fill.js", "panel-model.js", "panel-view.js", "content.js"]) win.eval(src(name));
+  for (const name of ["profile-answer.js", "fill.js", "panel-model.js", "panel-view.js", "content.js"]) win.eval(src(name));
   const shadow = () => win.document.querySelector("jobhunt-autofill-panel")?.shadowRoot;
   const start = (extra = {}) => onMessage({ type: "run", appId: 5, ...extra }, { id: "fixture" }, () => {});
   const message = (msg) => onMessage(msg, { id: "fixture" }, () => {});

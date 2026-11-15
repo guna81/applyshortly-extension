@@ -108,3 +108,84 @@ test('a user correction survives an intermediate inspection', async () => {
   await planner(body({ user_message: 'change Full name to Corrected' }));
   assert.equal((await planner(body())).actions[0].text, 'Corrected');
 });
+
+const orderedBody = (elements, extra = {}) => ({ ...body(extra), observation: { ...body().observation, elements } });
+const blank = (ref, name, role = 'textbox', extra = {}) => ({ ref, name, role, value: '', required: true, ...extra });
+const questionPlan = { status: 'ask_user', message: 'Missing', question: { kind: 'question', ref: 'later', text: 'Later?' } };
+
+test('known pass fills page order, bypasses unknowns and delays privacy until its turn', async () => {
+  const elements = [blank('unknown', 'Favourite project'), blank('name', 'Full name'), blank('attachment', 'Transcript', 'file'), blank('email', 'Email'), blank('privacy', 'I accept the Terms and Privacy Policy', 'checkbox')];
+  const planner = extensionPlanner({}, { full_name: 'Example Candidate', email: 'candidate@example.test', preferences: { auto_consent: true } }, {}, async () => JSON.stringify(questionPlan));
+  for (const ref of ['name', 'email', 'privacy']) {
+    const result = await planner(orderedBody(elements));
+    assert.equal(result.actions[0].ref, ref);
+    assert.ok(result.actions[0].observation_id);
+    const el = elements.find((e) => e.ref === ref);
+    if (ref === 'privacy') el.checked = true; else el.value = result.actions[0].text;
+  }
+  const asked = await planner(orderedBody(elements));
+  assert.equal(asked.question.ref, 'unknown');
+});
+
+test('unsupported upload between known fields waits until all known answers, then hands off across ref changes', async () => {
+  let context;
+  const elements = [blank('name', 'Full name'), blank('file', 'Transcript', 'file', { identity: 'transcript' }), blank('email', 'Email')];
+  const planner = extensionPlanner({}, { full_name: 'Example', email: 'example@example.test' }, {}, async (_c, messages) => { context = JSON.parse(messages[1].content); return JSON.stringify(ready); });
+  for (const ref of ['name', 'email']) {
+    const result = await planner(orderedBody(elements)); assert.equal(result.actions[0].ref, ref);
+    elements.find((e) => e.ref === ref).value = result.actions[0].text;
+  }
+  const handoff = await planner(orderedBody(elements));
+  assert.equal(handoff.question.kind, 'click'); assert.equal(handoff.question.ref, 'file'); assert.deepEqual(handoff.actions, []);
+  assert.equal(Object.values(context.deferred_manual_uploads)[0], 'Transcript');
+  elements[1].ref = 'new-file';
+  assert.equal((await planner(orderedBody(elements, { resumed: true }))).question.ref, 'new-file');
+  elements[1].value = 'transcript.pdf';
+  assert.equal((await planner(orderedBody(elements, { resumed: true }))).actions[0].type, 'review');
+});
+
+test('unavailable and ambiguous uploads never receive an automatic resume', async () => {
+  for (const [profile, elements] of [
+    [{}, [blank('file', 'Resume', 'file')]],
+    [{ resume_url: 'https://files.example.test/resume.pdf' }, [blank('file', 'Upload document', 'file'), blank('other', 'Upload document', 'file')]],
+    [{ resume_url: 'https://files.example.test/resume.pdf' }, [blank('file', 'Cover letter', 'file')]],
+  ]) {
+    const planner = extensionPlanner({}, profile, {}, async () => JSON.stringify({ status: 'continue', message: 'Upload', action: { type: 'upload', ref: 'file' } }));
+    const result = await planner(orderedBody(elements));
+    assert.equal(result.status, 'ask_user'); assert.equal(result.question.kind, 'click'); assert.deepEqual(result.actions, []);
+  }
+});
+
+test('required manual upload cannot become ready even after explicitly skipping it', async () => {
+  const planner = extensionPlanner({}, {}, {}, async () => JSON.stringify(ready));
+  const elements = [blank('file', 'Transcript', 'file')];
+  const first = await planner(orderedBody(elements)); assert.equal(first.question.ref, 'file');
+  const skipped = await planner(orderedBody(elements, { skip_question: true }));
+  assert.equal(skipped.status, 'ask_user'); assert.deepEqual(skipped.actions, []);
+});
+
+test('known answers honor inspect, corrections, user edits, review flags and failed receipts', async () => {
+  const planner = extensionPlanner({}, { full_name: 'Profile Name', experience: [{ company: 'Old employer', is_current: false }] }, {}, async () => JSON.stringify({ status: 'ask_user', message: 'Inspect', question: { kind: 'click', text: 'Continue' } }));
+  const elements = [blank('name', 'Full name'), blank('company', 'Current company'), blank('email', 'Email', 'textbox', { user_edited: true })];
+  assert.deepEqual((await planner(orderedBody(elements, { inspect_only: true, user_message: 'Inspect' }))).actions, []);
+  const write = await planner(orderedBody(elements, { resumed: true })); assert.equal(write.actions[0].ref, 'name');
+  const failed = await planner(orderedBody(elements, { results: [{ command_id: write.actions[0].command_id, ok: false }] }));
+  assert.deepEqual(failed.filled, []); assert.deepEqual(failed.actions, []);
+});
+
+test('banner handling precedes deterministic fields, modal questions cannot jump over known fields', async () => {
+  const elements = [blank('name', 'Full name'), { ref: 'reject', role: 'button', name: 'Reject all cookies' }];
+  const planner = extensionPlanner({}, { full_name: 'Example' }, {}, async () => JSON.stringify({ status: 'continue', message: 'Decline', action: { type: 'click', ref: 'reject' } }));
+  assert.equal((await planner(orderedBody(elements))).actions[0].type, 'click');
+  const modal = extensionPlanner({}, { full_name: 'Example' }, {}, async () => JSON.stringify(questionPlan));
+  const input = orderedBody([blank('name', 'Full name'), blank('later', 'Unknown')]); input.observation.dialog = 'Application';
+  assert.equal((await modal(input)).actions[0].ref, 'name');
+});
+
+test('manual upload recovery does not relax wrong-role and stale-ref guards', async () => {
+  const elements = [blank('file', 'Transcript', 'file'), blank('text', 'Attachment description')];
+  for (const ref of ['text', 'stale']) {
+    const planner = extensionPlanner({}, {}, {}, async () => JSON.stringify({ status: 'continue', message: 'Upload', action: { type: 'upload', ref } }));
+    await assert.rejects(planner(orderedBody(elements)), /profile résumé|no longer on the page/);
+  }
+});

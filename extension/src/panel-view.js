@@ -12,6 +12,7 @@
    * @property {{lines: any[], draft: string, pending: boolean}} chat the assistant's conversation
    * @property {boolean} submittedReported
    * @property {number} AUTO_APPLY_DELAY_S
+   * @property {(() => any)} [onRender]
    * @property {(...args: any[]) => any} agentControl
    * @property {(...args: any[]) => any} askAssistant
    * @property {(...args: any[]) => any} autoApply
@@ -210,6 +211,11 @@
 
     function raise() {
       if (!host?.parentNode) return; // closed by the user
+      if (view.hiddenBySidebar) {
+        try { if (host.matches?.(":popover-open")) host.hidePopover(); } catch {}
+        host.style.setProperty("display", "none", "important");
+        return;
+      }
       const home = topModal() ?? document.documentElement;
       // Moving the host and re-entering the top layer both drop focus: keep the user's typing.
       const focused = root.activeElement;
@@ -257,12 +263,22 @@
     }
 
     function ensure() {
-      if (host?.isConnected) return;
+      if (host?.isConnected) {
+        if (view.hiddenBySidebar) {
+          try { if (host.matches?.(":popover-open")) host.hidePopover(); } catch {}
+          host.style.setProperty("display", "none", "important");
+        }
+        return;
+      }
       if (!host) {
         host = document.createElement("jobhunt-autofill-panel");
         root = host.attachShadow({ mode: "closed" });
         host.setAttribute("popover", "manual");
         for (const [prop, value] of Object.entries(HOST_STYLE)) host.style.setProperty(prop, value, "important");
+      }
+      if (view.hiddenBySidebar) {
+        try { if (host.matches?.(":popover-open")) host.hidePopover(); } catch {}
+        host.style.setProperty("display", "none", "important");
       }
       document.documentElement.append(host);
       watch();
@@ -542,6 +558,7 @@
             : view.assistant ? el("span", { class: "badge" }, view.assistant.paused ? "Paused" : "Done")
               : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
         mount(wrap);
+        ctl.onRender?.();
         return;
       }
 
@@ -559,6 +576,7 @@
         wrap.append(p);
         mount(wrap);
         refocus();
+        ctl.onRender?.();
         return;
       }
       if (ctl.agent) {
@@ -651,6 +669,7 @@
       wrap.append(p);
       mount(wrap);
       refocus();
+      ctl.onRender?.();
     }
 
     let retryAppId = null;
@@ -704,6 +723,18 @@
         });
       },
       focus: focusField,
+      setHiddenBySidebar(val) {
+        view.hiddenBySidebar = Boolean(val);
+        if (host) {
+          if (view.hiddenBySidebar) {
+            try { if (host.matches?.(":popover-open")) host.hidePopover(); } catch {}
+            host.style.setProperty("display", "none", "important");
+          } else {
+            host.style.removeProperty("display");
+          }
+        }
+      },
+      countdownLeft() { return view.countdown?.left ?? null; },
       async restore({ show = false } = {}) {
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);

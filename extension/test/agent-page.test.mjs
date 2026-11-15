@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ashbyYesNo } from "./ashby-fixture.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
 const PAGE_SRC = readFileSync(new URL("../src/agent/page.js", import.meta.url), "utf8");
 
 function page(html, url = "https://careers.example.com/apply") {

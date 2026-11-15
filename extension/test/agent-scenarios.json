@@ -344,5 +344,40 @@
         "expected": "no_reask"
       }
     ]
+  },
+  {
+    "name": "Manual transcript does not block later approved privacy acknowledgement",
+    "auto_consent": true,
+    "observation": {
+      "observation_id": "sanitized-upload-order",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "transcript",
+          "role": "file",
+          "name": "Transcript",
+          "required": true,
+          "value": ""
+        },
+        {
+          "ref": "privacy",
+          "role": "checkbox",
+          "name": "I accept the Terms and Privacy Policy",
+          "required": true,
+          "checked": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "transcript",
+          "question": "Attach transcript manually"
+        },
+        "expected": "check"
+      }
+    ]
   }
 ]

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import { JSDOM } from "jsdom";
 
-const FILL_SRC = readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
 function page(html) {

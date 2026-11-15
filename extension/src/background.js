@@ -14,9 +14,9 @@ import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofil
 // Autopilot windows are on too: the user turned Autopilot's auto-submit on, and the toggle here is the way out.
 const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led" };
 const PROFILE_TTL_MS = 60_000;
-const CONTENT_SCRIPTS = ["src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"];
+const CONTENT_SCRIPTS = ["src/profile-answer.js", "src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
-const AGENT_PAGE_SCRIPTS = ["src/fill.js", "src/agent/page.js"];
+const AGENT_PAGE_SCRIPTS = ["src/profile-answer.js", "src/fill.js", "src/agent/page.js"];
 
 const storageReady = Promise.all([
   chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
@@ -171,7 +171,8 @@ async function start(tabId, url, allowUntracked, autoSubmit = false) {
   if (!app && !allowUntracked) return { found: false };
   const appId = app?.id ?? null;
   await setTab(tabId, { appId, origin, tracked: appId !== null });
-  await sendToTab(tabId, { type: "run", appId, autoSubmit });
+  sidepanelOpenState = true;
+  await sendToTab(tabId, { type: "run", appId, autoSubmit, useSidebar: true });
   return { found: true, appId };
 }
 
@@ -863,12 +864,18 @@ const handlers = {
     profileCache = null;
     return status(undefined);
   },
+  isSidepanelOpen: () => ({ open: sidepanelOpenState }),
+  setSidepanelOpen: (msg) => { sidepanelOpenState = Boolean(msg.open); return true; },
+  panelSync: () => true,
 };
 
 // Keyboard shortcut (Alt+Shift+F by default): like the popup's button, but fills untracked
 // pages without asking, since there's no popup to ask in.
 chrome.commands?.onCommand.addListener((command, tab) => {
   if (command !== "autofill" || !tab?.id || !/^https?:/.test(tab.url ?? "")) return;
+  if (chrome.sidePanel?.open) {
+    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  }
   start(tab.id, tab.url, true).catch((err) => console.warn("[JobHunt] shortcut failed:", err.message));
 });
 
@@ -881,14 +888,15 @@ function pageJob(page) {
   return job.title ? job : null;
 }
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl"]);
+let sidepanelOpenState = false;
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl", "isSidepanelOpen", "panelSync"]);
 
 async function dispatch(msg, sender) {
   await storageReady;
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/options.html", "src/popup.html", "src/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/options.html", "src/popup.html", "src/sidepanel.html", "src/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
@@ -917,7 +925,20 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   await storageReady;
   await platformOrigin();
   await ensureAutopilotAlarm();
+  if (chrome.sidePanel?.setPanelBehavior) {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
   if (reason === "install" && !(await settings()).token) await chrome.runtime.openOptionsPage();
+});
+
+if (chrome.sidePanel?.setPanelBehavior) {
+  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+}
+
+chrome.action?.onClicked?.addListener((tab) => {
+  if (tab?.id && chrome.sidePanel?.open) {
+    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+  }
 });
 
 // The browser reconnects by itself once the user has connected it (a browser start, an
