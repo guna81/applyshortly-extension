@@ -54,6 +54,15 @@ export function jpegSize(base64) {
   return null;
 }
 
+const DIAGNOSTIC_LIMIT = 50;
+/** A URL without its query or fragment: tokens and personal data ride there. */
+export const redactUrl = (raw) => {
+  try { const url = new URL(String(raw)); return `${url.origin}${url.pathname}`.slice(0, 200); }
+  catch { return String(raw ?? "").split(/[?#]/)[0].slice(0, 200); }
+};
+/** Console text for the model: bounded, and long token-like strings are cut out. */
+const cleanText = (text) => String(text ?? "").replace(/[A-Za-z0-9+/_=-]{32,}/g, "…").replace(/\s+/g, " ").trim().slice(0, 200);
+
 export class TabDriver {
   /** @param {number} tabId @param {string} sources fill.js + agent/page.js, injected per frame */
   constructor(tabId, sources, api = globalThis.chrome) {
@@ -71,6 +80,9 @@ export class TabDriver {
     this.dialogWaiters = new Set(); // rejecters of in-flight commands, released when one opens
     this.dialogClosedWaiters = new Set();
     this.shotScale = 1;
+    // Read-only diagnostics for the model (console errors, failed requests): never bodies, headers or queries.
+    this.logged = { console: [], network: [] };
+    this.requests = new Map(); // requestId → {method, url} for failures
     this.handleCreated = (tab) => {
       if (tab.openerTabId === this.tabId && Date.now() - this.lastInteractionAt < 5000 && tab.id) this.candidateTabs.set(tab.id, tab);
     };
@@ -87,6 +99,8 @@ export class TabDriver {
     this.api.debugger.onDetach.addListener(this.handleDetach);
     await this.send("Page.enable");
     await this.send("DOM.enable");
+    await this.send("Log.enable").catch(() => {});
+    await this.send("Network.enable").catch(() => {});
     await this.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
   }
 
@@ -117,10 +131,33 @@ export class TabDriver {
       this.dialog = null;
       for (const resolve of this.dialogClosedWaiters) resolve();
       this.dialogClosedWaiters.clear();
+    } else if (method === "Log.entryAdded") {
+      const entry = params?.entry;
+      if (entry && ["error", "warning"].includes(entry.level)) this.record("console", { level: entry.level, source: String(entry.source ?? "").slice(0, 30), text: cleanText(entry.text), url: redactUrl(entry.url ?? "") });
+    } else if (method === "Network.requestWillBeSent") {
+      this.requests.set(params.requestId, { method: String(params.request?.method ?? "GET").slice(0, 10), url: redactUrl(params.request?.url) });
+      if (this.requests.size > 200) this.requests.delete(this.requests.keys().next().value);
+    } else if (method === "Network.responseReceived") {
+      const status = params.response?.status ?? 0;
+      if (status >= 400) this.record("network", { status, method: this.requests.get(params.requestId)?.method ?? "GET", url: redactUrl(params.response?.url) });
+    } else if (method === "Network.loadingFailed") {
+      const known = this.requests.get(params.requestId);
+      if (!params.canceled) this.record("network", { status: 0, method: known?.method ?? "GET", url: known?.url ?? "", error: cleanText(params.errorText) });
     } else if (method === "Page.frameNavigated" || method === "Page.loadEventFired") {
       this.axRefs.clear();
       this.worlds.clear(); // contexts are per document
     }
+  }
+
+  record(kind, entry) {
+    const list = this.logged[kind];
+    list.push(entry);
+    if (list.length > DIAGNOSTIC_LIMIT) list.shift();
+  }
+
+  /** What the page logged recently, for the planner's read_console / read_network tools. Read-only. */
+  diagnostics() {
+    return { console: this.logged.console.map((e) => ({ ...e })), network: this.logged.network.map((e) => ({ ...e })) };
   }
 
   handleDetach(source, reason) {

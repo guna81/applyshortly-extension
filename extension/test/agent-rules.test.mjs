@@ -8,17 +8,21 @@ import { addTypedLinks, isTypedLink } from "../src/web-fetch.js";
 
 const rules = JSON.parse(readFileSync(new URL("./agent-rules.json", import.meta.url), "utf8"));
 
-test("standing consent ticks a privacy or terms box, and never a declaration", async () => {
+test("standing consent offers a privacy or terms tick to the model, and never a declaration", async () => {
   for (const { label, tick } of rules.standing_consent_labels) {
-    let asked = 0;
-    const step = customPlanner({}, { full_name: "C", preferences: { auto_consent: true } }, {}, async () => {
-      asked += 1;
-      return JSON.stringify({ status: "ask_user", message: "x", question: { kind: "click", text: "Tick it yourself." } });
+    let suggested;
+    // A model that ticks the box whenever it can: the code decides whether that is allowed.
+    const step = customPlanner({}, { full_name: "C", preferences: { auto_consent: true } }, {}, async (_c, messages) => {
+      suggested = JSON.parse(messages[1].content).suggested_actions;
+      return JSON.stringify({ status: "continue", message: "Ticking", action: { type: "check", ref: "0.1", checked: true } });
     });
     const el = { ref: "0.1", role: "checkbox", name: label, required: true, checked: false };
     const res = await step({ observation: { observation_id: "o", url: "https://jobs.example/apply", elements: [el], tabs: [] }, results: [] });
-    assert.equal(res.actions.length > 0 && res.actions[0].type === "check", tick, label);
-    assert.equal(asked > 0, !tick, label);
+    // Only the acknowledgements the rules list are offered to the model as a tick; and a tick of one is accepted.
+    assert.equal(suggested.some((a) => a.type === "check"), tick, label);
+    if (tick) assert.equal(res.actions[0]?.type, "check", label);
+    // A truth, eligibility or legal declaration is never ticked, whatever the model proposes.
+    if (/certif|declar|truthful|swear|authori[sz]ed to work/i.test(label)) assert.deepEqual(res.actions, [], label);
   }
 });
 
@@ -37,8 +41,11 @@ const scenarios = JSON.parse(readFileSync(new URL("./agent-scenarios.json", impo
 for (const scenario of scenarios) test(`scenario replay: ${scenario.name}`, async () => {
   let scripted, replies;
   const fetched = [];
-  const planner = customPlanner({}, { full_name: "Candidate", preferences: { auto_consent: scenario.auto_consent === true } }, {}, async () => {
+  const planner = customPlanner({}, { full_name: "Candidate", preferences: { auto_consent: scenario.auto_consent === true } }, {}, async (_c, messages) => {
     const reply = replies.length ? replies.shift() : scripted;
+    // A model that uses the answers the extension already grounded in the profile instead of asking the user for them.
+    const { suggested_actions: grounded = [] } = JSON.parse(messages[1].content);
+    if (reply.tool === "ask_user" && grounded.length) return JSON.stringify({ status: "continue", message: "Using the profile", actions: grounded.map(({ field: _field, ...action }) => action) });
     return JSON.stringify(reply.tool === "ask_user"
       ? { status: "ask_user", message: "Question", question: { kind: "question", text: reply.question, ref: reply.ref } }
       : { status: "continue", message: "Fill", action: { type: reply.tool, ref: reply.ref, text: reply.text, checked: reply.checked, url: reply.url } });

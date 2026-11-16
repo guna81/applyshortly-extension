@@ -122,6 +122,13 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.equal(P.agentAsk(null), null);
 });
 
+test("a free-text visa or work-authorization situation question offers a grounded draft", () => {
+  const ask = P.agentAsk({ kind: "question", role: "textarea", text: "Please briefly describe your current situation regarding work authorization (for example, your current location and visa status). What should I write?" });
+  assert.deepEqual(plain(ask.choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
+  assert.equal(P.groundedDraft("Do you require visa sponsorship?"), false);
+  assert.equal(P.draftable({ kind: "text", label: "Please briefly describe your visa situation" }), false);
+});
+
 test("questions about a checkbox, upload or choice never offer a draft", () => {
   const consent = "Do you want to tick \"I agree to allow XCaliber Health to store and process my personal data\"?";
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: consent }).choices), [P.ON_PAGE_REPLY]);

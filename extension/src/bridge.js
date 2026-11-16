@@ -64,6 +64,10 @@ export function errorMessage(body, statusText) {
   return statusText;
 }
 
+/** Ordinary platform calls; the agent's model and step calls are slower and get AGENT_TIMEOUT_MS. */
+export const REQUEST_TIMEOUT_MS = 30000;
+export const AGENT_TIMEOUT_MS = 90000;
+
 export class BridgeError extends Error {
   /** @param {number} status @param {string} message */
   constructor(status, message) {
@@ -79,25 +83,50 @@ export class JobHuntBridge {
     this.token = token;
   }
 
-  async request(path, init = {}) {
-    let res;
+  /**
+   * One platform call. It never waits forever: after `timeout` ms the request is aborted and fails
+   * as a 408, which the agent loop treats as transient (retry, then pause for the user). The
+   * race also covers a fetch that ignores its abort signal.
+   * @param {string} path
+   * @param {RequestInit & {timeout?: number}} [init]
+   */
+  async request(path, { timeout = REQUEST_TIMEOUT_MS, ...init } = {}) {
+    const controller = new AbortController();
+    let timer;
+    const expired = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new BridgeError(408, `The platform didn't answer within ${Math.round(timeout / 1000)} seconds.`));
+      }, timeout);
+    });
+    expired.catch(() => {});
+    const call = async () => {
+      let res;
+      try {
+        res = await fetch(`${this.baseUrl}${path}`, {
+          ...init,
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            ...(init.body ? { "Content-Type": "application/json" } : {}),
+            ...init.headers,
+          },
+        });
+      } catch {
+        if (controller.signal.aborted) throw new BridgeError(408, `The platform didn't answer within ${Math.round(timeout / 1000)} seconds.`);
+        throw new BridgeError(0, `Can't reach ${this.baseUrl}. Is the platform running?`);
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new BridgeError(res.status, errorMessage(body, res.statusText));
+      }
+      return res.status === 204 ? null : res.json();
+    };
     try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          ...(init.body ? { "Content-Type": "application/json" } : {}),
-          ...init.headers,
-        },
-      });
-    } catch {
-      throw new BridgeError(0, `Can't reach ${this.baseUrl}. Is the platform running?`);
+      return await Promise.race([call(), expired]);
+    } finally {
+      clearTimeout(timer);
     }
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new BridgeError(res.status, errorMessage(body, res.statusText));
-    }
-    return res.status === 204 ? null : res.json();
   }
 
   browserRelayUrl() {
@@ -193,7 +222,7 @@ export class JobHuntBridge {
   }
 
   agentModel(body) {
-    return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body) });
+    return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body), timeout: AGENT_TIMEOUT_MS });
   }
 
   diagnostic(body) {
@@ -204,7 +233,7 @@ export class JobHuntBridge {
     const version = globalThis.chrome?.runtime?.getManifest?.().version;
     body = { ...body, runtime_version: version };
     void flushDiagnostics(this);
-    const send = (b) => this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(b) });
+    const send = (b) => this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(b), timeout: AGENT_TIMEOUT_MS });
     try {
       try {
         return await send(body);

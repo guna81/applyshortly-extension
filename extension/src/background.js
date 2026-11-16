@@ -2,17 +2,17 @@ import { candidateContext } from "./candidate-context.js";
 // Background service worker: owns the API key and every request to the platform.
 // Content scripts and the side panel talk to it with chrome.runtime messages ({type, ...}).
 
-import { endpoint, complete, canDraft, customAssist } from "./custom-ai.js";
+import { endpoint, complete, completeTools, canDraft, customAssist } from "./custom-ai.js";
 import { extensionPlanner } from "./extension-agent.js";
 import { externalBrowser } from "./external-browser.js";
 import { Agent } from "./agent/loop.js";
 import { TabDriver } from "./agent/cdp.js";
 import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./bridge.js";
 
-/** @type {{baseUrl: string, token: string, aiDrafts: boolean, autopilotWindows: boolean, extensionEngine: "ai_led" | "rules_led", connectionType?: string}} */
+/** @type {{baseUrl: string, token: string, aiDrafts: boolean, autopilotWindows: boolean, extensionEngine: "ai_led" | "rules_led", agentVision: boolean, connectionType?: string}} */
 // AI drafts are on unless the user turns them off: the website's agent drafts what it can't answer too.
 // Autopilot windows are on too: the user turned Autopilot's auto-submit on, and the toggle here is the way out.
-const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led" };
+const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/profile-answer.js", "src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
@@ -42,7 +42,7 @@ async function platformOrigin() {
 
 async function settings() {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -556,6 +556,8 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
     throw new Error(`The agent is still filling ${title ? `"${title}"` : "a form"} in another tab. Let it finish or stop it there, then try again.`);
   }
   const previous = agents.get(tabId);
+  // A restart is silent: the old run's closing lines must not appear in the new run's chat.
+  if (previous) previous.notify = async () => {};
   previous?.stop("Restarted.");
   if (previous) await previous.runPromise;
   const owner = await settings();
@@ -585,13 +587,22 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
     startUrl: url,
 
     verifiedCommands: capabilities?.verified_commands === true,
-    step: capabilities.agent_engine === "ai_led" ? extensionPlanner(custom, p, app, async (config, messages, maxTokens) => {
+    step: capabilities.agent_engine === "ai_led" ? extensionPlanner(custom, p, app, async (config, messages, maxTokens, look) => {
       if (revision !== customProviderRevision || customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
-      if (custom?.enabled) return complete(config, messages, maxTokens);
+      // `look`: the planning turn's screenshot and native tool calls. A call without it (a draft shortening, the review audit) gets plain text back.
+      if (custom?.enabled) return look ? completeTools(config, messages, maxTokens, { images: look.images, tools: look.tools }) : complete(config, messages, maxTokens);
       const current = await settings();
       if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) throw new Error("Account changed. Start a new form session.");
-      return (await b.agentModel({ session_id: modelSession, application_id: id, request_id: crypto.randomUUID(), messages, max_output_tokens: maxTokens })).text;
-    }, (question) => b.suggestAnswer({ question, application_id: id, allow_generate: false }), owner.aiDrafts)
+      const turn = { session_id: modelSession, application_id: id, request_id: crypto.randomUUID(), messages, max_output_tokens: maxTokens };
+      if (!look) return (await b.agentModel(turn)).text;
+      try {
+        return await b.agentModel({ ...turn, ...(look.images?.length ? { images: look.images.slice(0, 1) } : {}), native_tools: look.native_tools === true });
+      } catch (error) {
+        // A platform from before screenshots and tool calls rejects the new fields (422): ask it the plain way.
+        if (error?.status !== 422) throw error;
+        return { text: (await b.agentModel(turn)).text, tool_calls: [], tool_calls_unsupported: true };
+      }
+    }, (question) => b.suggestAnswer({ question, application_id: id, allow_generate: false }), owner.aiDrafts, undefined, { vision: owner.agentVision !== false })
       : (body) => b.agentStep({ ...body, extension_engine: owner.extensionEngine }),
     files: agentFiles(p, app),
     notify: async (message) => {
@@ -645,7 +656,7 @@ function setAttentionBadge(tabId, waiting) {
 function agentStatus(tabId) {
   const agent = agents.get(tabId);
   if (!agent) return null;
-  return { type: "agentUpdate", guarded_commands: true, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.last, planner: agent.planner };
+  return { type: "agentUpdate", guarded_commands: true, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.progress, ...agent.last, planner: agent.planner };
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -789,7 +800,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, aiDrafts: s.aiDrafts, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, aiDrafts: s.aiDrafts, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();

@@ -1,0 +1,37 @@
+{
+  "_note": "Dummy test person. Every value is fake (reserved .test / 555-01xx data). Used by Tier 0, Tier 1 and the stub platform; never replace with real data.",
+  "full_name": "Alex Testperson",
+  "email": "alex.testperson@example.test",
+  "phone": "+1 555 010 0199",
+  "location": "Austin, Texas, United States",
+  "gender": null,
+  "date_of_birth": null,
+  "links": [
+    { "label": "LinkedIn", "url": "https://www.linkedin.example.test/in/alex-testperson" },
+    { "label": "GitHub", "url": "https://github.example.test/alex-testperson" },
+    { "label": "Portfolio", "url": "https://alex-testperson.example.test" }
+  ],
+  "summary": "Backend engineer with six years of Python experience building APIs and data pipelines. (test person)",
+  "total_experience_years": 6,
+  "skills": ["Python", "PostgreSQL", "FastAPI", "Docker"],
+  "experience": [
+    { "title": "Backend Engineer", "company": "Example Test Co", "start_date": "2020-03", "end_date": null, "is_current": true, "description": "Built and ran internal APIs (test data)." }
+  ],
+  "education": [
+    { "school": "Example Test University", "degree": "BSc Computer Science", "end_year": 2019 }
+  ],
+  "preferences": {
+    "notice_period_days": 30,
+    "current_ctc": null,
+    "expected_ctc": 120000,
+    "currency": "USD",
+    "available_from": null,
+    "willing_to_relocate": false,
+    "requires_sponsorship": null,
+    "work_authorization": {},
+    "time_zone_regions": [],
+    "auto_consent": false
+  },
+  "answers": [],
+  "resume_url": "/api/extension/resume"
+}

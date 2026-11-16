@@ -5,7 +5,7 @@
 // final submit button (page.js clickable()), and it stops whenever the platform says
 // ready_for_review: the user reviews the form and submits it themselves.
 
-import { CommandRunner, readinessOf } from "./commands.js";
+import { CommandRunner, choiceGroup, isChoiceOption, readinessOf, scanFields } from "./commands.js";
 
 const MAX_OBSERVED = 400; // the API's limit on elements per observation
 const TEXT_LIMIT = 12000;
@@ -42,7 +42,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function isEditingInstruction(message) {
   const text = String(message).trim().replace(/^please\s+/i, "");
   if (/^(do not|don't|never)\b/i.test(text) || text.endsWith("?")) return false;
-  return /^(fill|set|change|select|choose|pick|upload|attach|click|tick|check|mark|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify|put|type|enter|write|input|insert|paste|use|answer|make|leave|switch|turn|fetch|read|look|visit|browse|pull|take|get)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
+  return /^(fill|set|change|select|choose|pick|upload|attach|click|tick|check|mark|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify|put|type|enter|write|draft|input|insert|paste|use|answer|make|leave|switch|turn|fetch|read|look|visit|browse|pull|take|get)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
 }
 
 // Ignore transient IDs and screenshot bytes when detecting stalled planning.
@@ -142,6 +142,7 @@ export async function observeTab(driver, { screenshot = false, annotate = false,
       viewport_height: top?.obs.viewport_height || 0 });
   }
   if (extended && driver.applicationTabs) merged.tabs = await driver.applicationTabs();
+  if (extended && driver.diagnostics) merged.diagnostics = driver.diagnostics();
   const texts = [];
   for (const { index, frame, obs } of parts) {
     // With a modal open in the tab, the rest of the page is behind it; iframes inside it count.
@@ -154,7 +155,7 @@ export async function observeTab(driver, { screenshot = false, annotate = false,
     for (const el of obs.elements) {
       if (merged.elements.length >= MAX_OBSERVED) break;
       const ref = `${index}.${el.ref}`;
-      refs.set(ref, { frame, local: el.ref, role: el.role, name: el.name, inputType: el.input_type, documentId: obs.document_id, value: el.value, href: el.href });
+      refs.set(ref, { frame, local: el.ref, role: el.role, name: el.name, inputType: el.input_type, documentId: obs.document_id, value: el.value, href: el.href, inViewport: el.in_viewport, viewportHeight: obs.viewport_height, viewportWidth: obs.viewport_width });
       if (extended && el.bounds) {
         const offset = await driver.offset(frame, frames);
         el.bounds = [el.bounds[0] + offset.x, el.bounds[1] + offset.y, el.bounds[2], el.bounds[3]];
@@ -194,9 +195,25 @@ export async function observeTab(driver, { screenshot = false, annotate = false,
 async function clickRef(driver, target, frames) {
   const refusal = await driver.call(target.frame, "clickable", target.local);
   if (refusal) throw new Error(refusal);
-  const box = await driver.call(target.frame, "box", target.local);
+  // scrollIntoView can animate under the site's CSS. Clicking the first returned position can
+  // miss a distant control; use fresh geometry only after two consecutive reads agree.
+  let box = await driver.call(target.frame, "box", target.local);
+  const movedIntoView = target.inViewport === false || (box && ((target.viewportHeight && (box.y < 0 || box.y > target.viewportHeight)) || (target.viewportWidth && (box.x < 0 || box.x > target.viewportWidth))));
+  let settled = !movedIntoView;
+  if (movedIntoView) {
+    let previous = box;
+    await sleep(100); // allow CSS scrolling to start before comparing two identical initial boxes
+    box = await waitForResult(() => driver.call(target.frame, "box", target.local), (next) => {
+      const inView = next && (!target.viewportHeight || (next.y >= 0 && next.y <= target.viewportHeight)) && (!target.viewportWidth || (next.x >= 0 && next.x <= target.viewportWidth));
+      settled = Boolean(inView && previous && ['x', 'y', 'width', 'height'].every((key) => Math.abs(next[key] - previous[key]) < 0.5));
+      previous = next;
+      return !next || settled;
+    }, 1500);
+  }
   if (!box) throw new Error("That element is gone from the page.");
   if (!box.width && !box.height) throw new Error("That element isn't visible.");
+  if (!settled) throw new Error("That element is still moving; inspect the page again before clicking.");
+  if (target.selectionOption && !(await driver.call(target.frame, 'hitTest', box.x, box.y, target.local))) throw new Error('The option is obscured or changed; inspect the dropdown again.');
   const offset = await driver.offset(target.frame, frames);
   await driver.click(box.x + offset.x, box.y + offset.y);
 }
@@ -238,7 +255,7 @@ async function typeInto(driver, target, frames, text, adaptive = false) {
       ? await waitForResult(() => driver.call(target.frame, "typedSuggestion", target.local, text), (r) => r?.ok, 1500)
       : await driver.call(target.frame, "typedSuggestion", target.local, text);
     if (pick?.ok) {
-      await clickRef(driver, { ...target, local: pick.ref }, frames);
+      await clickRef(driver, { ...target, local: pick.ref, selectionOption: true }, frames);
       return;
     }
   }
@@ -295,7 +312,7 @@ async function choose(driver, target, frames, answer, adaptive = false) {
     const left = keyed.undone === false && keyed.committed ? ` The field now shows "${keyed.committed}": fix it by hand.` : "";
     throw new Error(`No option matches "${answer}".${shown}${left}`.slice(0, 290));
   }
-  await clickRef(driver, { ...target, local: match.ref }, frames);
+  await clickRef(driver, { ...target, local: match.ref, selectionOption: true }, frames);
   const readback = await readCommitted(driver, target, [match.text, answer]);
   // Some widgets (a phone's country list) stay open after a pick, and an open list of 200+ options
   // would fill every later page read: close it now that the choice is made.
@@ -378,6 +395,8 @@ export async function questionChoices(driver, refs, frames, observation, questio
   if (el.role === "radio" || (el.role === "checkbox" && el.group)) {
     return observation.elements.filter((e) => e.role === el.role && e.group === el.group).map((e) => e.name).filter(Boolean);
   }
+  // Buttons, a switch or pills that share one question (Yes / No) are that question's choices too.
+  if (isChoiceOption(el) && el.role !== "radio" && el.group) return choiceGroup(observation.elements, el).map((e) => e.name).filter(Boolean);
   if (el.role === "checkbox" && !el.group && el.section) {
     // Boxes the page lists under one question without grouping them (Greenhouse's salary ranges)
     // are that question's choices; the platform folds them the same way.
@@ -390,6 +409,14 @@ export async function questionChoices(driver, refs, frames, observation, questio
   try {
     await driver.call(target.frame, "noteShown");
     await clickRef(driver, target, frames);
+    // An unsuccessful search can hide every option. Clear only the input's uncommitted
+    // filter, never its selected chip/value or a search the user is editing.
+    const query = await driver.call(target.frame, 'typedText', target.local).catch(() => '');
+    const state = await driver.call(target.frame, 'freshState', target.local).catch(() => null);
+    if (String(query ?? '').trim() && state?.user_edited !== true) {
+      const focus = await driver.call(target.frame, 'focusForTyping', target.local);
+      if (focus?.ok && focus.mode === 'keys') await driver.press('Backspace');
+    }
     await sleep(DROPDOWN_WAIT_MS);
     return (await driver.call(target.frame, "shownChoices", target.local)) ?? [];
   } catch {
@@ -457,7 +484,12 @@ export async function execute(driver, refs, frames, action, files) {
         return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : await driver.call(target.frame, "holdsTyped", shown, text) };
       }
       const committed = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
-      return { matched: text, committed: committed ?? "", verified: String(committed ?? "").replace(/\D/g, "").endsWith(text.replace(/\D/g, "")),
+      const digits = (value) => String(value ?? '').replace(/\D/g, '');
+      const currentPlan = !String(committed ?? '').trim().startsWith('+')
+        ? await driver.call(target.frame, 'phoneTypePlan', target.local, action.text).catch(() => null) : null;
+      const verified = Boolean(digits(committed) && (digits(committed) === digits(action.text) ||
+        (digits(committed) === digits(text) && currentPlan?.ok === true)));
+      return { matched: text, committed: committed ?? "", verified,
         ...(country ? { country: country.committed } : {}) };
     }
     case "select": {
@@ -575,6 +607,7 @@ export class Agent {
   constructor({ tabId, appId, driver, step, files, notify, report, startUrl = null, verifiedCommands = false }) {
     this.trustedOrigins = new Set(startUrl ? [new URL(startUrl).origin] : []);
     this.planner = "platform";
+    this.silenceMs = 20000; // a planning call that takes longer than this is reported to the user every interval, so the chat never goes silent
     // The platform understands fill_form / options / review and the per-action `result` (committed, verified).
     this.verifiedCommands = verifiedCommands;
     /** @type {Promise<void> | null} */
@@ -609,7 +642,7 @@ export class Agent {
   }
 
   emit(extra = {}) {
-    const message = { type: "agentUpdate", guarded_commands: true, status: this.status, filling_notice: this.fillingNotice, log: this.log.slice(-40), appId: this.appId, ...this.last, ...extra };
+    const message = { type: "agentUpdate", guarded_commands: true, status: this.status, filling_notice: this.fillingNotice, log: this.log.slice(-40), appId: this.appId, ...this.progress, ...this.last, ...extra };
     void this.notify(message);
   }
 
@@ -675,18 +708,29 @@ export class Agent {
   }
 
   async planningStep(body) {
-    // Local custom planners mutate their own transcript and have no platform request cache.
-    if (this.planner !== "platform") return this.step(body);
-    try { return await stepWithRetry(this.step, body); }
-    catch (error) {
-      if (!transientStepError(error) || !body.request_id || this.stopped) throw error;
-      this.pause();
-      this.say(`The planning service is temporarily unavailable (${String(explain(error)).slice(0, 200)}). Resume to retry the same request without repeating page actions.`);
-      this.emit({ message: this.log.at(-1) });
-      while (this.paused && !this.stopped) await this.waitForUser();
-      if (this.stopped) return null;
-      // The same id returns a cached decision if the original request actually completed.
-      return stepWithRetry(this.step, body);
+    // The platform caches a request by its id, so a retry cannot repeat a decision. A custom provider has no such cache, but its
+    // failed call changed nothing on the page, so the same request is simply sent again after the user presses Resume.
+    const local = this.planner !== "platform";
+    const call = () => (local ? this.step(body) : stepWithRetry(this.step, body));
+    const attempt = async () => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        this.say(`Still waiting for ${local ? "the AI provider" : "the planning service"} (${Math.round((Date.now() - started) / 1000)}s). It may be slow or retrying.`);
+        this.emit({ message: this.log.at(-1) });
+      }, this.silenceMs);
+      try { return await call(); } finally { clearInterval(timer); }
+    };
+    for (let pauses = 0; ; pauses++) {
+      try { return await attempt(); }
+      catch (error) {
+        if (!transientStepError(error) || (!local && !body.request_id) || this.stopped || pauses >= 3) throw error;
+        this.pause();
+        const who = local ? "The AI provider is" : "The planning service is";
+        this.say(`${who} temporarily unavailable (${String(explain(error)).slice(0, 200)}). Resume to retry the same request without repeating page actions.`);
+        this.emit({ message: this.log.at(-1) });
+        while (this.paused && !this.stopped) await this.waitForUser();
+        if (this.stopped) return null;
+      }
     }
   }
 
@@ -859,6 +903,11 @@ export class Agent {
         wantScreenshot = Boolean(res.want_screenshot);
         annotateScreenshot = Boolean(res.annotate_screenshot);
         if (res.message?.startsWith("Using Rules-led: AI-led is unavailable")) this.fillingNotice = res.message.split(".")[0] + ".";
+        // A live count from what the agent just saw, so the panel's bar moves while the agent works.
+        try {
+          const { fields } = scanFields(observation);
+          this.progress = { field_total: fields.length, field_answered: fields.filter((f) => { const v = String(f.value ?? "").trim(); return v && v !== "false"; }).length };
+        } catch { /* the count is a nicety; never fail a step over it */ }
         this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code };
         if (res.message && res.status !== "continue") this.say(res.message);
         for (const [index, action] of (res.actions ?? []).entries()) {
@@ -907,9 +956,14 @@ export class Agent {
         if (res.status === "ready_for_review") {
           this.status = "ready";
           const captchaPending = observation.blockers.includes("captcha") && !captchaClearedFor;
-          this.say(captchaPending
+          const remaining = [...new Set(scanFields(observation).fields
+            .filter((field) => field.role !== 'file' || field.required)
+            .filter((field) => !String(field.value ?? '').trim() || field.value === 'false' || ('error' in field && field.error))
+            .map((field) => String(field.name || 'the open field').slice(0, 200)))];
+          const handoff = captchaPending
             ? "Everything I could fill is done. Review the form, complete any CAPTCHA the site requires, then submit it yourself."
-            : "Everything I could fill is done. Review the form and submit it yourself.");
+            : "Everything I could fill is done. Review the form and submit it yourself.";
+          this.say(handoff + (remaining.length ? `\nRemaining fields for you:\n${remaining.map((name) => `• ${name}`).join('\n')}` : ''));
           // The panel only sees the top document; tell it what this frame-aware observation found.
           this.emit({ captchaPending, readiness: readinessOf(observation, refs) });
           await this.report("filled", res, this.url);

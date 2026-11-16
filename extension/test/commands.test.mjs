@@ -373,3 +373,18 @@ test("readinessOf: a one-frame page reports nothing as framed and bounds the mis
   assert.equal(readiness.framed, 0);
   assert.equal(readiness.missing.length, 30);
 });
+
+test("scanFields: button-choice pairs, switches and sliders are fields the review can find unanswered", () => {
+  const { fields, missing } = scanFields({ elements: [
+    { ref: "1", role: "button", name: "Yes", group: "Need sponsorship?", required: true, pressed: false },
+    { ref: "2", role: "button", name: "No", group: "Need sponsorship?", required: true, pressed: false },
+    { ref: "3", role: "button", name: "Yes", group: "Previously employed?", required: true, pressed: true },
+    { ref: "4", role: "button", name: "No", group: "Previously employed?", required: true, pressed: false },
+    { ref: "5", role: "switch", name: "Open to relocation", required: true, checked: false },
+    { ref: "6", role: "slider", name: "Years", required: true, value: "4" },
+    { ref: "7", role: "button", name: "Back" },
+  ] });
+  assert.deepEqual(fields.map((f) => f.name), ["Need sponsorship?", "Previously employed?", "Open to relocation", "Years"]);
+  assert.deepEqual(missing.map((m) => m.name), ["Need sponsorship?", "Open to relocation"]);
+  assert.equal(fields[1].value, "Yes");
+});

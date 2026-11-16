@@ -61,7 +61,14 @@ The store version connects to `https://applyshortly.com` and updates automatical
 1. **Connect your account:** the extension retrieves your saved ApplyShortly profile and answers.
 2. **Fill the application:** it discovers the form fields and inserts matching details. The form agent helps with multi-step pages and embedded forms.
 3. **Complete missing answers:** answer screening questions in the chat panel or request an optional AI draft.
+   In AI-led mode, a new open-ended narrative is offered before it is written. Choose
+   **Draft it for me** for one or two plain sentences grounded in your profile and earlier
+   answers. Visa and work-authorization narratives quote recorded profile facts without
+   assuming authorization in another country; missing legal facts remain yours to answer.
 4. **Review and submit:** check answers, attachments and consent. Submit on the employer's site, or explicitly choose Auto apply with its checks and cancellable countdown.
+   Skipped fields stay listed for your review. After **Continue**, the agent hands the form
+   back without asking about them again; they can still be incomplete, and submission keeps
+   its required-field checks. Unused optional upload helpers do not count as remaining tasks.
 5. **Track the outcome:** an attempt needs verification until an employer receipt or your confirmation establishes that it was submitted.
 
 For account setup, AI settings, screenshots and troubleshooting, see the [extension guide](extension/README.md).

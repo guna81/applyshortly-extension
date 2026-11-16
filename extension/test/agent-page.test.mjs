@@ -375,6 +375,45 @@ test("Ashby yes/no observations retain the question, requirement and selected No
   assert.equal(radios.find((e) => e.name === "No").checked, true);
 });
 
+test("a Yes/No pill group on an unknown site is seen as one question with pressed state", () => {
+  const { doc, observe } = page(`<form><div class="q"><p class="question-title">Do you need visa sponsorship? *</p>
+    <div class="pills"><button type="button" aria-pressed="false">Yes</button><button type="button" aria-pressed="false">No</button></div></div></form>`);
+  let pills = observe().elements.filter((e) => e.role === "button" && ["Yes", "No"].includes(e.name));
+  assert.equal(pills.length, 2);
+  assert.ok(pills.every((e) => e.group === "Do you need visa sponsorship?" && e.required === true && e.pressed === false));
+  doc.querySelectorAll("button")[1].setAttribute("aria-pressed", "true");
+  pills = observe().elements.filter((e) => e.role === "button");
+  assert.equal(pills.find((e) => e.name === "No").pressed, true);
+  assert.equal(pills.find((e) => e.name === "Yes").pressed, false);
+});
+
+test("a lone toggle button is not turned into a question group", () => {
+  const { observe } = page(`<div><p>Notifications</p><button type="button" aria-pressed="false">Mute</button></div>`);
+  const mute = byName(observe(), "Mute");
+  assert.equal(mute.pressed, false);
+  assert.equal(mute.group, undefined);
+});
+
+test("switches, sliders and steppers are observed with their state", () => {
+  const { observe } = page(`<div role="switch" aria-checked="true" aria-label="Open to relocation" tabindex="0"></div>
+    <div role="slider" aria-label="Years of experience" aria-valuenow="4" tabindex="0"></div>
+    <div role="spinbutton" aria-label="Notice weeks" aria-valuenow="2" tabindex="0"></div>`);
+  const obs = observe();
+  const relocation = byName(obs, "Open to relocation");
+  assert.equal(relocation.role, "switch");
+  assert.equal(relocation.checked, true);
+  assert.equal(byName(obs, "Years of experience").value, "4");
+  assert.equal(byName(obs, "Notice weeks").role, "spinbutton");
+});
+
+test("a toggle button's pressed state is what the state reader reports", () => {
+  const { A, doc, observe } = page(`<div><p>Relocate?</p><button type="button" aria-pressed="false">Yes</button><button type="button" aria-pressed="false">No</button></div>`);
+  const yes = byName(observe(), "Yes");
+  assert.equal(plain(A.state(yes.ref)).checked, false);
+  doc.querySelector("button").setAttribute("aria-pressed", "true");
+  assert.equal(plain(A.state(yes.ref)).checked, true);
+});
+
 test("screenshot ref labels use merged refs, do not intercept input, and are removed", () => {
   const { doc, A, observe } = page('<label for="n">Full name</label><input id="n">');
   const ref = byName(observe(), "Full name").ref;
@@ -597,4 +636,25 @@ test("showsChoice matches the option or the answer, ignoring case and punctuatio
   assert.equal(A.showsChoice("Bengaluru, India", "bengaluru"), true);
   assert.equal(A.showsChoice("", "Yes"), false);
   assert.equal(A.showsChoice("No", "Yes"), false);
+});
+
+test("clickable refuses a final control next to a single field or inside a form, but not a lone link", () => {
+  const { A, observe } = page(`
+    <form><label for="e">Email</label><input id="e" type="email"><button type="button">Send application</button></form>`);
+  const obs = observe();
+  assert.equal(A.clickable(byName(obs, "Send application").ref, false), "Submitting is left to you.");
+  const lone = page(`<main><h1>Job</h1><button type="button">Next</button></main>`);
+  const o2 = lone.observe();
+  assert.equal(lone.A.clickable(byName(o2, "Next").ref, false), null);
+});
+
+test('a multi-value combobox reports selected chips, not its empty search input', () => {
+  const { A, observe } = page(`<form><label for="source">Source</label>
+    <div class="select-container"><div class="select__value-container">
+      <div class="select__multi-value"><div class="select__multi-value__label">Professional network</div><button type="button" aria-label="Remove Professional network">×</button></div>
+      <div><input id="source" role="combobox" aria-haspopup="listbox" aria-expanded="false" value=""></div>
+    </div><input type="hidden" name="source" value="network"></div></form>`);
+  const source = byName(observe({ extended: true }), 'Source');
+  assert.equal(source.value, 'Professional network');
+  assert.equal(A.committedValue(source.ref, true), 'Professional network');
 });

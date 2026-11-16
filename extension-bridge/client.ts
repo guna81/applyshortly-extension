@@ -422,7 +422,7 @@ export class JobHuntBridge {
     return this.request(`/api/extension/agent/capabilities?${query}`);
   }
 
-  agentModel(body: { session_id: string; application_id: number | null; request_id: string; messages: Array<{role: string; content: string}>; max_output_tokens: number }): Promise<{text: string}> {
+  agentModel(body: { session_id: string; application_id: number | null; request_id: string; messages: Array<{role: string; content: string}>; max_output_tokens: number; images?: string[]; native_tools?: boolean }): Promise<{text: string; tool_calls?: Array<{name: string; arguments: Record<string, unknown>}>; tool_calls_unsupported?: boolean}> {
     return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body) });
   }
 

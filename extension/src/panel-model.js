@@ -234,6 +234,14 @@
   /** True when the message answers the agent's question rather than telling it to do something. */
   const isPlainAnswer = (message) => !INSTRUCTION.test(String(message).trim());
 
+  // A free-text "describe your situation" question that touches a legal fact (visa, work authorization).
+  // A generic AI draft is refused for these; the agent may still write it from the profile and the
+  // user's own earlier answers, so the button is offered and answered by the agent, not by `suggest`.
+  const SITUATION = /\b(?:describe|explain|briefly|situation|tell us|elaborate|details?)\b/i;
+  const GROUNDED_TOPIC = /visa|sponsor|work (?:permit|authori[sz]ation)|authori[sz]ed to work|right to work|eligible to work/i;
+  /** An open question about the user's own legal situation, drafted only from their profile and answers. */
+  const groundedDraft = (text) => SITUATION.test(text ?? "") && GROUNDED_TOPIC.test(text ?? "") && !PAGE_ACTION.test(text ?? "");
+
   /** The chat line for the agent waiting on the user: its question, or what to do on the page. */
   function agentAsk(question) {
     if (!question) return null;
@@ -241,7 +249,7 @@
       const choices = (question.choices ?? []).slice(0, MAX_CHOICES);
       // A request to open a page, link or button is for the user to act on, never an answer to draft.
       const typed = !question.role || TYPED_ROLES.includes(question.role);
-      const draft = typed && !choices.length && !PAGE_ACTION.test(question.text ?? "") && draftable({ kind: "text", label: question.text });
+      const draft = typed && !choices.length && !PAGE_ACTION.test(question.text ?? "") && (draftable({ kind: "text", label: question.text }) || groundedDraft(question.text));
       // An optional field never blocks: it can be left blank (the agent moves on), not just "filled on the page".
       if (question.optional) {
         const note = choices.length ? "Optional: pick an answer, or leave it blank." : draft ? "Optional: type an answer, I can draft one, or leave it blank." : "Optional: type an answer, or leave it blank.";
@@ -437,6 +445,6 @@
 
   globalThis.JobHuntPanel = {
     summarize, autoApplyBlockers, readinessNote, loginWall, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
-    nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isPlainAnswer, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
+    groundedDraft, nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isPlainAnswer, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

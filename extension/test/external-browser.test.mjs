@@ -519,6 +519,7 @@ test('fill_form chooses from a dropdown instead of typing into it, and reports a
         case 'selectNative': return { native: false };
         case 'noteShown': return true;
         case 'matchOption': return { ok: true, ref: 'o1', text: 'India' };
+        case 'hitTest': return true;
         case 'committedValue': return args[0] === '1' ? 'India' : '';
         case 'focusForTyping': return { ok: true, mode: 'direct' };
         case 'setDirect': return { ok: true };

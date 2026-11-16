@@ -492,6 +492,13 @@
     chat.pending = true;
     panel.idle();
     try {
+      // A legal-fact question (visa, work authorization) is never drafted from the generic AI path.
+      // The agent writes it from the profile and the user's own answers in this chat, and says so if a fact is missing.
+      if (!P.draftable({ kind: "text", label: q.text }) && P.groundedDraft(q.text)) {
+        chat.lines.push({ role: "assistant", local: true, text: "I'll write it from your profile and what you've told me here, and nothing else. Read it over in the form." });
+        await agentControl("message", `Draft it for me: answer the open question "${String(q.text).slice(0, 200)}" yourself: type one or two plain sentences into that field using only facts from my profile and my earlier answers in this chat (user_answered). Do not invent anything; if a fact is missing, ask me for it.`);
+        return;
+      }
       const s = P.draftable({ kind: "text", label: q.text })
         ? await suggest(q.text, state?.appId ?? agent.appId ?? null, true).catch(() => null)
         : null;
@@ -916,6 +923,8 @@
         status: agent.status,
         log: agent.log ?? [],
         filled_count: (agent.filled ?? []).length,
+        field_total: agent.field_total ?? 0,
+        field_answered: agent.field_answered ?? 0,
         agent_engine: agent.agent_engine,
         planner: agent.planner,
         filling_notice: agent.filling_notice,
@@ -970,6 +979,7 @@
   }, true);
 
   async function startAgent({ autoSubmit = false } = {}) {
+    if (agent) chat = newChat(); // a restart begins a clean conversation: the last run's steps and questions are not this one's
     agent = { status: "starting", log: [], appId: state?.appId ?? null };
     shownLog = [];
     checkedAnswers.clear();

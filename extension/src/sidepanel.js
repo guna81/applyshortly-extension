@@ -138,8 +138,9 @@ function renderAssistant(data) {
   // instead of "0/?". Every step itself is told in the chat below.
   // While the agent works, the page's field list isn't re-read, so count what it has filled so far.
   const filledCount = agent?.filled_count ?? 0;
-  const total = summary.total;
-  const live = agentWorking ? Math.max(summary.answered, filledCount) : summary.answered;
+  // The page scan is not repeated while the agent works: use the agent's own live count until it is.
+  const total = summary.total || (agentWorking ? agent?.field_total ?? 0 : 0);
+  const live = agentWorking ? Math.max(summary.answered, filledCount, agent?.field_answered ?? 0) : summary.answered;
   const done = full && total ? total : total ? Math.min(live, total) : live;
   const pct = full ? 100 : total ? Math.round((done / total) * 100) : 0;
   const reading = agentBusy && !full && !total && !filledCount;
@@ -274,7 +275,7 @@ function renderAssistant(data) {
       type: "button", class: "primary submit-main", disabled: blockers.length > 0 || null,
       title: blockers.length ? blockers.join(". ") : "Submit the application after a 3-second countdown you can cancel",
       onclick: () => void sendTabAction("autoApply"),
-    }, "Submit application"));
+    }, "Submit"));
   } else {
     actionsBox.append(button("Re-check page", () => void sendTabAction("run"), "primary block"));
   }
@@ -331,8 +332,10 @@ chrome.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
 });
 
 // Listen for live panel updates pushed from content script
-chrome.runtime?.onMessage?.addListener((msg) => {
+chrome.runtime?.onMessage?.addListener((msg, sender) => {
   if (msg?.type === "panelSync" && msg.data) {
+    // Every tab's page reports its panel; only the tab in front is this panel's (another tab's run must not replace it).
+    if (sender?.tab?.id !== currentTab?.id) return;
     activePanelState = msg.data;
     if (activePanelState.active) {
       renderAssistant(activePanelState);

@@ -392,6 +392,17 @@
             ],
             "title": "Error"
           },
+          "expanded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expanded"
+          },
           "frame": {
             "default": "",
             "maxLength": 100,
@@ -494,6 +505,17 @@
             "title": "Popup",
             "type": "boolean"
           },
+          "pressed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pressed"
+          },
           "ref": {
             "maxLength": 64,
             "minLength": 1,
@@ -515,6 +537,17 @@
             "maxLength": 300,
             "title": "Section",
             "type": "string"
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected"
           },
           "submit_like": {
             "default": false,
@@ -668,6 +701,15 @@
             ],
             "title": "Application Id"
           },
+          "images": {
+            "items": {
+              "maxLength": 4000000,
+              "type": "string"
+            },
+            "maxItems": 1,
+            "title": "Images",
+            "type": "array"
+          },
           "max_output_tokens": {
             "default": 1400,
             "maximum": 4096.0,
@@ -683,6 +725,11 @@
             "minItems": 2,
             "title": "Messages",
             "type": "array"
+          },
+          "native_tools": {
+            "default": false,
+            "title": "Native Tools",
+            "type": "boolean"
           },
           "request_id": {
             "pattern": "^[a-zA-Z0-9_-]{16,64}$",
@@ -708,12 +755,44 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/AgentModelToolCall"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          },
+          "tool_calls_unsupported": {
+            "default": false,
+            "title": "Tool Calls Unsupported",
+            "type": "boolean"
           }
         },
         "required": [
           "text"
         ],
         "title": "AgentModelResponse",
+        "type": "object"
+      },
+      "AgentModelToolCall": {
+        "description": "One native tool call from the provider. The extension validates and vets it.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AgentModelToolCall",
         "type": "object"
       },
       "AgentObservation": {

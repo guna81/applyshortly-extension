@@ -316,7 +316,7 @@
     ]
   },
   {
-    "name": "CAPTCHA blocks both planners before a write",
+    "name": "Challenge-only CAPTCHA blocks both planners before a write",
     "observation": {
       "observation_id": "blocked-1",
       "url": "https://careers.example.test/apply",
@@ -327,7 +327,7 @@
         {
           "ref": "name",
           "role": "textbox",
-          "name": "Full name",
+          "name": "CAPTCHA verification code",
           "value": "",
           "required": true
         }
@@ -377,6 +377,68 @@
           "question": "Attach transcript manually"
         },
         "expected": "check"
+      }
+    ]
+  },
+  {
+    "name": "yes/no buttons answered with a click",
+    "observation": {
+      "observation_id": "yesno-replay",
+      "url": "https://jobs.example.test/apply",
+      "elements": [
+        {
+          "ref": "yes",
+          "role": "button",
+          "name": "Yes",
+          "group": "Are you comfortable working in a hybrid setup?",
+          "required": true,
+          "pressed": false
+        },
+        {
+          "ref": "no",
+          "role": "button",
+          "name": "No",
+          "group": "Are you comfortable working in a hybrid setup?",
+          "required": true,
+          "pressed": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "click",
+          "ref": "no"
+        },
+        "expected": "check"
+      }
+    ]
+  },
+  {
+    "name": "open narrative is offered as one question before a requested draft",
+    "observation": {
+      "observation_id": "narrative-offer",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "narrative",
+          "role": "textarea",
+          "name": "Why are you interested in this opportunity?",
+          "required": true,
+          "value": ""
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "narrative",
+          "question": "Why are you interested in this opportunity?"
+        },
+        "expected": "ask"
       }
     ]
   }

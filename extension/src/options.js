@@ -86,6 +86,7 @@ async function load() {
   const s = await send("connectionSettings");
   $("token").value = "";
   $("extensionEngine").value = s.extensionEngine === "rules_led" ? "rules_led" : "ai_led";
+  $("agentVision").checked = s.agentVision !== false;
   $("aiDrafts").checked = Boolean(s.aiDrafts);
   $("autopilotWindows").checked = s.autopilotWindows !== false;
   $("version").textContent = chrome.runtime.getManifest().version;
@@ -210,6 +211,10 @@ $("reveal").addEventListener("click", () => {
 });
 $("extensionEngine").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ extensionEngine: /** @type {HTMLSelectElement} */ (event.target).value });
+  $("prefMsg").textContent = "Saved for new extension sessions";
+});
+$("agentVision").addEventListener("change", async (event) => {
+  await chrome.storage.local.set({ agentVision: /** @type {HTMLInputElement} */ (event.target).checked });
   $("prefMsg").textContent = "Saved for new extension sessions";
 });
 $("aiDrafts").addEventListener("change", async (event) => {

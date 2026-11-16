@@ -95,6 +95,11 @@
         <select id="extensionEngine"><option value="ai_led">AI-led</option><option value="rules_led">Rules-led</option></select>
       </label>
       <p class="hint">Applies to new extension sessions on this device. The platform has a separate setting. AI-led uses your selected provider.</p>
+      <label class="switch-row" id="toolOptions">
+        <span>Send page screenshots to the AI
+          <small class="muted">The AI-led agent can look at an image of the page, with its fields numbered, as well as read its text. The image goes to your selected AI provider only, is never stored by ApplyShortly, and a provider that does not accept images gets text only. Turn off to send text only.</small></span>
+        <input id="agentVision" type="checkbox" class="switch" role="switch">
+      </label>
       <label class="switch-row">
         <span>Let AI answer questions it can't find
           <small class="muted">When enabled, the selected AI provider drafts answers missing from your profile and answer bank. Drafts are always marked “Check”. You can still request a draft when this is off.</small></span>

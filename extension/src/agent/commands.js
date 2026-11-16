@@ -7,6 +7,23 @@ export const MUTATING = ["type", "select", "check", "click", "scroll", "upload"]
 export const FIELD_KINDS = ["type", "select", "check"];
 export const FILL_LIMIT = 25;
 
+const CHOICE_ROLES = ["button", "switch", "menuitemcheckbox", "menuitemradio"];
+/** The state a choice control declares (checked, pressed or selected); null when it declares none. */
+export const choiceState = (el) => el?.checked ?? el?.pressed ?? el?.selected ?? null;
+/**
+ * One option of a question that is answered by pressing it: a radio, or a button or switch that declares
+ * pressed, selected or checked state and sits under a question label (a Yes/No pair, a pill group).
+ * Judged from what the page shows, so it holds on any site.
+ */
+export const isChoiceOption = (el) => Boolean(el) && (el.role === "radio" || (CHOICE_ROLES.includes(el.role) && Boolean(el.group) && choiceState(el) != null));
+/** The options of the same question as `el`. */
+export const choiceGroup = (elements, el) => elements.filter((m) => !m.disabled && isChoiceOption(m) && (el.group ? m.group === el.group : m.ref === el.ref));
+/** The option an answer such as "Yes" names: exact name first, then a name that starts with it. */
+export const matchChoice = (group, said) => {
+  const want = String(said ?? "").trim().toLowerCase();
+  return want ? group.find((m) => String(m.name ?? "").trim().toLowerCase() === want) ?? group.find((m) => String(m.name ?? "").trim().toLowerCase().startsWith(want)) : undefined;
+};
+
 /**
  * @typedef {object} CommandPolicy
  * @property {boolean} [blockers] refuse to change a page that shows a blocker (CAPTCHA, sign-in)
@@ -49,43 +66,50 @@ export function driftOf(result, field, el, elements) {
   return "";
 }
 
-const FORM_ROLES = new Set(["textbox", "textarea", "combobox", "select", "checkbox", "radio", "file"]);
+const FORM_ROLES = new Set(["textbox", "textarea", "combobox", "select", "checkbox", "radio", "file", "switch", "slider", "spinbutton"]);
+
+/** Radios, checkboxes and press-to-choose buttons that share a question form one group. */
+const groupKind = (e) => (e.role === "radio" || e.role === "checkbox" ? e.role : isChoiceOption(e) ? "choice" : null);
 
 /**
- * Every answerable field of an observation and the required ones still empty. A radio or checkbox
- * group counts once and is answered when any member is chosen. Pure: it reads the observation only,
- * so the review a controller asks for and the readiness the panel is told about cannot disagree.
+ * Every answerable field of an observation and the required ones still empty. A radio, checkbox or
+ * button-choice group (a Yes/No pair) counts once and is answered when any member is chosen. Switches,
+ * sliders and steppers count as fields. Pure: it reads the observation only, so the review a controller
+ * asks for and the readiness the panel is told about cannot disagree.
  * @param {{ elements: any[] }} observation
  */
 export function scanFields(observation) {
-  const all = observation.elements.filter((e) => FORM_ROLES.has(e.role) && !e.disabled);
+  const all = observation.elements.filter((e) => (FORM_ROLES.has(e.role) || isChoiceOption(e)) && !e.disabled);
   const groups = new Map();
-  for (const e of all) if ((e.role === "radio" || e.role === "checkbox") && e.group) {
-    groups.set(`${e.role}:${e.group}`, [...(groups.get(`${e.role}:${e.group}`) ?? []), e]);
+  for (const e of all) if (groupKind(e) && e.group) {
+    groups.set(`${groupKind(e)}:${e.group}`, [...(groups.get(`${groupKind(e)}:${e.group}`) ?? []), e]);
   }
+  const chosen = (m) => choiceState(m) === true;
   const answered = (e) => {
-    if (e.role === "radio" || e.role === "checkbox") {
-      const group = e.group ? groups.get(`${e.role}:${e.group}`) : [e];
-      return group.some((member) => member.checked);
+    if (groupKind(e)) {
+      const group = e.group ? groups.get(`${groupKind(e)}:${e.group}`) : [e];
+      return group.some(chosen);
     }
+    if (e.role === "switch") return chosen(e);
     return String(e.value ?? "").trim() !== "";
   };
   const seenGroups = new Set();
   const fields = [];
   const missing = [];
   for (const e of all) {
-    if (e.group && (e.role === "radio" || e.role === "checkbox")) {
-      const key = `${e.role}:${e.group}`;
+    const kind = groupKind(e);
+    if (e.group && kind) {
+      const key = `${kind}:${e.group}`;
       if (seenGroups.has(key)) continue;
       seenGroups.add(key);
-      const chosen = groups.get(key).filter((m) => m.checked).map((m) => m.name);
-      fields.push({ ref: e.ref, name: e.group, role: e.role, value: chosen.join(", "), required: Boolean(e.required) });
+      const picked = groups.get(key).filter(chosen).map((m) => m.name);
+      fields.push({ ref: e.ref, name: e.group, role: kind === "choice" ? "radio" : e.role, value: picked.join(", "), required: Boolean(e.required) });
     } else {
-      const shown = e.role === "checkbox" ? String(Boolean(e.checked)) : String(e.value ?? "").slice(0, 120);
+      const shown = e.role === "checkbox" || e.role === "switch" ? String(chosen(e)) : String(e.value ?? "").slice(0, 120);
       fields.push({ ref: e.ref, name: e.name, role: e.role, value: e.input_type === "password" ? "" : shown, required: Boolean(e.required),
         ...(e.invalid || e.error ? { error: String(e.error ?? "invalid").slice(0, 120) } : {}) });
     }
-    if (e.required && !answered(e)) missing.push({ ref: e.ref, name: e.group || e.name, role: e.role });
+    if (e.required && !answered(e)) missing.push({ ref: e.ref, name: e.group || e.name, role: kind === "choice" ? "radio" : e.role });
   }
   return { fields, missing };
 }
@@ -225,7 +249,8 @@ export class CommandRunner {
       const same = elements.filter((e) => e.name === want.name && e.role === want.role && (e.section ?? "") === want.section);
       return same.length === 1 ? same[0].ref : ref;
     };
-    for (const [index, field] of fields.entries()) {
+    for (const [index, entry] of fields.entries()) {
+      let field = entry;
       if (this.policy.isPaused?.()) { results.push({ ref: field.ref, ok: false, detail: "Paused by the user, who is editing the form." }); break; }
       if (typeof field.ref !== "string") throw new Error("Each field needs a ref.");
       if (!this.observed) await this.observe();
@@ -234,6 +259,11 @@ export class CommandRunner {
       // A dropdown is chosen from, a checkbox is set, anything else is typed into. Typing into a
       // dropdown only fills its search box and picks nothing, so the kind comes from the control.
       // The platform sends `checked: null` on a text entry: only a real boolean makes it a checkbox.
+      // A radio option (a Yes/No button) given with answer text instead of `checked` is picked, not typed into.
+      if (isChoiceOption(element) && field.checked == null && field.text != null) {
+        const match = matchChoice(choiceGroup(this.observed.observation.elements, element), field.text);
+        if (match) { resolved = match.ref; element = match; field = { ...field, ref: match.ref, checked: true, type: "check", text: undefined }; }
+      }
       const type = field.type ?? (typeof field.checked === "boolean" || field.checked === "true" || field.checked === "false" || element?.role === "checkbox" ? "check"
         : element && (element.popup || element.role === "combobox" || element.role === "select") ? "select" : "type");
       if (!FIELD_KINDS.includes(type)) throw new Error("Each field needs a type of type, select or check.");

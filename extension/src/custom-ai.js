@@ -6,6 +6,9 @@ export const PROVIDER_PRESETS = {
 };
 
 // Direct calls are made only from the trusted background worker.
+/** An Error that carries the HTTP status (408 for "could not reach it") so the agent loop can tell a passing outage from a bad key. */
+function providerError(message, status) { return Object.assign(new Error(message), { status }); }
+
 export function endpoint(raw) {
   let url;
   try { url = new URL(raw.trim()); } catch { throw new Error("Enter a valid API base URL."); }
@@ -13,24 +16,86 @@ export function endpoint(raw) {
   return url.href.replace(/\/+$/, "");
 }
 
-/** @param {{baseUrl: string, apiKey: string, model: string}} config @param {Array<{role: string, content: string}>} messages */
-export async function complete(config, messages, maxTokens = 600) {
+const KNOWN_VISION_HOSTS = new Set(["api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com"]);
+/** Whether this provider takes screenshots and native tool calls: known hosts yes, others only when the setting says so. An explicit false always wins. */
+export function providerSupport(config) {
+  let known = false;
+  try { known = KNOWN_VISION_HOSTS.has(new URL(config.baseUrl.trim()).hostname); } catch { /* an invalid URL fails later with its own message */ }
+  return { vision: config.supportsVision === undefined ? known : config.supportsVision === true, tools: config.supportsTools === undefined ? known : config.supportsTools === true };
+}
+
+/**
+ * One provider call. `options.images` (base64 JPEG) rides on the last user message; `options.tools` are native tool
+ * definitions. A provider that answers 400 to tools or images is retried without them, and the result says so.
+ * @returns {Promise<{text: string, toolCalls: Array<{name: string, arguments: any}>, toolsDropped: boolean, imagesDropped: boolean}>}
+ */
+async function send(config, messages, maxTokens, options = {}) {
   const base = endpoint(config.baseUrl);
   const anthropic = new URL(base).hostname === "api.anthropic.com";
   const headers = anthropic ? { "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" } : { "Content-Type": "application/json", ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) };
-  let res;
-  try {
-    const body = anthropic
-      ? { model: config.model, system: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n"), messages: messages.filter((m) => m.role !== "system"), max_tokens: maxTokens, stream: false }
-      : { model: config.model, messages, max_tokens: maxTokens, stream: false };
-    res = await fetch(`${base}/${anthropic ? "messages" : "chat/completions"}`, { method: "POST", headers, body: JSON.stringify(body), credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", signal: AbortSignal.timeout(60000) });
-  } catch { throw new Error("Could not reach the AI provider. Check the endpoint and try again."); }
-  if (!res.ok) throw new Error(`AI provider returned HTTP ${res.status}. Check your endpoint, key and model.`);
+  const build = (images, tools) => {
+    const withImages = (list) => list.map((m, i, all) => images.length && i === all.map((x) => x.role).lastIndexOf("user")
+      ? { ...m, content: anthropic
+        ? [...images.map((data) => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data } })), { type: "text", text: m.content }]
+        : [...images.map((data) => ({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${data}` } })), { type: "text", text: m.content }] }
+      : m);
+    if (anthropic) {
+      return { model: config.model, system: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n"), messages: withImages(messages.filter((m) => m.role !== "system")), max_tokens: maxTokens, stream: false,
+        ...(tools.length ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })), tool_choice: { type: "auto" } } : {}) };
+    }
+    return { model: config.model, messages: withImages(messages), max_tokens: maxTokens, stream: false,
+      ...(tools.length ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })), tool_choice: "auto" } : {}) };
+  };
+  const attempt = async (images, tools) => {
+    let res;
+    // A gateway hiccup (502/503/504) or rate limit is retried twice before the run is stopped.
+    for (let tries = 0; ; tries++) {
+      try {
+        res = await fetch(`${base}/${anthropic ? "messages" : "chat/completions"}`, { method: "POST", headers, body: JSON.stringify(build(images, tools)), credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", signal: AbortSignal.timeout(60000) });
+      } catch { throw providerError("Could not reach the AI provider. Check the endpoint and try again.", 408); }
+      if (![429, 500, 502, 503, 504].includes(res.status) || tries >= 2) break;
+      await new Promise((r) => setTimeout(r, 1000 * (tries + 1)));
+    }
+    return res;
+  };
+  let images = options.images ?? [];
+  let tools = options.tools ?? [];
+  let toolsDropped = false;
+  let imagesDropped = false;
+  let res = await attempt(images, tools);
+  if (res.status === 400 && tools.length) { tools = []; toolsDropped = true; res = await attempt(images, tools); }
+  if (res.status === 400 && images.length) { images = []; imagesDropped = true; res = await attempt(images, tools); }
+  if (!res.ok) throw providerError(`AI provider returned HTTP ${res.status}. Check your endpoint, key and model.`, res.status);
   let data;
   try { data = await res.json(); } catch { throw new Error("The AI provider returned an invalid response."); }
-  const answer = anthropic ? data?.content?.filter((block) => block.type === "text").map((block) => block.text).join("\n") : data?.choices?.[0]?.message?.content;
-  if (typeof answer !== "string" || !answer.trim()) throw new Error("The AI provider returned an empty response.");
-  return answer.trim().slice(0, 5000);
+  const text = anthropic ? data?.content?.filter((block) => block.type === "text").map((block) => block.text).join("\n") : data?.choices?.[0]?.message?.content;
+  const toolCalls = anthropic
+    ? (data?.content ?? []).filter((block) => block.type === "tool_use" && typeof block.name === "string").map((block) => ({ name: block.name, arguments: block.input && typeof block.input === "object" ? block.input : {} }))
+    : (data?.choices?.[0]?.message?.tool_calls ?? []).filter((call) => typeof call?.function?.name === "string").map((call) => {
+      let args = {};
+      try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* an unreadable argument list is an empty one; the planner vets the call */ }
+      return { name: call.function.name, arguments: args && typeof args === "object" ? args : {} };
+    });
+  if ((typeof text !== "string" || !text.trim()) && !toolCalls.length) throw new Error("The AI provider returned an empty response.");
+  return { text: typeof text === "string" ? text.trim().slice(0, 12000) : "", toolCalls: toolCalls.slice(0, 25), toolsDropped, imagesDropped };
+}
+
+/** @param {{baseUrl: string, apiKey: string, model: string}} config @param {Array<{role: string, content: string}>} messages */
+export async function complete(config, messages, maxTokens = 600) {
+  const reply = await send(config, messages, maxTokens);
+  if (!reply.text) throw new Error("The AI provider returned an empty response.");
+  return reply.text; // a batch reply is several actions long: cut at 12000
+}
+
+/**
+ * The AI-led agent's planning call: an optional screenshot and native tool calls. Returns the shape the platform
+ * gateway returns, so the planner treats both providers alike.
+ * @returns {Promise<{text: string, tool_calls: Array<{name: string, arguments: any}>, tool_calls_unsupported: boolean}>}
+ */
+export async function completeTools(config, messages, maxTokens = 1400, { images = [], tools = [] } = {}) {
+  const support = providerSupport(config);
+  const reply = await send(config, messages, maxTokens, { images: support.vision ? images : [], tools: support.tools ? tools : [] });
+  return { text: reply.text, tool_calls: reply.toolCalls, tool_calls_unsupported: !support.tools || reply.toolsDropped };
 }
 
 // Keep sensitive factual and legal questions out of generated drafts.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DialogOpenError, TabDriver, jpegSize } from "../src/agent/cdp.js";
+import { DialogOpenError, TabDriver, jpegSize, redactUrl } from "../src/agent/cdp.js";
 
 test("application tabs must be opened by a recent interaction in the controlled tab", async () => {
   const api = { tabs: { get: async (id) => ({ id, url: "https://ats.example.test/apply", title: "Apply" }) } };
@@ -146,4 +146,30 @@ test("hover moves the pointer only; drag presses, moves in steps and releases", 
   assert.equal(events[1], "mousePressed");
   assert.equal(events.at(-1), "mouseReleased");
   assert.equal(events.filter((e) => e === "mouseMoved").length, 9);
+});
+
+test("console and network diagnostics keep status and path only, never queries, bodies or long tokens", () => {
+  const driver = new TabDriver(1, "", {});
+  driver.handleEvent({ tabId: 1 }, "Log.entryAdded", { entry: { level: "error", source: "javascript", text: `Bad token ${"a".repeat(60)} in form`, url: "https://jobs.example/app.js?session=secret#x" } });
+  driver.handleEvent({ tabId: 1 }, "Log.entryAdded", { entry: { level: "info", text: "ignored" } });
+  driver.handleEvent({ tabId: 1 }, "Network.requestWillBeSent", { requestId: "r1", request: { method: "POST", url: "https://jobs.example/api/apply?email=a@b.c" } });
+  driver.handleEvent({ tabId: 1 }, "Network.responseReceived", { requestId: "r1", response: { status: 422, url: "https://jobs.example/api/apply?email=a@b.c" } });
+  driver.handleEvent({ tabId: 1 }, "Network.responseReceived", { requestId: "r2", response: { status: 200, url: "https://jobs.example/ok" } });
+  driver.handleEvent({ tabId: 1 }, "Network.loadingFailed", { requestId: "r1", errorText: "net::ERR_FAILED", canceled: false });
+  const { console: logs, network } = driver.diagnostics();
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].url, "https://jobs.example/app.js");
+  assert.doesNotMatch(logs[0].text, /a{32}/);
+  assert.deepEqual(network.map((n) => [n.status, n.method, n.url]), [[422, "POST", "https://jobs.example/api/apply"], [0, "POST", "https://jobs.example/api/apply"]]);
+  assert.equal(JSON.stringify(driver.diagnostics()).includes("secret"), false);
+  assert.equal(JSON.stringify(driver.diagnostics()).includes("a@b.c"), false);
+  assert.equal(redactUrl("not a url?x=1"), "not a url");
+});
+
+test("the diagnostics buffer keeps only the latest fifty entries", () => {
+  const driver = new TabDriver(1, "", {});
+  for (let i = 0; i < 80; i += 1) driver.handleEvent({ tabId: 1 }, "Log.entryAdded", { entry: { level: "warning", text: `w${i}` } });
+  const { console: logs } = driver.diagnostics();
+  assert.equal(logs.length, 50);
+  assert.equal(logs[0].text, "w30");
 });

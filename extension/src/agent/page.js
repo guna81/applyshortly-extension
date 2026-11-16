@@ -110,12 +110,37 @@
     return clean(el.getAttribute("aria-label") || (el.tagName === "INPUT" ? el.value : el.textContent) || el.getAttribute("title"));
   }
 
+  /** The ARIA state a control declares: pressed, selected, expanded. A missing attribute is not "false". */
+  function ariaState(el) {
+    const out = {};
+    for (const [key, attr] of [["pressed", "aria-pressed"], ["selected", "aria-selected"], ["expanded", "aria-expanded"]]) {
+      const value = el.getAttribute?.(attr);
+      if (value === "true" || value === "false") out[key] = value === "true";
+    }
+    return out;
+  }
+
+  /** Selected chips belong to this one combobox, not its empty or transient search input. */
+  function selectedChips(el) {
+    if (!el.matches?.('input[role="combobox"]')) return '';
+    for (let box = el.parentElement, depth = 0; box && depth < 6 && !box.matches('form, body, html'); box = box.parentElement, depth++) {
+      if (box.querySelectorAll('input[role="combobox"], select').length > 1) break;
+      const labels = [...box.querySelectorAll('[class*="multi-value__label" i], [class*="multiValueLabel" i]')]
+        .map((label) => clean(label.textContent)).filter(Boolean);
+      if (labels.length) return [...new Set(labels)].join(', ');
+    }
+    return '';
+  }
+
   function base(el, extra) {
+    const picked = selectedChips(el);
     return {
       ref: refOf(el),
       in_viewport: inViewport(el),
       disabled: Boolean(el.disabled) || el.getAttribute("aria-disabled") === "true",
+      ...ariaState(el),
       ...extra,
+      ...(picked ? { value: clip(picked, 2000) } : {}),
     };
   }
 
@@ -287,13 +312,63 @@
       const name = clip(buttonText(el), 200);
       if (!name || el.type === "reset") continue;
       const submitType = el.matches("button[type=submit], input[type=submit]") || (el.tagName === "BUTTON" && !el.getAttribute("type") && el.form);
-      out.push(base(el, { role: "button", name, submit_like: Boolean(submitType) || FINAL.test(name) }));
+      out.push(base(el, { role: "button", name, submit_like: Boolean(submitType) || FINAL.test(name), ...choiceInfo(el) }));
     }
     for (const el of root.querySelectorAll("a[href]")) {
       if ((scope && !contains(scope, el)) || !isVisible(el, checkLayout) || el.matches(BUTTONS)) continue;
       const name = clip(buttonText(el), 200);
       if (!name || name.length > 60 || !(scope || ACTION_LINK.test(name))) continue;
       out.push(base(el, { role: "link", name }));
+    }
+    return out;
+  }
+
+  const CHOICE_STATE = ["aria-pressed", "aria-checked", "aria-selected"];
+
+  /**
+   * A button that is one choice among a few siblings (a Yes/No pair, a pill group): the question
+   * it answers and whether that is required. Site-independent: 2 to 6 siblings that declare the same
+   * ARIA state, under one label. Nothing is returned for a lone toggle or an ordinary button.
+   */
+  function choiceInfo(el) {
+    const attr = CHOICE_STATE.find((a) => el.hasAttribute?.(a));
+    const parent = el.parentElement;
+    if (!attr || !parent) return {};
+    const members = [...parent.children].filter((n) => n.hasAttribute?.(attr));
+    if (members.length < 2 || members.length > 6) return {};
+    let label = "";
+    let required = false;
+    for (let node = parent, depth = 0; node && node !== document.body && depth < 4 && !label; node = node.parentElement, depth++) {
+      const ids = node.getAttribute?.("aria-labelledby");
+      const named = ids ? ids.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ") : node.getAttribute?.("aria-label") || "";
+      const prior = [...(node.parentElement?.children ?? [])].slice(0, [...(node.parentElement?.children ?? [])].indexOf(node)).reverse();
+      const heading = node.matches?.("fieldset") ? node.querySelector("legend") : prior.find((n) => n.matches?.("label, legend, h1, h2, h3, h4, h5, h6, p, [class*=title i], [class*=label i], [class*=question i]") && !n.querySelector?.("button, input, select, textarea"));
+      const raw = String(named || heading?.textContent || "");
+      label = clean(raw);
+      if (label) {
+        // cleanLabel drops the trailing asterisk, so the requirement is read from the raw text.
+        required = node.getAttribute?.("aria-required") === "true" || /\*\s*$/.test(raw.trim()) || /required/i.test(`${heading?.className ?? ""} ${node.className ?? ""}`) || Boolean(heading?.querySelector?.('[class*=required i], [aria-label*=required i]'));
+      }
+    }
+    return label && label.length <= 500 ? { group: label, required } : {};
+  }
+
+  /**
+   * Interactive controls the field mapper and the button pass do not cover, taken by ARIA role the way
+   * Playwright's snapshot does: switches, sliders, steppers, menu items and any other pressed toggle.
+   * Added as extra elements; nothing the mapper already found is replaced.
+   */
+  function genericElements(root, scope, checkLayout) {
+    const selector = '[role="switch"], [role="slider"], [role="spinbutton"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="treeitem"], [aria-pressed]:not(button):not([role="button"]):not([role="radio"])';
+    const out = [];
+    for (const el of root.querySelectorAll(selector)) {
+      if ((scope && !contains(scope, el)) || !isVisible(el, checkLayout) || el.closest?.("label") || (el.matches("input") && el.type === "hidden")) continue;
+      const role = el.getAttribute("role") || "button";
+      const name = clip(buttonText(el) || clean(F.labelOf(el)), 300);
+      if (!name) continue;
+      const checked = el.hasAttribute("aria-checked") ? { checked: el.getAttribute("aria-checked") === "true" } : {};
+      const value = ["slider", "spinbutton"].includes(role) ? { value: clip(String(el.value ?? el.getAttribute("aria-valuenow") ?? el.getAttribute("aria-valuetext") ?? ""), 100) } : {};
+      out.push(base(el, { role, name, ...checked, ...value, required: el.getAttribute("aria-required") === "true", ...choiceInfo(el) }));
     }
     return out;
   }
@@ -506,6 +581,7 @@
       return place & 4 ? -1 : place & 2 ? 1 : 0;
     });
     for (const root of roots(doc)) push(buttonElements(root, dialog, checkLayout));
+    for (const root of roots(doc)) push(genericElements(root, dialog, checkLayout));
     if (extended) {
       for (const item of elements) Object.assign(item, contextOf(find(item.ref)));
     }
@@ -595,7 +671,8 @@
     if (!el) return "That element is gone from the page.";
     const name = buttonText(el);
     const fields = F.collectFields(el.ownerDocument, { checkLayout }).length;
-    if (fields >= 2 && FINAL.test(name)) return "Submitting is left to you.";
+    // Any final-looking control next to a field, or inside a form, is the user's to press (one field is enough).
+    if (FINAL.test(name) && (fields >= 1 || el.form)) return "Submitting is left to you.";
     return null;
   }
 
@@ -863,6 +940,10 @@
     if (!el) return null;
     if (el.matches("input[type=checkbox], input[type=radio]")) return { checked: el.checked };
     if (el.getAttribute("role") === "checkbox" || el.getAttribute("role") === "radio") return { checked: el.getAttribute("aria-checked") === "true" };
+    // Toggle buttons and switches: a pressed, checked or selected state is what "answered" means.
+    for (const attr of ["aria-pressed", "aria-checked", "aria-selected"]) {
+      if (el.hasAttribute(attr) && !el.matches("input, select, textarea")) return { checked: el.getAttribute(attr) === "true" };
+    }
     if (el.matches("input[type=file]")) return { value: el.files?.[0]?.name ?? "" };
     if (el.tagName === "SELECT") return { value: clean(el.options[el.selectedIndex]?.text) };
     if (el.isContentEditable) return { value: clean(el.textContent) };
@@ -879,6 +960,8 @@
     // (which can be search text that was typed and never picked).
     const el = find(ref);
     if (!el) return null;
+    const chips = selectedChips(el);
+    if (chips) return clip(chips, 2000);
     const root = el.getRootNode?.() ?? document;
     const field = F.collectFields(root.nodeType === 9 || root.host ? root : document, { checkLayout: false })
       .find((f) => f.el === el || f.options?.some?.((o) => o.el === el));
