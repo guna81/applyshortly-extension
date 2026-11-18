@@ -1,11 +1,6 @@
-// Shared by the on-page panel and the control page: a readable timeline of what the connected
-// assistant is doing. Entries carry only step names (never typed values or page text).
-const ICON = { running: "", done: "✓", error: "✕", warn: "!" };
-
+const ICON = { running: "", done: "\u2713", error: "\u2715", warn: "!" };
 const clock = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-/** @param {{id: string, at: number, text: string, state: string}[]} entries oldest first */
-export function activityList(entries, limit = 8) {
+function activityList(entries, limit = 8) {
   const list = document.createElement("ol");
   list.className = "steps";
   if (!entries.length) {
@@ -31,8 +26,12 @@ export function activityList(entries, limit = 8) {
   }
   return list;
 }
-
-/** What needs the user right now, for a badge. */
-export function attention(data) {
-  return Boolean(data?.pendingNavigation || data?.pendingReview || data?.batches?.some((b) => b.state === "pending"));
+function attention(data) {
+  return Boolean(
+    data?.pendingNavigation || data?.pendingReview || data?.batches?.some((b) => b.state === "pending")
+  );
 }
+export {
+  activityList,
+  attention
+};

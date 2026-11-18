@@ -1,16 +1,7 @@
 import { queueDiagnostic, flushDiagnostics } from "./diagnostics.js";
-// Client for the platform's extension bridge (/api/extension/*).
-// A plain-JS port of extension-bridge/client.ts; keep the two in sync.
-// Only the background service worker imports this: requests to the platform origin from there
-// aren't subject to the job page's CORS rules, and the API key never enters page context.
-
-export const AUTOFILL_FRAGMENT = "jobhunt-autofill";
-// Added when the user clicked Apply in ApplyShortly: a one-time code that, claimed, lets Auto apply
-// submit (only once every required field is answered, after its countdown).
-export const AUTO_APPLY_FRAGMENT = "jobhunt-auto";
-
-/** @param {string} url @returns {number | null} */
-export function autofillIdFromUrl(url) {
+const AUTOFILL_FRAGMENT = "jobhunt-autofill";
+const AUTO_APPLY_FRAGMENT = "jobhunt-auto";
+function autofillIdFromUrl(url) {
   try {
     const match = new URL(url).hash.match(new RegExp(`${AUTOFILL_FRAGMENT}=(\\d+)`));
     return match?.[1] ? Number(match[1]) : null;
@@ -18,9 +9,7 @@ export function autofillIdFromUrl(url) {
     return null;
   }
 }
-
-/** @param {string} url @returns {string | null} */
-export function autoApplyCodeFromUrl(url) {
+function autoApplyCodeFromUrl(url) {
   try {
     const match = new URL(url).hash.match(new RegExp(`${AUTO_APPLY_FRAGMENT}=([A-Za-z0-9_-]{16,64})`));
     return match?.[1] ?? null;
@@ -28,13 +17,7 @@ export function autoApplyCodeFromUrl(url) {
     return null;
   }
 }
-
-/**
- * The page Autopilot's window opens: the posting with the application id and the one-time code in
- * the fragment, like the link ApplyShortly's Apply button opens. Null unless the link is http(s).
- * @param {string} url @param {number} id @param {string} code @returns {string | null}
- */
-export function autoApplyUrl(url, id, code) {
+function autoApplyUrl(url, id, code) {
   try {
     const target = new URL(url);
     if (!/^https?:$/.test(target.protocol) || !Number.isInteger(id) || !/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
@@ -44,14 +27,7 @@ export function autoApplyUrl(url, id, code) {
     return null;
   }
 }
-
-/**
- * The message for a failed request. A validation failure (422) carries a list, not a string: name
- * the fields it rejected ("observation.elements.3.popup: extra inputs are not permitted") rather
- * than the bare status text, so a rejected page can be told apart from a broken server.
- * @param {{detail?: unknown}} body @param {string} statusText
- */
-export function errorMessage(body, statusText) {
+function errorMessage(body, statusText) {
   const detail = body?.detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail) && detail.length) {
@@ -59,36 +35,30 @@ export function errorMessage(body, statusText) {
       const where = Array.isArray(d?.loc) ? d.loc.filter((p) => p !== "body").join(".") : "";
       return [where, typeof d?.msg === "string" ? d.msg : ""].filter(Boolean).join(": ");
     }).filter(Boolean);
-    if (items.length) return `${statusText || "Rejected"} (${items.join("; ")}${detail.length > 3 ? "; …" : ""})`;
+    if (items.length) return `${statusText || "Rejected"} (${items.join("; ")}${detail.length > 3 ? "; \u2026" : ""})`;
   }
   return statusText;
 }
-
-/** Ordinary platform calls; the agent's model and step calls are slower and get AGENT_TIMEOUT_MS. */
-export const REQUEST_TIMEOUT_MS = 30000;
-export const AGENT_TIMEOUT_MS = 90000;
-
-export class BridgeError extends Error {
-  /** @param {number} status @param {string} message */
+const REQUEST_TIMEOUT_MS = 3e4;
+const AGENT_TIMEOUT_MS = 9e4;
+class BridgeError extends Error {
+  status;
+  code;
   constructor(status, message) {
     super(message);
     this.status = status;
   }
 }
-
-export class JobHuntBridge {
-  /** @param {string} baseUrl e.g. "http://localhost:3000" @param {string} token the API key */
+class JobHuntBridge {
+  baseUrl;
+  token;
   constructor(baseUrl, token) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
   }
-
   /**
    * One platform call. It never waits forever: after `timeout` ms the request is aborted and fails
-   * as a 408, which the agent loop treats as transient (retry, then pause for the user). The
-   * race also covers a fetch that ignores its abort signal.
-   * @param {string} path
-   * @param {RequestInit & {timeout?: number}} [init]
+   * as a 408, which the agent loop treats as transient (retry, then pause for the user).
    */
   async request(path, { timeout = REQUEST_TIMEOUT_MS, ...init } = {}) {
     const controller = new AbortController();
@@ -96,10 +66,11 @@ export class JobHuntBridge {
     const expired = new Promise((_, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        reject(new BridgeError(408, `The platform didn't answer within ${Math.round(timeout / 1000)} seconds.`));
+        reject(new BridgeError(408, `The platform didn't answer within ${Math.round(timeout / 1e3)} seconds.`));
       }, timeout);
     });
-    expired.catch(() => {});
+    expired.catch(() => {
+    });
     const call = async () => {
       let res;
       try {
@@ -108,12 +79,13 @@ export class JobHuntBridge {
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${this.token}`,
-            ...(init.body ? { "Content-Type": "application/json" } : {}),
-            ...init.headers,
-          },
+            ...init.body ? { "Content-Type": "application/json" } : {},
+            ...init.headers
+          }
         });
       } catch {
-        if (controller.signal.aborted) throw new BridgeError(408, `The platform didn't answer within ${Math.round(timeout / 1000)} seconds.`);
+        if (controller.signal.aborted)
+          throw new BridgeError(408, `The platform didn't answer within ${Math.round(timeout / 1e3)} seconds.`);
         throw new BridgeError(0, `Can't reach ${this.baseUrl}. Is the platform running?`);
       }
       if (!res.ok) {
@@ -125,78 +97,70 @@ export class JobHuntBridge {
     try {
       return await Promise.race([call(), expired]);
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   }
-
   browserRelayUrl() {
     const url = new URL(`${this.baseUrl}/api/extension/browser/relay`);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.href;
   }
-
   registerBrowser(name) {
     return this.request("/api/extension/browser/devices", { method: "POST", body: JSON.stringify({ name }) });
   }
-
-  account() { return this.request("/api/extension/account"); }
-
-  aiSettings() { return this.request("/api/extension/ai"); }
-
-  selectAI(body) { return this.request("/api/extension/ai", { method: "PUT", body: JSON.stringify(body) }); }
-
-
-
-  deleteAIProvider(provider) { return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "DELETE" }); }
-
-  websiteTicket() { return this.request("/api/extension-auth/website-ticket", { method: "POST" }); }
-
-  disconnect() { return this.request("/api/extension/disconnect", { method: "POST" }); }
-
+  account() {
+    return this.request("/api/extension/account");
+  }
+  aiSettings() {
+    return this.request("/api/extension/ai");
+  }
+  selectAI(body) {
+    return this.request("/api/extension/ai", { method: "PUT", body: JSON.stringify(body) });
+  }
+  deleteAIProvider(provider) {
+    return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "DELETE" });
+  }
+  websiteTicket() {
+    return this.request("/api/extension-auth/website-ticket", { method: "POST" });
+  }
+  disconnect() {
+    return this.request("/api/extension/disconnect", { method: "POST" });
+  }
   profile() {
     return this.request("/api/extension/profile");
   }
-
-  /** @returns {Promise<{name: string, type: string, base64: string} | null>} */
   async resume(resumeUrl = "/api/extension/resume") {
     const res = await fetch(`${this.baseUrl}${resumeUrl}`, {
-      headers: { Authorization: `Bearer ${this.token}` },
+      headers: { Authorization: `Bearer ${this.token}` }
     }).catch(() => null);
     if (!res?.ok) return null;
     const disposition = res.headers.get("Content-Disposition") ?? "";
     const name = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1] ?? "resume.pdf";
     const buffer = new Uint8Array(await res.arrayBuffer());
-    // Message passing only carries JSON, so the file travels to the content script as base64.
     let binary = "";
-    for (let i = 0; i < buffer.length; i += 0x8000) {
-      binary += String.fromCharCode(...buffer.subarray(i, i + 0x8000));
+    for (let i = 0; i < buffer.length; i += 32768) {
+      binary += String.fromCharCode(...buffer.subarray(i, i + 32768));
     }
     return { name: decodeURIComponent(name), type: res.headers.get("Content-Type") ?? "application/pdf", base64: btoa(binary) };
   }
-
   application(id) {
     return this.request(`/api/extension/applications/${id}`);
   }
-
   /** Register a page the user started filling so its outcome syncs to Applications. */
   trackApplication(body) {
     return this.request("/api/extension/applications/track", { method: "POST", body: JSON.stringify(body) });
   }
-
   /** Claims the one-time Auto apply code from the link ApplyShortly opened; true only once. */
   claimAutoApply(id, code) {
     return this.request(`/api/extension/applications/${id}/auto-apply`, { method: "POST", body: JSON.stringify({ code }) });
   }
-
   /**
    * The next job Autopilot couldn't finish on its own because it needs this browser's sign-ins, with
    * the one-time Auto apply code for it; null when nothing is due.
-   * @returns {Promise<{application_id: number, url: string, code: string} | null>}
    */
   autopilotNext() {
     return this.request("/api/extension/autopilot/next", { method: "POST" });
   }
-
   /** Resolves to null when the page isn't a tracked application. */
   async lookup(pageUrl) {
     try {
@@ -206,29 +170,23 @@ export class JobHuntBridge {
       throw err;
     }
   }
-
   suggestAnswer(body) {
     return this.request("/api/extension/answers/suggest", { method: "POST", body: JSON.stringify(body) });
   }
-
   assistFill(body) {
     return this.request("/api/extension/assistant/fill", { method: "POST", body: JSON.stringify(body) });
   }
-
   /** One round trip: vetted actions, or want_screenshot with optional annotate_screenshot. */
   agentCapabilities(custom = false, engine = "ai_led") {
-    const query = new URLSearchParams({ extension_engine: engine, ...(custom ? { planner: "custom" } : {}) });
+    const query = new URLSearchParams({ extension_engine: engine, ...custom ? { planner: "custom" } : {} });
     return this.request(`/api/extension/agent/capabilities?${query}`);
   }
-
   agentModel(body) {
     return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body), timeout: AGENT_TIMEOUT_MS });
   }
-
   diagnostic(body) {
     return this.request("/api/extension/agent/diagnostic", { method: "POST", body: JSON.stringify(body) });
   }
-
   async agentStep(body) {
     const version = globalThis.chrome?.runtime?.getManifest?.().version;
     body = { ...body, runtime_version: version };
@@ -238,36 +196,50 @@ export class JobHuntBridge {
       try {
         return await send(body);
       } catch (error) {
-        // An older platform rejects the newer `runtime_version` field (extra="forbid"): retry once
-        // without it so version skew never blocks a run.
         if (error.status !== 422 || !/runtime_version/.test(error.message)) throw error;
         const { runtime_version: _skipped, ...legacy } = body;
         body = legacy;
         return await send(body);
       }
     } catch (error) {
-      // Record operational errors and request rejections (4xx other than auth) so the admin
-      // failure list shows them. Successful turns are captured on the server.
       const rejected = error.status >= 400 && error.status < 500 && error.status !== 401 && error.status !== 403;
       if (!error.status || error.status >= 500 || rejected) {
         const code = rejected ? "request_rejected" : "network_error";
         void queueDiagnostic(this, {
           session_key: `agent:${body.session_id || body.request_id || crypto.randomUUID()}`,
-          application_id: body.application_id ?? null, runtime: "extension",
+          application_id: body.application_id ?? null,
+          runtime: "extension",
           status: rejected ? "failed" : "interrupted",
-          page_url: body.observation?.url || "", failure_code: code, stage: "transport",
+          page_url: body.observation?.url || "",
+          failure_code: code,
+          stage: "transport",
           version,
-          events: [{
-            id: crypto.randomUUID(), sequence: 0, kind: "error",
-            data: { code, http_status: error.status || 0, message: String(error.message || "").slice(0, 500) },
-          }],
+          events: [
+            {
+              id: crypto.randomUUID(),
+              sequence: 0,
+              kind: "error",
+              data: { code, http_status: error.status || 0, message: String(error.message || "").slice(0, 500) }
+            }
+          ]
         });
       }
       throw error;
     }
   }
-
   report(event) {
     return this.request("/api/extension/events", { method: "POST", body: JSON.stringify(event) });
   }
 }
+export {
+  AGENT_TIMEOUT_MS,
+  AUTOFILL_FRAGMENT,
+  AUTO_APPLY_FRAGMENT,
+  BridgeError,
+  JobHuntBridge,
+  REQUEST_TIMEOUT_MS,
+  autoApplyCodeFromUrl,
+  autoApplyUrl,
+  autofillIdFromUrl,
+  errorMessage
+};

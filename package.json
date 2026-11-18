@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "pretest": "node scripts/compile_extension.mjs extension/src",
     "test": "node --test extension/test/*.test.mjs",
     "typecheck": "tsc -p extension-bridge/tsconfig.json && tsc -p tsconfig.extension.json",
     "test:packaging": "python3 -m unittest discover -s scripts -p 'test_build_extension.py'",

@@ -11,16 +11,26 @@ def main():
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     raw = (ROOT / "agent-rules.json").read_text().strip()
-    expected = (
+    expected_js = (
         "// Generated from agent-rules.json. Shared tests verify this module and the Python copy.\n"
         "export const AGENT_RULES = " + raw + ";\n"
     )
-    target = ROOT / "agent-rules.js"
+    expected_ts = (
+        "// Generated from agent-rules.json. Shared tests verify this module and the Python copy.\n"
+        "export const AGENT_RULES = " + raw + " as const;\n"
+    )
+    target_js = ROOT / "agent-rules.js"
+    target_ts = ROOT / "agent-rules.ts"
     if args.check:
-        if target.read_text() != expected:
+        if (target_ts.is_file() and target_ts.read_text() != expected_ts) or (
+            target_js.is_file() and target_js.read_text() != expected_js
+        ):
             raise SystemExit("Run python3 scripts/agent_rules.py to refresh the policy module.")
+        if not target_ts.is_file() and not target_js.is_file():
+            raise SystemExit("agent-rules module missing. Run python3 scripts/agent_rules.py.")
     else:
-        target.write_text(expected)
+        target_ts.write_text(expected_ts)
+        target_js.write_text(expected_js)
 
 
 if __name__ == "__main__":

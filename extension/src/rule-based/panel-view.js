@@ -1,47 +1,26 @@
-// The autofill panel on the page, drawn in a closed shadow DOM. content.js owns the filling
-// and its state; the panel reads that state through `ctl` and calls back for every action.
-
 (() => {
   if (globalThis.JobHuntPanelView) return;
   const P = globalThis.JobHuntPanel;
-
-  /**
-   * @typedef {object} PanelController what content.js shares with the panel
-   * @property {any} state the page's fill: {appId, ctx, resume, results}, or null
-   * @property {any} agent the form agent's latest update for this tab, or null
-   * @property {{lines: any[], draft: string, pending: boolean}} chat the assistant's conversation
-   * @property {{total: number, answered: number} | null} [pageCount]
-   * @property {boolean} submittedReported
-   * @property {number} AUTO_APPLY_DELAY_S
-   * @property {(...args: any[]) => any} agentControl
-   * @property {(...args: any[]) => any} askAssistant
-   * @property {(...args: any[]) => any} autoApply
-   * @property {(...args: any[]) => any} markSubmitted
-   * @property {(...args: any[]) => any} outlineTarget
-   * @property {(...args: any[]) => any} run
-   * @property {(...args: any[]) => any} send
-   */
-
-  /** @param {PanelController} ctl */
   function create(ctl) {
     let host = null;
     let root = null;
-    // What the panel shows besides the results: one of busy / error, plus UI state.
     const view = {
       busy: null,
       error: null,
       toast: null,
       minimized: false,
       confirmSubmit: false,
-      autoApply: false, // the two switches under the chat; kept in storage so the settings page and every tab agree
+      autoApply: false,
+      // the two switches under the chat; kept in storage so the settings page and every tab agree
       aiDrafts: true,
-      fillOptional: true, // the third switch: off leaves optional fields to the person
-      countdown: null, // {left, cancel} while Submit waits to click the form's button
-      chatSeen: "",
+      fillOptional: true,
+      // the third switch: off leaves optional fields to the person
+      countdown: null,
+      // {left, cancel} while Submit waits to click the form's button
+      chatSeen: ""
     };
     let toastTimer = 0;
     let watchingTheme = false;
-
     const css = `
       :host { all: initial; }
       :host::backdrop { display: none !important; }
@@ -224,12 +203,14 @@
       .pill .badge { background: var(--badge-bad); color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
       .pill .badge.ok { background: var(--badge-ok); }
     `;
-
     function el(tag, attrs = {}, ...children) {
       const node = document.createElement(tag);
       for (const [k, v] of Object.entries(attrs)) {
         if (v == null || v === false) continue;
-        if (k === "onclick") node.addEventListener("click", (e) => { e.stopPropagation(); v(e); });
+        if (k === "onclick") node.addEventListener("click", (e) => {
+          e.stopPropagation();
+          v(e);
+        });
         else if (k === "class") node.className = v;
         else if (k === "style") node.style.cssText = v;
         else node.setAttribute(k, v === true ? "" : v);
@@ -237,35 +218,38 @@
       for (const c of children.flat(Infinity)) if (c != null && c !== false) node.append(c);
       return node;
     }
-
     const btn = (label, onclick, cls = "", attrs = {}) => el("button", { class: `b ${cls}`, type: "button", onclick, ...attrs }, label);
-
-    // A site's own modals (LinkedIn's Easy Apply, a native <dialog>, popovers) sit in the browser's
-    // top layer, above any z-index, and a modal <dialog> makes everything outside it inert. So the
-    // panel is a manual popover (top layer), lives inside an open modal dialog (the only place a
-    // modal leaves clickable), and is raised again whenever the site puts something above it.
     const HOST_STYLE = {
-      position: "fixed", inset: "auto 0 0 auto", width: "0", height: "0", margin: "0", padding: "0",
-      border: "0", background: "transparent", overflow: "visible", display: "block", "z-index": "2147483647",
+      position: "fixed",
+      inset: "auto 0 0 auto",
+      width: "0",
+      height: "0",
+      margin: "0",
+      padding: "0",
+      border: "0",
+      background: "transparent",
+      overflow: "visible",
+      display: "block",
+      "z-index": "2147483647",
       // A site's modal library (Radix, MUI) sets pointer-events:none on body/html while its dialog is open; the panel would inherit it.
-      "pointer-events": "auto",
+      "pointer-events": "auto"
     };
     let watching = false;
     let raiseQueued = false;
     let modalTimer = 0;
-
     function topModal() {
       let top = null;
       for (const d of document.querySelectorAll("dialog")) {
-        try { if (d.matches(":modal")) top = d; } catch { /* no :modal support */ }
+        try {
+          if (d.matches(":modal")) top = d;
+        } catch {
+        }
       }
       return top;
     }
-
     function raise() {
-      if (!host?.parentNode) return; // closed by the user
+      if (!host?.parentNode) return;
       const home = topModal() ?? document.documentElement;
-      // Moving the host and re-entering the top layer both drop focus: keep the user's typing.
       const focused = root.activeElement;
       const caret = typeof focused?.selectionStart === "number" ? focused.selectionStart : null;
       if (host.parentNode !== home) home.append(host);
@@ -273,13 +257,13 @@
       try {
         if (host.matches(":popover-open")) host.hidePopover();
         host.showPopover();
-      } catch { /* no Popover API: the z-index still applies */ }
+      } catch {
+      }
       if (focused && root.activeElement !== focused) {
         focused.focus({ preventScroll: true });
         if (caret != null) focused.setSelectionRange?.(caret, caret);
       }
       clearInterval(modalTimer);
-      // A modal removed from the page without closing takes the panel with it: bring it back.
       if (home !== document.documentElement) {
         modalTimer = setInterval(() => {
           if (host.parentNode === home && host.isConnected && topModal() === home) return;
@@ -288,25 +272,22 @@
         }, 500);
       }
     }
-
     function queueRaise() {
       if (raiseQueued) return;
       raiseQueued = true;
-      queueMicrotask(() => { raiseQueued = false; raise(); });
+      queueMicrotask(() => {
+        raiseQueued = false;
+        raise();
+      });
     }
-
     function watch() {
       if (watching) return;
       watching = true;
       const ours = (node) => node === host || node?.hasAttribute?.("data-applyshortly-screenshot-refs");
-      // Popovers announce themselves with a toggle event, which doesn't bubble: listen in capture.
       document.addEventListener("toggle", (e) => {
-        if (!ours(e.target) && /** @type {any} */ (e).newState === "open") queueRaise();
+        if (!ours(e.target) && /** @type {any} */
+        e.newState === "open") queueRaise();
       }, true);
-      // A dialog opened with showModal() or closed again flips its `open` attribute; a site that
-      // marks the panel inert (focus traps do) gets it undone.
-      // Watchdog: if clicks at the panel's centre don't reach it (a site made it inert, covered it or
-      // turned pointer events off), raise it again and restore its own hit-testing. Otherwise it stays dead until a reload.
       const watchdog = setInterval(() => {
         if (!host?.isConnected || host.hasAttribute("data-applyshortly-executing")) return;
         const box = root.querySelector(".p, .pill")?.getBoundingClientRect();
@@ -316,14 +297,12 @@
         host.style.setProperty("pointer-events", "auto", "important");
         if (host.closest("[inert]") && host.parentNode !== document.documentElement) document.documentElement.append(host);
         raise();
-      }, 1000);
-      // Node-based UI tests may return a timer object; browsers return a numeric id.
-      /** @type {{unref?: () => void}} */ (/** @type {unknown} */ (watchdog)).unref?.();
+      }, 1e3);
+      watchdog?.unref?.();
       new MutationObserver((records) => {
-        if (records.some((r) => (r.target === host && host.inert) || (!ours(r.target) && r.target instanceof HTMLDialogElement))) queueRaise();
+        if (records.some((r) => r.target === host && host.inert || !ours(r.target) && r.target instanceof HTMLDialogElement)) queueRaise();
       }).observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["open", "inert"] });
     }
-
     function ensure() {
       if (host?.isConnected) return;
       if (!host) {
@@ -336,58 +315,57 @@
       watch();
       raise();
     }
-
     function focusField(field) {
       const target = ctl.outlineTarget(field);
       target.scrollIntoView({ behavior: "smooth", block: "center" });
       if (field.kind === "text" || field.kind === "select") field.el.focus({ preventScroll: true });
       target.animate?.(
         [{ boxShadow: "0 0 0 0 rgba(7,134,81,.6)" }, { boxShadow: "0 0 0 14px rgba(7,134,81,0)" }],
-        { duration: 900, iterations: 2, delay: 250 },
+        { duration: 900, iterations: 2, delay: 250 }
       );
     }
-
-    // A confirmation ("Submit cancelled") fades after a few seconds. A message the user has to act
-    // on or could miss (why nothing was submitted, an error) stays until they dismiss it.
     function toast(text, { persist = false } = {}) {
       view.toast = text;
       view.toastPersist = persist;
       clearTimeout(toastTimer);
-      if (!persist) toastTimer = setTimeout(() => { view.toast = null; render(); }, 5000);
+      if (!persist) toastTimer = setTimeout(() => {
+        view.toast = null;
+        render();
+      }, 5e3);
       render();
     }
-
     function dismissToast() {
       clearTimeout(toastTimer);
       view.toast = null;
       render();
     }
-
     function setMinimized(value) {
-      if (value) view.countdown?.cancel(); // never submit from a panel the user can't see
+      if (value) view.countdown?.cancel();
       view.minimized = value;
-      chrome.runtime.sendMessage({ type: "panelPreference", minimized: value }).catch(() => {});
+      chrome.runtime.sendMessage({ type: "panelPreference", minimized: value }).catch(() => {
+      });
       render();
-      // Every caller is the user minimising or reopening: keep keyboard focus on what they act on.
       root.querySelector(value ? ".pill" : ".p")?.focus({ preventScroll: true });
     }
-
-    // Where the panel sits and how big it is are remembered across pages (the user's own layout).
     function setPref(name, value) {
       view[name] = value;
-      try { void chrome.storage.local.set({ [name === "dock" ? "panelDock" : "panelCompact"]: value }).catch(() => {}); } catch { /* not remembered */ }
+      try {
+        void chrome.storage.local.set({ [name === "dock" ? "panelDock" : "panelCompact"]: value }).catch(() => {
+        });
+      } catch {
+      }
       render();
       root.querySelector(`[data-act="${name}"]`)?.focus({ preventScroll: true });
     }
-
-    /** Where the user dragged the panel to (kept across re-renders until the page reloads). */
     function applyPos(p) {
       if (!view.pos) return;
-      // Only the position changes: width and height stay what the panel's content and size rules give.
       const w = p.offsetWidth, h = p.offsetHeight;
       const left = Math.min(Math.max(0, view.pos.left), Math.max(0, innerWidth - w));
       const top = Math.min(Math.max(0, view.pos.top), Math.max(0, innerHeight - h));
-      p.style.right = "auto"; p.style.bottom = "auto"; p.style.left = `${left}px`; p.style.top = `${top}px`;
+      p.style.right = "auto";
+      p.style.bottom = "auto";
+      p.style.left = `${left}px`;
+      p.style.top = `${top}px`;
     }
     function makeDraggable(p, handle) {
       handle.addEventListener("pointerdown", (e) => {
@@ -412,148 +390,186 @@
         e.preventDefault();
       });
     }
-
     function header(title, subtitle) {
-      return el("div", { class: "h" },
+      return el(
+        "div",
+        { class: "h" },
         el("div", { class: "mark", "aria-hidden": "true" }),
         el("div", { class: "t" }, el("b", { title }, title), subtitle ? el("small", { title: subtitle }, subtitle) : null),
-        el("button", { class: "icon", type: "button", "data-act": "compact", title: view.compact ? "Show the full panel" : "Smaller panel",
-          "aria-label": view.compact ? "Show the full panel" : "Smaller panel", "aria-pressed": view.compact ? "true" : "false",
-          onclick: () => setPref("compact", !view.compact) }, icon(view.compact ? CHEVRONS_OUT : CHEVRONS_IN)),
-        el("button", { class: "icon", type: "button", title: "Minimise (Esc)", "aria-label": "Minimise", onclick: () => setMinimized(true) }, "–"),
-        el("button", { class: "icon", type: "button", title: "Close", "aria-label": "Close", onclick: () => { view.countdown?.cancel(); host.remove(); } }, "×"),
+        el("button", {
+          class: "icon",
+          type: "button",
+          "data-act": "compact",
+          title: view.compact ? "Show the full panel" : "Smaller panel",
+          "aria-label": view.compact ? "Show the full panel" : "Smaller panel",
+          "aria-pressed": view.compact ? "true" : "false",
+          onclick: () => setPref("compact", !view.compact)
+        }, icon(view.compact ? CHEVRONS_OUT : CHEVRONS_IN)),
+        el("button", { class: "icon", type: "button", title: "Minimise (Esc)", "aria-label": "Minimise", onclick: () => setMinimized(true) }, "\u2013"),
+        el("button", { class: "icon", type: "button", title: "Close", "aria-label": "Close", onclick: () => {
+          view.countdown?.cancel();
+          host.remove();
+        } }, "\xD7")
       );
     }
-
-    // The chat is the agent: while it clicks through the form, its steps and questions show here.
     const AGENT_LIVE = ["starting", "running", "waiting", "paused"];
     const agentLive = () => Boolean(ctl.agent && AGENT_LIVE.includes(ctl.agent.status));
     const agentBusy = () => agentLive() && ctl.agent.status !== "waiting";
-
-    /** Headline, count and progress bar. Until the form has been read there is no total to show, so the bar animates instead. */
     function heroSection(summary) {
       const agent = ctl.agent;
       const working = agentLive();
       const paused = agent?.status === "paused";
       const busy = agentBusy() && !paused;
       const full = ctl.submittedReported || summary.progress >= 1;
-      const headline = ctl.submittedReported ? "Saved in ApplyShortly ✓"
-        : agent && ["stopped", "failed"].includes(agent.status) ? "Stopped: review the form"
-        : working ? (agent.status === "waiting" ? "Needs you" : agent.status === "paused" ? "Paused" : "Working through the form…")
-        : summary.headline;
-      // The page scan is not repeated while the agent works: use the agent's own live count until it is.
+      const headline = ctl.submittedReported ? "Saved in ApplyShortly \u2713" : agent && ["stopped", "failed"].includes(agent.status) ? "Stopped: review the form" : working ? agent.status === "waiting" ? "Needs you" : agent.status === "paused" ? "Paused" : "Working through the form\u2026" : summary.headline;
       const filledCount = agent?.filled_count ?? 0;
-      // Before the agent has read the form, the page's own quick count stands in.
       const early = working && !summary.total && !agent?.field_total ? ctl.pageCount : null;
       const total = summary.total || (working ? agent?.field_total || early?.total || 0 : 0);
       const live = working ? Math.max(summary.answered, filledCount, agent?.field_answered ?? 0, early?.answered ?? 0) : summary.answered;
       const done = full && total ? total : total ? Math.min(live, total) : live;
-      const pct = full ? 100 : total ? Math.round((done / total) * 100) : 0;
+      const pct = full ? 100 : total ? Math.round(done / total * 100) : 0;
       const reading = busy && !full && !total && !filledCount;
       const unknownTotal = busy && !full && !total && filledCount > 0;
-      const meta = ctl.submittedReported ? "Tracked in ApplyShortly"
-        : paused ? "Paused. Press Resume to continue."
-        : reading ? "Reading the form to see what it asks…"
-        : !total ? (working || filledCount ? `${filledCount} ${filledCount === 1 ? "step" : "steps"} done` : "Try again once the form has loaded")
-        : `${done}/${total} steps`;
+      const meta = ctl.submittedReported ? "Tracked in ApplyShortly" : paused ? "Paused. Press Resume to continue." : reading ? "Reading the form to see what it asks\u2026" : !total ? working || filledCount ? `${filledCount} ${filledCount === 1 ? "step" : "steps"} done` : "Try again once the form has loaded" : `${done}/${total} steps`;
       const indeterminate = reading || unknownTotal;
-      return el("div", { class: "hero" },
-        el("div", { class: "hero-top" },
+      return el(
+        "div",
+        { class: "hero" },
+        el(
+          "div",
+          { class: "hero-top" },
           el("strong", {}, headline),
-          !reading && total ? el("span", { class: "count", "aria-label": `${done} of ${total} steps completed` }, `${done}/${total}`) : null),
+          !reading && total ? el("span", { class: "count", "aria-label": `${done} of ${total} steps completed` }, `${done}/${total}`) : null
+        ),
         el("div", {
-          class: `bar${full ? " full" : ""}${indeterminate ? " indeterminate" : ""}`, role: "progressbar", "aria-label": "Form progress",
-          ...(indeterminate ? {} : { "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) }),
+          class: `bar${full ? " full" : ""}${indeterminate ? " indeterminate" : ""}`,
+          role: "progressbar",
+          "aria-label": "Form progress",
+          ...indeterminate ? {} : { "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) }
         }, el("i", { style: indeterminate ? "" : `width:${pct}%` })),
-        el("div", { class: "meta", role: "status" }, meta));
+        el("div", { class: "meta", role: "status" }, meta)
+      );
     }
-
-    /** While it clicks through: the latest step. Every step is also told in the chat, which is the history. */
     function agentActivity() {
       if (!ctl.agent || !agentBusy()) return null;
       const steps = ctl.agent.log ?? [];
       if (!steps.length && ctl.agent.status !== "paused") return null;
       const paused = ctl.agent.status === "paused";
-      // An automatic pause (stalled page, call limit) explains itself in its last log line.
       const why = paused && /Paused to avoid|temporarily unavailable/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
       return el("div", { class: "thinking", role: "status" }, paused ? why : steps.at(-1));
     }
-
-    const STEP_ICON = { done: "✓", error: "✕", warn: "!" };
+    const STEP_ICON = { done: "\u2713", error: "\u2715", warn: "!" };
     function assistantNoteBox() {
       const input = el("textarea", {
-        class: "note-input", rows: "1", "aria-label": "Message your assistant", maxlength: "500",
-        placeholder: "Message your assistant…",
+        class: "note-input",
+        rows: "1",
+        "aria-label": "Message your assistant",
+        maxlength: "500",
+        placeholder: "Message your assistant\u2026"
       });
       input.value = view.noteDraft ?? "";
-      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
+      const grow = () => {
+        input.style.height = "auto";
+        input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+      };
       const send = async () => {
         const text = input.value.trim();
         if (!text) return;
-        view.noteDraft = ""; view.noteError = null; input.value = ""; grow();
-        try { await ctl.send({ type: "assistantControl", action: "note", text }); }
-        catch (error) { view.noteDraft = text; view.noteError = error?.message || "The message was not sent."; }
+        view.noteDraft = "";
+        view.noteError = null;
+        input.value = "";
+        grow();
+        try {
+          await ctl.send({ type: "assistantControl", action: "note", text });
+        } catch (error) {
+          view.noteDraft = text;
+          view.noteError = error?.message || "The message was not sent.";
+        }
         render();
       };
-      input.addEventListener("input", () => { view.noteDraft = input.value; grow(); });
+      input.addEventListener("input", () => {
+        view.noteDraft = input.value;
+        grow();
+      });
       input.addEventListener("keydown", (e) => {
-        e.stopPropagation(); // keep the job site's own shortcuts out of the box
-        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); }
-        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMinimized(true);
+        } else if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          void send();
+        }
       });
       queueMicrotask(grow);
-      return el("div", { class: "composer" },
-        el("div", { class: "box" }, input,
-          btn(icon(SEND), () => void send(), "primary send", { "aria-label": "Send", title: "Send" })),
-        view.noteError ? el("div", { class: "note-error", role: "alert" }, view.noteError)
-          : el("small", { class: "hint" }, "Your assistant reads this with its next step. A message does not approve submission."));
+      return el(
+        "div",
+        { class: "composer" },
+        el(
+          "div",
+          { class: "box" },
+          input,
+          btn(icon(SEND), () => void send(), "primary send", { "aria-label": "Send", title: "Send" })
+        ),
+        view.noteError ? el("div", { class: "note-error", role: "alert" }, view.noteError) : el("small", { class: "hint" }, "Your assistant reads this with its next step. A message does not approve submission.")
+      );
     }
-
     function assistantSection(a) {
-      const control = (action) => void ctl.send({ type: "assistantControl", action }).catch(() => {});
+      const control = (action) => void ctl.send({ type: "assistantControl", action }).catch(() => {
+      });
       const submitted = a.submissionState === "submitted";
       const uncertain = a.submissionState === "needs_verification";
-      const hero = el("div", { class: "hero" },
-        el("strong", {}, uncertain ? "Submission needs verification" : submitted ? "Submitted" : a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form…" : "Browser control stopped"),
-        el("div", { class: "meta" }, uncertain
-          ? "Check the employer’s confirmation and resolve the attempt in ApplyShortly. Do not submit again."
-          : submitted ? "The employer confirmed receipt of this application." : a.paused
-          ? "Edit anything you like. Click Continue and the assistant reads the page again before it goes on."
-          : a.active ? "Submission needs separate approval. Click Pause for me to edit the form yourself." : "Check the application status before continuing."));
+      const hero = el(
+        "div",
+        { class: "hero" },
+        el("strong", {}, uncertain ? "Submission needs verification" : submitted ? "Submitted" : a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form\u2026" : "Browser control stopped"),
+        el("div", { class: "meta" }, uncertain ? "Check the employer\u2019s confirmation and resolve the attempt in ApplyShortly. Do not submit again." : submitted ? "The employer confirmed receipt of this application." : a.paused ? "Edit anything you like. Click Continue and the assistant reads the page again before it goes on." : a.active ? "Submission needs separate approval. Click Pause for me to edit the form yourself." : "Check the application status before continuing.")
+      );
       const list = el("ul", { class: "alog xsteps", "aria-label": "Assistant steps" });
       for (const step of (a.steps ?? []).slice(-14)) {
-        list.append(el("li", { class: step.state },
+        list.append(el(
+          "li",
+          { class: step.state },
           step.state === "running" ? el("span", { class: "spin" }) : el("span", { class: "ic" }, STEP_ICON[step.state] ?? ""),
-          el("span", {}, step.text)));
+          el("span", {}, step.text)
+        ));
       }
       const sent = el("ul", { class: "alog notes", "aria-label": "Your messages" });
       for (const item of (a.notes ?? []).slice(-6)) {
-        sent.append(el("li", {}, el("span", {}, `You: ${item.text}`),
-          el("small", { class: item.read ? "read" : "" }, item.read ? "✓ Your assistant read this" : "Waiting for your assistant to read this")));
+        sent.append(el(
+          "li",
+          {},
+          el("span", {}, `You: ${item.text}`),
+          el("small", { class: item.read ? "read" : "" }, item.read ? "\u2713 Your assistant read this" : "Waiting for your assistant to read this")
+        ));
       }
-      const body = el("div", { class: "body", role: "log" },
-        (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step…"),
-        sent.children.length ? sent : null);
-      queueMicrotask(() => { body.scrollTop = body.scrollHeight; });
-      const foot = a.active
-        ? el("div", { class: "f" },
-          a.paused ? btn("Continue", () => control("continue"), "primary") : btn("Pause for me", () => control("pause"), ""),
-          el("span", { class: "grow" }),
-          btn("Stop", () => control("stop"), "ghost"))
-        : null;
-      return [hero, body, ...(a.active ? [assistantNoteBox()] : []), ...(foot ? [foot] : [])];
-    }
-
-    function agentControls() {
-      return el("div", { class: "f" },
-        ctl.agent.status === "paused"
-          ? btn("Resume", () => void ctl.agentControl("resume"), "primary")
-          : ctl.agent.status === "waiting" ? null : btn("Pause", () => void ctl.agentControl("pause"), ""),
+      const body = el(
+        "div",
+        { class: "body", role: "log" },
+        (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step\u2026"),
+        sent.children.length ? sent : null
+      );
+      queueMicrotask(() => {
+        body.scrollTop = body.scrollHeight;
+      });
+      const foot = a.active ? el(
+        "div",
+        { class: "f" },
+        a.paused ? btn("Continue", () => control("continue"), "primary") : btn("Pause for me", () => control("pause"), ""),
         el("span", { class: "grow" }),
-        btn("Stop and take over", () => void ctl.agentControl("stop"), "ghost"));
+        btn("Stop", () => control("stop"), "ghost")
+      ) : null;
+      return [hero, body, ...a.active ? [assistantNoteBox()] : [], ...foot ? [foot] : []];
     }
-
-    // Long replies arrive as one block: break on newlines, else after every two sentences.
+    function agentControls() {
+      return el(
+        "div",
+        { class: "f" },
+        ctl.agent.status === "paused" ? btn("Resume", () => void ctl.agentControl("resume"), "primary") : ctl.agent.status === "waiting" ? null : btn("Pause", () => void ctl.agentControl("pause"), ""),
+        el("span", { class: "grow" }),
+        btn("Stop and take over", () => void ctl.agentControl("stop"), "ghost")
+      );
+    }
     function paragraphs(text) {
       const blocks = String(text).split(/\n+/).map((p) => p.trim()).filter(Boolean);
       if (blocks.length > 1 || text.length <= 140) return blocks;
@@ -562,7 +578,6 @@
       for (let i = 0; i < sentences.length; i += 2) out.push(sentences.slice(i, i + 2).join(" "));
       return out;
     }
-
     function chatView(results) {
       const hello = ctl.state?.ctx ? P.assistantGreeting(results) : null;
       const greeting = hello ? [{ role: "assistant", greeting: true, ...hello }] : [];
@@ -570,27 +585,35 @@
       const log = el("div", { class: "chat", "aria-live": "polite" });
       lines.forEach((line, i) => {
         if (line.role === "user") return void log.append(el("div", { class: "bubble user" }, line.text));
-        // Like the website's chat: a bot avatar, the message, what it filled, then the question it asks.
         const q = line.question;
-        const quick = i === lines.length - 1 && line.choices?.length
-          ? el("div", { class: "quick", role: "group", "aria-label": "Quick replies" },
-            line.choices.map((c) => el("button", { type: "button", disabled: ctl.chat.pending || agentBusy(), onclick: () => void ctl.askAssistant(c) }, c)))
-          : null;
-        log.append(el("div", { class: line.step ? "turn step-turn" : "turn" },
+        const quick = i === lines.length - 1 && line.choices?.length ? el(
+          "div",
+          { class: "quick", role: "group", "aria-label": "Quick replies" },
+          line.choices.map((c) => el("button", { type: "button", disabled: ctl.chat.pending || agentBusy(), onclick: () => void ctl.askAssistant(c) }, c))
+        ) : null;
+        log.append(el(
+          "div",
+          { class: line.step ? "turn step-turn" : "turn" },
           el("span", { class: "avatar" }, icon(BOT)),
-          el("div", { class: "said" },
+          el(
+            "div",
+            { class: "said" },
             line.text ? el("div", { class: line.step ? "bubble assistant stepline" : "bubble assistant" }, ...paragraphs(line.text).map((t) => el("p", {}, t))) : null,
             line.filled?.length ? el("ul", { class: "filled", "aria-label": "Filled" }, line.filled.map((f) => el("li", { title: f }, icon(CHECK), el("span", {}, f)))) : null,
-            q ? el("div", { class: "question" },
+            q ? el(
+              "div",
+              { class: "question" },
               q.step ? el("p", { class: "step" }, q.step) : null,
               el("p", { class: "label" }, q.label),
               q.note ? el("p", { class: "note" }, q.note) : null,
-              quick) : quick,
-            line.warnings?.map((w) => el("p", { class: "warn" }, w)))));
+              quick
+            ) : quick,
+            line.warnings?.map((w) => el("p", { class: "warn" }, w))
+          )
+        ));
       });
-      if (ctl.chat.pending) log.append(el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), "Thinking…"));
+      if (ctl.chat.pending) log.append(el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), "Thinking\u2026"));
       else {
-        // The chat already shows each step; don't repeat the last one as a status line.
         const lastBot = [...lines].reverse().find((l) => l.role !== "user")?.text;
         const lastStep = ctl.agent?.log?.at(-1);
         const activity = lastBot && lastStep && String(lastBot).trim() === String(lastStep).trim() ? null : agentActivity();
@@ -598,21 +621,26 @@
       }
       return log;
     }
-
-    // Lucide icons, as on the website's chat.
-    const SEND = ["M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
-      "m21.854 2.147-10.94 10.939"];
+    const SEND = [
+      "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
+      "m21.854 2.147-10.94 10.939"
+    ];
     const BOT = ["M12 8V4H8", "M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z", "M2 14h2", "M20 14h2", "M15 13v2", "M9 13v2"];
     const CHEVRONS_IN = ["m7 20 5-5 5 5", "m7 4 5 5 5-5"];
     const CHEVRONS_OUT = ["m7 15 5 5 5-5", "m7 9 5-5 5 5"];
     const CHECK = ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "m9 12 2 2 4-4"];
-
-    /** @param {string[]} paths */
     function icon(paths) {
       const NS = "http://www.w3.org/2000/svg";
       const svg = document.createElementNS(NS, "svg");
-      for (const [k, v] of Object.entries({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
-        "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(k, v);
+      for (const [k, v] of Object.entries({
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "2",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        "aria-hidden": "true"
+      })) svg.setAttribute(k, v);
       for (const d of paths) {
         const path = document.createElementNS(NS, "path");
         path.setAttribute("d", d);
@@ -620,45 +648,56 @@
       }
       return svg;
     }
-
     function composer() {
-      // Stays open while the agent works: a question queues for its next step.
       const busy = false;
       const input = el("textarea", {
-        class: "composer-input", rows: "1", "aria-label": "Message the agent", disabled: busy,
-        placeholder: ctl.agent?.status === "waiting" ? "Type your answer…" : "Type your answer, or ask to change one…",
+        class: "composer-input",
+        rows: "1",
+        "aria-label": "Message the agent",
+        disabled: busy,
+        placeholder: ctl.agent?.status === "waiting" ? "Type your answer\u2026" : "Type your answer, or ask to change one\u2026"
       });
       input.value = ctl.chat.draft;
-      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
-      input.addEventListener("input", () => { ctl.chat.draft = input.value; grow(); });
+      const grow = () => {
+        input.style.height = "auto";
+        input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+      };
+      input.addEventListener("input", () => {
+        ctl.chat.draft = input.value;
+        grow();
+      });
       input.addEventListener("keydown", (e) => {
-        e.stopPropagation(); // keep the job site's own shortcuts out of the chat box
-        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); } // not the site's modal too
-        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ctl.askAssistant(input.value); }
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMinimized(true);
+        } else if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          void ctl.askAssistant(input.value);
+        }
       });
       queueMicrotask(grow);
-      return el("div", { class: "composer" },
-        el("div", { class: "box" }, input,
-          btn(icon(SEND), () => void ctl.askAssistant(input.value), "primary send", { disabled: ctl.chat.pending || busy, "aria-label": "Send", title: "Send" })),
+      return el(
+        "div",
+        { class: "composer" },
+        el(
+          "div",
+          { class: "box" },
+          input,
+          btn(icon(SEND), () => void ctl.askAssistant(input.value), "primary send", { disabled: ctl.chat.pending || busy, "aria-label": "Send", title: "Send" })
+        )
       );
     }
-
-    // The stylesheet stays in place between renders; only the content is swapped, so nothing
-    // restyles or flashes between updates.
     const styleEl = el("style", {}, css);
     function mount(wrap) {
       if (!root.contains(styleEl)) root.replaceChildren(styleEl);
       const old = root.querySelector(".wrap");
-      // The agent reports several times per step, mostly with nothing new to show: keeping the
-      // identical panel avoids restarting its spinner and animations (a visible flicker).
       if (old && old.outerHTML === wrap.outerHTML) return;
       if (old) old.replaceWith(wrap);
       else root.append(wrap);
     }
-
     function render() {
       ensure();
-      // Re-rendering replaces the panel; keep the chat box focused while the user is typing.
       const focused = root.activeElement;
       const typingIn = ["composer-input", "note-input"].find((name) => focused?.classList?.contains(name));
       const typing = typingIn ? focused.selectionStart : null;
@@ -673,30 +712,30 @@
       const results = ctl.state?.results ?? [];
       const summary = P.summarize(results, { submitted: ctl.submittedReported });
       const title = app?.title || document.title || "ApplyShortly autofill";
-      const subtitle = [app?.company_name, ctl.state && ctl.state.appId == null ? "Not tracked in ApplyShortly" : null]
-        .filter(Boolean).join(" · ");
-
+      const subtitle = [app?.company_name, ctl.state && ctl.state.appId == null ? "Not tracked in ApplyShortly" : null].filter(Boolean).join(" \xB7 ");
       const wrap = el("div", { class: "wrap", "data-theme": view.theme === "light" || view.theme === "dark" ? view.theme : null });
-
       if (view.minimized) {
-        const badge = ctl.submittedReported ? "Submitted ✓" : summary.todo ? `${summary.todo} to do` : "All set";
-        wrap.append(el("button", {
-          class: `${root.querySelector(".pill") ? "pill" : "pill enter"}${view.dock === "left" ? " left" : ""}`, type: "button", title: "Open ApplyShortly autofill",
-          onclick: () => setMinimized(false),
-        }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
-          view.busy || (view.assistant?.active && !view.assistant.paused) ? el("span", { class: "spin" })
-            : view.assistant ? el("span", { class: "badge" }, view.assistant.paused ? "Paused" : "Done")
-              : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
+        const badge = ctl.submittedReported ? "Submitted \u2713" : summary.todo ? `${summary.todo} to do` : "All set";
+        wrap.append(el(
+          "button",
+          {
+            class: `${root.querySelector(".pill") ? "pill" : "pill enter"}${view.dock === "left" ? " left" : ""}`,
+            type: "button",
+            title: "Open ApplyShortly autofill",
+            onclick: () => setMinimized(false)
+          },
+          el("span", { class: "mark", "aria-hidden": "true" }),
+          "ApplyShortly",
+          view.busy || view.assistant?.active && !view.assistant.paused ? el("span", { class: "spin" }) : view.assistant ? el("span", { class: "badge" }, view.assistant.paused ? "Paused" : "Done") : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)
+        ));
         mount(wrap);
         return;
       }
-
-      // Slide in only when the panel appears, not on every re-render (agent updates, typing).
       const entering = !root.querySelector(".p");
       const p = el("div", { class: `p${entering ? " enter" : ""}${view.dock === "left" ? " left" : ""}${view.compact ? " compact" : ""}`, role: "dialog", "aria-label": "ApplyShortly autofill", tabindex: "-1" });
       p.addEventListener("keydown", (e) => {
         if (e.key !== "Escape") return;
-        e.preventDefault(); // inside a site's modal dialog, Escape would close the application too
+        e.preventDefault();
         setMinimized(true);
       });
       const head = header(title, subtitle);
@@ -713,49 +752,56 @@
       if (ctl.agent) {
         if (ctl.agent.filling_notice) p.append(el("div", { class: "sub", role: "status" }, ctl.agent.filling_notice));
       }
-
       if (view.busy) {
         p.append(el("div", { class: "busy", role: "status" }, el("span", { class: "spin" }), view.busy));
       } else if (view.error) {
         const e = view.error;
-        const retry = (kind) => btn("Try again", () => { view.error = null; void ctl.run(ctl.state?.appId ?? retryAppId); }, kind);
+        const retry = (kind) => btn("Try again", () => {
+          view.error = null;
+          void ctl.run(ctl.state?.appId ?? retryAppId);
+        }, kind);
         const action = {
           settings: btn("Open settings", () => void ctl.send({ type: "openOptions" }), "primary"),
           reload: btn("Reload page", () => location.reload(), "primary"),
           retry: retry("primary"),
-          profile: el("div", { class: "acts" }, btn("Set up profile", () => void ctl.send({ type: "openProfile" }).catch(() => {}), "primary"), retry("")),
+          profile: el("div", { class: "acts" }, btn("Set up profile", () => void ctl.send({ type: "openProfile" }).catch(() => {
+          }), "primary"), retry(""))
         }[e.action];
-        p.append(el("div", { class: "body" },
-          el("div", { class: "msg bad", role: "alert" }, el("b", {}, e.title), el("p", {}, e.detail), action)));
+        p.append(el(
+          "div",
+          { class: "body" },
+          el("div", { class: "msg bad", role: "alert" }, el("b", {}, e.title), el("p", {}, e.detail), action)
+        ));
       } else if (ctl.state?.ctx || ctl.submittedReported || ctl.agent) {
         const working = agentLive();
         p.append(heroSection(summary));
-
         const body = el("div", { class: "body" });
         if (ctl.submittedReported) {
-          body.append(el("div", { class: "msg good" },
+          body.append(el(
+            "div",
+            { class: "msg good" },
             el("b", {}, "Saved in ApplyShortly"),
             el("p", {}, ctl.state.appId != null ? "This application is now marked Submitted. Good luck!" : "Done."),
-            ctl.state.ctx?.baseUrl ? btn("Open ApplyShortly", () => window.open(`${ctl.state.ctx.baseUrl}/applications`, "_blank"), "primary") : null,
+            ctl.state.ctx?.baseUrl ? btn("Open ApplyShortly", () => window.open(`${ctl.state.ctx.baseUrl}/applications`, "_blank"), "primary") : null
           ));
         } else {
           body.append(chatView(results));
         }
         p.append(body);
-        // A reply replacing "Thinking…" counts as new, so the chat scrolls to show all of it.
         const seen = `${ctl.chat.lines.length}:${ctl.chat.pending}`;
-        const newLines = working || (!ctl.submittedReported && seen !== view.chatSeen);
+        const newLines = working || !ctl.submittedReported && seen !== view.chatSeen;
         if (!ctl.submittedReported) view.chatSeen = seen;
-        queueMicrotask(() => { body.scrollTop = newLines ? body.scrollHeight : prevScroll; });
-
+        queueMicrotask(() => {
+          body.scrollTop = newLines ? body.scrollHeight : prevScroll;
+        });
         if (view.toast) {
-          p.append(el("div", { class: view.toastPersist ? "toast sticky" : "toast", role: view.toastPersist ? "alert" : "status" },
+          p.append(el(
+            "div",
+            { class: view.toastPersist ? "toast sticky" : "toast", role: view.toastPersist ? "alert" : "status" },
             el("span", { class: "grow" }, view.toast),
-            view.toastPersist ? btn("Dismiss", dismissToast, "ghost", { "aria-label": "Dismiss message" }) : null));
+            view.toastPersist ? btn("Dismiss", dismissToast, "ghost", { "aria-label": "Dismiss message" }) : null
+          ));
         }
-
-        // Submit is in the footer (not while the agent is working). It runs the guarded flow: refuses and says why unless every required
-        // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
         const blockersNow = () => {
           const blockers = P.autoApplyBlockers(results, ctl.state.ctx.app, ctl.state.readiness, ctl.state.captchaPending);
           if (["stopped", "failed"].includes(ctl.agent?.status)) blockers.push("The form agent stopped before completing its review");
@@ -763,26 +809,31 @@
         };
         const submit = () => {
           const blockers = blockersNow();
-          // Enabled only when every required answer is in; the note above it and the tooltip say what's missing.
           return btn("Submit", () => void ctl.autoApply(), "primary submit-main", {
             disabled: blockers.length > 0,
-            title: blockers.length
-              ? `Not ready: ${blockers.join(". ")}.`
-              : `Clicks the form's Submit button for you after a ${ctl.AUTO_APPLY_DELAY_S}-second countdown.`,
+            title: blockers.length ? `Not ready: ${blockers.join(". ")}.` : `Clicks the form's Submit button for you after a ${ctl.AUTO_APPLY_DELAY_S}-second countdown.`
           });
         };
-        // Announced once, when it appears. The ticking number is hidden from screen readers and
-        // updated in place (see countdown() below), so Cancel keeps focus and nothing re-reads.
-        const countdown = () => el("div", { class: "f counting" },
+        const countdown = () => el(
+          "div",
+          { class: "f counting" },
           el("span", { class: "sr", role: "alert" }, "Submitting soon. Press Cancel to stop it."),
-          el("span", { class: "grow cd", "aria-hidden": "true" }, `Submitting in ${view.countdown.left}s…`),
-          btn("Cancel", view.countdown.cancel, "primary", { "data-cancel": "" }),
+          el("span", { class: "grow cd", "aria-hidden": "true" }, `Submitting in ${view.countdown.left}s\u2026`),
+          btn("Cancel", view.countdown.cancel, "primary", { "data-cancel": "" })
         );
-        // Sites where the confirmation can't be detected: the user says it was sent.
-        const confirmSubmitted = () => el("div", { class: "f" },
+        const confirmSubmitted = () => el(
+          "div",
+          { class: "f" },
           el("span", { class: "grow meta" }, "Did you submit it?"),
-          btn("Yes, I submitted it", () => { view.confirmSubmit = false; void ctl.markSubmitted("marked from the extension panel"); }, "primary"),
-          btn("Not yet", () => { view.confirmSubmit = false; render(); }, "ghost"));
+          btn("Yes, I submitted it", () => {
+            view.confirmSubmit = false;
+            void ctl.markSubmitted("marked from the extension panel");
+          }, "primary"),
+          btn("Not yet", () => {
+            view.confirmSubmit = false;
+            render();
+          }, "ghost")
+        );
         if (working) {
           p.append(composer(), agentControls());
         } else if (!ctl.submittedReported && ctl.state?.ctx && !ctl.state.postingGone) {
@@ -791,32 +842,43 @@
           if (view.confirmSubmit) p.append(confirmSubmitted());
           else if (!view.countdown) {
             const why = blockersNow();
-            p.append(el("div", { class: "f wrap-actions" },
+            p.append(el(
+              "div",
+              { class: "f wrap-actions" },
               why.length ? el("small", { class: "submit-hint" }, `${why[0]}.`) : null,
-              ctl.state.appId != null ? btn("Already submitted", () => { view.confirmSubmit = true; render(); }, "ghost submit-main secondary") : el("span", { class: "grow" }),
-              submit()));
+              ctl.state.appId != null ? btn("Already submitted", () => {
+                view.confirmSubmit = true;
+                render();
+              }, "ghost submit-main secondary") : el("span", { class: "grow" }),
+              submit()
+            ));
           }
-          
         }
       }
-
       wrap.append(p);
       mount(wrap);
       refocus();
     }
-
     let retryAppId = null;
     return {
       render,
       toast,
-      busy(text) { Object.assign(view, { busy: text, error: null }); render(); },
-      idle() { view.busy = null; render(); },
+      busy(text) {
+        Object.assign(view, { busy: text, error: null });
+        render();
+      },
+      idle() {
+        view.busy = null;
+        render();
+      },
       fail(err) {
         view.busy = null;
         view.error = P.friendlyError(err.message, err.status, ctl.state?.ctx?.baseUrl, err.code);
         render();
       },
-      setRetry(appId) { retryAppId = appId; },
+      setRetry(appId) {
+        retryAppId = appId;
+      },
       /**
        * The connected assistant's progress (the browser controller): its steps, a Pause for me /
        * Continue button, and the panel opened on the first update.
@@ -852,23 +914,26 @@
           c.cancel = () => finish(false);
           c.timer = setInterval(() => {
             if (--c.left <= 0) return finish(true);
-            // Change the number in place: re-rendering would replace the Cancel button each second.
             const label = root.querySelector(".cd");
-            if (label) label.textContent = `Submitting in ${c.left}s…`;
+            if (label) label.textContent = `Submitting in ${c.left}s\u2026`;
             else render();
-          }, 1000);
+          }, 1e3);
           Object.assign(view, { countdown: c, minimized: false });
           render();
-          root.querySelector("[data-cancel]")?.focus({ preventScroll: true }); // Enter cancels
+          root.querySelector("[data-cancel]")?.focus({ preventScroll: true });
         });
       },
       focus: focusField,
-      countdownLeft() { return view.countdown?.left ?? null; },
-      cancelCountdown() { view.countdown?.cancel(); },
+      countdownLeft() {
+        return view.countdown?.left ?? null;
+      },
+      cancelCountdown() {
+        view.countdown?.cancel();
+      },
       async restore({ show = false } = {}) {
         try {
           const saved = await chrome.storage.local.get(["panelDock", "panelCompact", "theme", "autoApply", "aiDrafts", "fillOptional"]);
-          view.dock = "right"; // the left/right button was removed; the panel is dragged instead
+          view.dock = "right";
           view.compact = saved.panelCompact === true;
           view.theme = saved.theme;
           view.autoApply = saved.autoApply === true;
@@ -882,15 +947,15 @@
               if ("autoApply" in changes) view.autoApply = changes.autoApply.newValue === true;
               if ("aiDrafts" in changes) view.aiDrafts = changes.aiDrafts.newValue !== false;
               if ("fillOptional" in changes) view.fillOptional = changes.fillOptional.newValue !== false;
-              if (("theme" in changes || "autoApply" in changes || "aiDrafts" in changes || "fillOptional" in changes) && host?.isConnected) render(); // a panel the user closed stays closed
+              if (("theme" in changes || "autoApply" in changes || "aiDrafts" in changes || "fillOptional" in changes) && host?.isConnected) render();
             });
           }
-        } catch { /* no storage: right side, full size, the page's colour scheme */ }
+        } catch {
+        }
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);
-      },
+      }
     };
   }
-
   globalThis.JobHuntPanelView = { create };
 })();

@@ -39,7 +39,7 @@ export function readSnapshot(text) {
  */
 export function fakeModel(options = {}, context = {}) {
   const knowledge = (options.knowledge ?? []).map((k) => ({ ...k, re: new RegExp(k.match, "i") }));
-  const state = { calls: 0, inputChars: 0, replies: [], answers: new Map(), skipped: new Set(), refused: new Set(), asked: [], answeredQuestions: [], context };
+  const state = { calls: 0, inputChars: 0, replies: [], answers: new Map(), skipped: new Set(), refused: new Set(), asked: [], answeredQuestions: [], allElements: [], context };
   const model = async (_config, messages, _maxTokens, look) => {
     state.calls += 1;
     if (options.delay_ms) await new Promise((resolve) => setTimeout(resolve, options.delay_ms));
@@ -132,7 +132,10 @@ function callFor(el, answer, snap) {
 
 function decide(snap, state, knowledge, options) {
   const els = snap.elements;
-  twinsOf = els;
+  for (const el of els) {
+    if (!state.allElements.some((e) => e.ref === el.ref)) state.allElements.push(el);
+  }
+  twinsOf = state.allElements;
   const skippedByLabel = (el) => state.skipped.has(el.ref) || snap.skipped.some((s) => norm(s) === norm(label(el)) || norm(s) === norm(el.name));
   const seenGroups = new Set();
   const fields = els.filter((el) => {

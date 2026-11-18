@@ -45,6 +45,8 @@ class BuildTest(unittest.TestCase):
             shutil.copytree(build_extension.ROOT / "extension", fixture / "extension")
             (fixture / "scripts").mkdir()
             shutil.copy(build_extension.ROOT / "scripts/bundle_langgraph.mjs", fixture / "scripts")
+            if (build_extension.ROOT / "scripts/compile_extension.mjs").is_file():
+                shutil.copy(build_extension.ROOT / "scripts/compile_extension.mjs", fixture / "scripts")
             (fixture / "node_modules").symlink_to(build_extension.ROOT / "node_modules")
             (fixture / "extension/config.local.json").write_text('{"token":"fixture-secret"}')
             with patch.object(build_extension, "ROOT", fixture):
@@ -113,6 +115,8 @@ class BuildTest(unittest.TestCase):
             shutil.copytree(build_extension.ROOT / "extension", fixture / "extension")
             (fixture / "scripts").mkdir()
             shutil.copy(build_extension.ROOT / "scripts/bundle_langgraph.mjs", fixture / "scripts")
+            if (build_extension.ROOT / "scripts/compile_extension.mjs").is_file():
+                shutil.copy(build_extension.ROOT / "scripts/compile_extension.mjs", fixture / "scripts")
             (fixture / "node_modules").symlink_to(build_extension.ROOT / "node_modules")
             (fixture / ".env").write_text(
                 'FRONTEND_URL="https://deployment.example" # public address\n'

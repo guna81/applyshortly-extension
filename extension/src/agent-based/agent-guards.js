@@ -1,13 +1,7 @@
-// The hard limits of the Agent based form assistant agent, enforced in code whatever the model decides. The model chooses every step; this file only
-// refuses: never submit, never touch a human check, consent and legal facts only from the profile or the user, no overwrite, optional
-// fields left alone and open-ended answers left to the user when their switches are off, and the list of required fields `done` is
-// checked against. It never rewrites what the model chose (no form-fixing rules): a refusal is a tool error the model reads and works
-// around. Generic by design: it knows roles, labels and states, never a company or a form.
 import { AGENT_RULES } from "../shared/agent-rules.js";
 import { candidateContext } from "../shared/candidate-context.js";
 import { factMatches, profileFact } from "../shared/profile-facts.js";
 import { choiceState, isChoiceOption, namesOption, optionsOf, scanFields } from "../page-control/commands.js";
-
 const FORM_ROLES = ["textbox", "textarea", "select", "combobox", "radio", "checkbox", "file"];
 const SAFE_KEYS = /^(?:Tab|Escape|Space|Backspace|Enter|Arrow(?:Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/;
 const FORBIDDEN_CLICK = /\b(?:submit|send|finish|complete application|sign.?in|log.?in|register|accept|agree|authorize|confirm|pay|purchase)\b/i;
@@ -24,38 +18,23 @@ const NOT_ACKNOWLEDGEMENT = new RegExp(AGENT_RULES.consent.deny, "i");
 const MAX_WAITS = 6;
 const MAX_NAVIGATIONS = 2;
 const ASK_CONSENT = "This is a consent, eligibility or legal choice only the user may make, and the profile and their earlier answers do not settle it. Call ask_user with the question.";
-
 const onLastStep = (text) => {
   const body = String(text ?? "");
   const counted = /\bstep\s+(\d+)\s*(?:of|\/)\s*(\d+)\b/i.exec(body);
   if (counted) return Number(counted[1]) >= Number(counted[2]);
   return /\b(?:final|last) step\b|\breview (?:and|&) submit\b/i.test(body);
 };
-const plainText = (value) => String(value).replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1 ($2)")
-  .replace(/(^|\n)\s{0,3}#{1,6}\s+/g, "$1").replace(/(^|\n)\s*[-*+]\s+/g, "$1• ")
-  .replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/__([^_\n]+)__/g, "$1").replace(/`([^`\n]+)`/g, "$1").trim();
-export const questionKey = (text) => `q:${(AGENT_RULES.skip.case_sensitive ? String(text) : String(text).toLowerCase()).replace(/\s+/g, " ").trim()}`;
-const controlHint = (el) => isChoiceOption(el) ? "It is one option of a question: choose it with check."
-  : el.role === "button" || el.role === "link" ? "It is a button: click it only to move through the form."
-  : ["select", "combobox"].includes(el.role) ? "Use select with the option's text."
-  : ["radio", "checkbox"].includes(el.role) ? "Use check with checked true or false."
-  : "Pick the matching control from the snapshot.";
-
-/** The part of the guards' state that survives a restart: plain JSON. */
-// `draftFor`: the field the user tapped "Draft it for me" on (its identity, or "*" when the question named no field); cleared once written.
-export const newGuardState = () => ({ skipped: [], labels: [], answers: {}, groupAnswers: {}, wrote: [], navigations: 0, waits: 0, instruction: "", draftFor: null });
-
-/**
- * @param {{profile: any, job: any, allowDrafts: () => boolean, fillOptional: () => boolean}} config `allowDrafts` and `fillOptional` are
- * read fresh on every check (the user's switches can change mid-run)
- */
-export function createGuards({ profile, job, allowDrafts, fillOptional }) {
+const plainText = (value) => String(value).replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1 ($2)").replace(/(^|\n)\s{0,3}#{1,6}\s+/g, "$1").replace(/(^|\n)\s*[-*+]\s+/g, "$1\u2022 ").replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/__([^_\n]+)__/g, "$1").replace(/`([^`\n]+)`/g, "$1").trim();
+const questionKey = (text) => `q:${(AGENT_RULES.skip.case_sensitive ? String(text) : String(text).toLowerCase()).replace(/\s+/g, " ").trim()}`;
+const controlHint = (el) => isChoiceOption(el) ? "It is one option of a question: choose it with check." : el.role === "button" || el.role === "link" ? "It is a button: click it only to move through the form." : ["select", "combobox"].includes(el.role) ? "Use select with the option's text." : ["radio", "checkbox"].includes(el.role) ? "Use check with checked true or false." : "Pick the matching control from the snapshot.";
+const newGuardState = () => ({ skipped: [], labels: [], answers: {}, groupAnswers: {}, wrote: [], navigations: 0, waits: 0, instruction: "", draftFor: null });
+function createGuards({ profile, job, allowDrafts, fillOptional }) {
   const candidate = candidateContext(profile);
   const identity = (obs, el) => JSON.stringify([obs.url, el?.frame, el?.section, el?.identity ?? "", el?.name, el?.group, el?.role]);
-  const groupKey = (obs, el) => (el?.group ? JSON.stringify([obs.url, el.frame, el.section, el.group, "choice"]) : null);
-  const isSkipped = (state, obs, el) => Boolean(el) && (state.skipped.includes(identity(obs, el)) || state.skipped.includes(questionKey(el.name)) || (groupKey(obs, el) !== null && state.skipped.includes(groupKey(obs, el))));
+  const groupKey = (obs, el) => el?.group ? JSON.stringify([obs.url, el.frame, el.section, el.group, "choice"]) : null;
+  const isSkipped = (state, obs, el) => Boolean(el) && (state.skipped.includes(identity(obs, el)) || state.skipped.includes(questionKey(el.name)) || groupKey(obs, el) !== null && state.skipped.includes(groupKey(obs, el)));
   const profileBacked = (question, option) => factMatches(profileFact(question, profile, job), option);
-  const grouped = (el) => isChoiceOption(el) || (el.role === "checkbox" && Boolean(el.group));
+  const grouped = (el) => isChoiceOption(el) || el.role === "checkbox" && Boolean(el.group);
   const chosenIn = (obs, el) => obs.elements.some((m) => grouped(m) && (el.group ? m.group === el.group && m.frame === el.frame && m.section === el.section : m.ref === el.ref) && choiceState(m) === true);
   const empty = (el) => !el.disabled && !el.user_edited && (["checkbox", "radio"].includes(el.role) ? !el.checked : !String(el.value ?? "").trim() || PLACEHOLDER.test(String(el.value).trim()));
   const uploadFile = (obs, el) => {
@@ -65,8 +44,6 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }) {
     const sole = obs.elements.filter((e) => e.role === "file" && !e.disabled).length === 1 && !/cover|letter|photo|picture|portfolio|certificate|id\b|passport|transcript/i.test(el.name ?? "");
     return candidate.has_resume_file && (resume || sole) ? "resume" : null;
   };
-
-  // `question` is the text that was asked: when the page re-rendered and the ref is gone, the skip still holds by that text.
   const skip = (state, obs, ref, question = "") => {
     const el = obs.elements.find((e) => e.ref === ref) ?? (question ? { name: question } : null);
     if (!el) return;
@@ -84,26 +61,16 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }) {
     const el = obs.elements.find((e) => e.ref === ref);
     if (el && !state.wrote.includes(identity(obs, el))) state.wrote.push(identity(obs, el));
   };
-
-  /** Required fields still empty, leaving out what the user took on, human checks and attachments the agent cannot make. */
   const missingRequired = (obs, state) => scanFields(obs).missing.filter((field) => {
     const el = obs.elements.find((e) => e.ref === field.ref);
     if (!el) return true;
-    return !(isSkipped(state, obs, el) || BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`) || (el.role === "file" && !uploadFile(obs, el)));
+    return !(isSkipped(state, obs, el) || BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`) || el.role === "file" && !uploadFile(obs, el));
   });
-
-  /** Optional fields still empty (leaving out unavailable files, checkboxes, human checks and what the user took on): what "fill optional fields" still has to cover. */
   const emptyOptional = (obs, state) => scanFields(obs).fields.filter((field) => {
     if (field.required || !["textbox", "textarea", "select", "combobox", "radio", "file"].includes(field.role)) return false;
     const el = obs.elements.find((e) => e.ref === field.ref);
     return Boolean(el) && (el.role !== "file" || Boolean(uploadFile(obs, el))) && open(obs, el) && !isSkipped(state, obs, el) && !BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`);
   });
-
-  /**
-   * One action through every hard limit. Returns {ok, action} (a loop action, possibly rewritten to fit the control), {error} (told
-   * to the model as a failed tool call) or {ask} (a question or hold the code puts to the user instead).
-   * @returns {any} {ok, action} | {error} | {ask}
-   */
   const vet = (input, obs, state, { inspectOnly = false } = {}) => {
     const action = { ...input };
     const refuse = (error) => ({ error });
@@ -111,13 +78,16 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }) {
     if (!KNOWN.includes(action.type)) return refuse(`Unknown action "${String(action.type).slice(0, 40)}".`);
     if (inspectOnly && !["options", "review"].includes(action.type)) return refuse("A question cannot change the form: the user has not asked for a change. Answer in text, or ask them to confirm a change.");
     if (action.type === "wait" || action.type === "wait_for") {
-      if (state.waits >= MAX_WAITS) { state.waits = 0; return { ask: { kind: "blocker", text: "The page still hasn't finished loading. Check it, then tap Continue." } }; }
+      if (state.waits >= MAX_WAITS) {
+        state.waits = 0;
+        return { ask: { kind: "blocker", text: "The page still hasn't finished loading. Check it, then tap Continue." } };
+      }
       state.waits += 1;
     } else state.waits = 0;
     if (action.type === "run_js") {
       const code = String(action.code ?? "");
       if (!code.trim()) return refuse("run_js needs the code to run.");
-      if (code.length > 4000) return refuse("run_js code is limited to 4000 characters.");
+      if (code.length > 4e3) return refuse("run_js code is limited to 4000 characters.");
       return { ok: true, action: { type: "run_js", code, label: "Running a page script" } };
     }
     if (action.type === "switch_tab" && !obs.tabs?.some((tab) => tab.id === action.tab_id)) return refuse("That tab was not opened by this application.");
@@ -128,20 +98,19 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }) {
     if (el && isSkipped(state, obs, el) && ["type", "select", "check", "upload", "click", "press", "hover"].includes(action.type)) return refuse("The user said they will fill this themselves on the page: leave it alone.");
     if (el?.disabled || el?.input_type === "password") return refuse("The selected field cannot be changed.");
     const mine = el ? state.wrote.includes(identity(obs, el)) : false;
-    const answered = el ? state.answers[identity(obs, el)] : undefined;
+    const answered = el ? state.answers[identity(obs, el)] : void 0;
     if (["type", "select"].includes(action.type)) {
       if (action.type === "type" && !["textbox", "textarea"].includes(el.role)) return refuse(`The selected control is a ${el.role}, not a text field. ${controlHint(el)}`);
       if (action.type === "select" && !["select", "combobox"].includes(el.role) && !el.popup) return refuse(`The selected control is a ${el.role}, not a dropdown. ${controlHint(el)}`);
-      if (typeof action.text !== "string" || !action.text.trim() || action.text.length > 2000) return refuse("The answer text is missing or too long.");
+      if (typeof action.text !== "string" || !action.text.trim() || action.text.length > 2e3) return refuse("The answer text is missing or too long.");
       if (action.type === "type") action.text = plainText(action.text);
       const name = `${el.group ?? ""} ${el.name ?? ""}`;
-      const userSaidIt = answered !== undefined && answered.trim().toLowerCase() === action.text.trim().toLowerCase();
+      const userSaidIt = answered !== void 0 && answered.trim().toLowerCase() === action.text.trim().toLowerCase();
       if ((CONSENT.test(String(el.name ?? "")) || CITIZENSHIP.test(String(el.name ?? "")) || LEGAL_FACT.test(name)) && !userSaidIt && !profileBacked(el.name, action.text)) return refuse(ASK_CONSENT);
-      // An open-ended answer follows the user's "Let AI answer" switch (read fresh): off, it is theirs to give unless they asked for a draft of it.
       if (action.type === "type" && empty(el) && (el.role === "textarea" || LONG_ANSWER.test(el.name ?? "")) && !userSaidIt) {
         const asked = /\b(?:draft|write|compose|explain|describe|summari[sz]e)\b/i.test(state.instruction) && !/\b(?:don't|do not|never)\b/i.test(state.instruction);
         const tapped = state.draftFor === "*" || state.draftFor === identity(obs, el);
-        if (!allowDrafts() && !tapped && !asked) return refuse("This is an open-ended answer and the user's \"Let AI answer\" switch is off: do not write it. Call ask_user with the draft action so they can type it or choose Draft it for me.");
+        if (!allowDrafts() && !tapped && !asked) return refuse(`This is an open-ended answer and the user's "Let AI answer" switch is off: do not write it. Call ask_user with the draft action so they can type it or choose Draft it for me.`);
       }
       const explicitEdit = /\b(?:change|replace|correct|update|clear)\b/i.test(state.instruction) && String(el.name ?? "").length >= 3 && state.instruction.toLowerCase().includes(String(el.name).toLowerCase());
       const holds = String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim());
@@ -149,31 +118,39 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }) {
     }
     if (action.type === "check") {
       const option = isChoiceOption(el);
-      if (!(["radio", "checkbox"].includes(el.role) || option) || typeof action.checked !== "boolean" || ((el.role === "radio" || (option && el.group)) && !action.checked)) return refuse(`check works on a checkbox, radio or yes/no option with checked true or false. ${controlHint(el)}`);
+      if (!(["radio", "checkbox"].includes(el.role) || option) || typeof action.checked !== "boolean" || (el.role === "radio" || option && el.group) && !action.checked) return refuse(`check works on a checkbox, radio or yes/no option with checked true or false. ${controlHint(el)}`);
       const text = `${el.group ?? ""} ${el.name ?? ""}`;
       const standing = profile.preferences?.auto_consent === true && el.role === "checkbox" && action.checked === true && ACKNOWLEDGEMENT.test(text) && !NOT_ACKNOWLEDGEMENT.test(text);
-      const said = (option || (el.role === "checkbox" && el.group)) && groupKey(obs, el) ? state.groupAnswers[groupKey(obs, el)] : undefined;
-      const userChose = said !== undefined && namesOption(optionsOf(obs.elements, el), said, el);
+      const said = (option || el.role === "checkbox" && el.group) && groupKey(obs, el) ? state.groupAnswers[groupKey(obs, el)] : void 0;
+      const userChose = said !== void 0 && namesOption(optionsOf(obs.elements, el), said, el);
       if ((CONSENT.test(text) || NOT_ACKNOWLEDGEMENT.test(text) || LEGAL_FACT.test(text)) && !standing && !userChose && !profileBacked(el.group || el.name, el.name)) return refuse(ASK_CONSENT);
       const otherChosen = option && el.group && obs.elements.some((m) => isChoiceOption(m) && m.group === el.group && m.ref !== el.ref && choiceState(m) === true);
-      if (!mine && (el.user_edited || (el.checked && !action.checked) || otherChosen)) return refuse("The agent will not overwrite an existing answer.");
+      if (!mine && (el.user_edited || el.checked && !action.checked || otherChosen)) return refuse("The agent will not overwrite an existing answer.");
       if (mine && el.checked && action.checked) return refuse("That is already chosen.");
     }
     if (action.type === "click") {
       const fields = obs.elements.filter((e) => ["textbox", "textarea", "select", "combobox"].includes(e.role) && !e.disabled && !["password", "hidden", "search"].includes(e.input_type));
       const noForm = fields.length < 3 && !obs.elements.some((e) => e.role === "file" && !e.disabled) && state.wrote.length === 0;
       const linkToForm = noForm && el.role === "link" && /^https?:/i.test(el.href ?? "");
-      let sameOrigin = true; let scheme = true;
-      try { if (el.href) { const target = new URL(el.href, obs.url); sameOrigin = target.origin === new URL(obs.url).origin; scheme = /^https?:$/.test(target.protocol); } } catch { scheme = false; }
+      let sameOrigin = true;
+      let scheme = true;
+      try {
+        if (el.href) {
+          const target = new URL(el.href, obs.url);
+          sameOrigin = target.origin === new URL(obs.url).origin;
+          scheme = /^https?:$/.test(target.protocol);
+        }
+      } catch {
+        scheme = false;
+      }
       const lastStep = el.role === "button" && FORWARD_BUTTON.test(String(el.name ?? "")) && onLastStep(obs.text);
       const forbidden = FORBIDDEN_CLICK.test(linkToForm ? String(el.name ?? "").replace(/\bsubmit\b/gi, "") : String(el.name ?? ""));
-      if (el.submit_like || lastStep || forbidden || (el.role === "link" && !el.href) || (!sameOrigin && !noForm) || !scheme) {
+      if (el.submit_like || lastStep || forbidden || el.role === "link" && !el.href || !sameOrigin && !noForm || !scheme) {
         return refuse(`That action needs your direct approval on the page.${el.submit_like || lastStep ? " (looks like a final submit)" : el.role === "link" && !el.href ? " (link has no address)" : !sameOrigin && !noForm ? " (the page already has a form)" : ""}`);
       }
-      // A choice is made with check (so its consent and overwrite limits apply) and a file with upload; a click would bypass them.
       if (["checkbox", "radio"].includes(el.role) || isChoiceOption(el)) return refuse(`Use check for this control, not click. ${controlHint(el)}`);
       const said = `${el.group ?? ""} ${el.name ?? ""}`;
-      if (el.role === "switch" && (CONSENT.test(said) || LEGAL_FACT.test(said)) && !(answered !== undefined && /^(?:yes|on|true)$/i.test(answered.trim()))) return refuse(ASK_CONSENT);
+      if (el.role === "switch" && (CONSENT.test(said) || LEGAL_FACT.test(said)) && !(answered !== void 0 && /^(?:yes|on|true)$/i.test(answered.trim()))) return refuse(ASK_CONSENT);
       if (el.role === "file") return refuse("Use upload for a file field, not click.");
       if (noForm && !COOKIE_DECLINE.test(String(el.name ?? "").trim())) {
         if (state.navigations >= MAX_NAVIGATIONS) return { ask: { kind: "blocker", text: "I couldn't find the application form after two page changes. Open the form yourself, then tell me to continue." } };
@@ -196,14 +173,27 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }) {
     }
     if (action.type === "scroll" && !["up", "down"].includes(action.direction)) return refuse("scroll needs a direction, up or down.");
     const verb = { type: "Filled", select: "Selected", check: "Chose" }[action.type];
-    const label = verb && el ? `${verb} ${String(el.group || el.name || "the field").slice(0, 80)}` : ({ review: "Reviewing the form", options: "Looking at the options" }[action.type] ?? String(action.type));
-    const ms = ["wait", "wait_for"].includes(action.type) && Number.isFinite(Number(action.ms)) ? Math.min(Math.max(0, Number(action.ms)), action.type === "wait" ? 5000 : 10000) : undefined;
-    return { ok: true, action: { type: action.type, ref: action.ref, text: action.type === "press" ? undefined : action.text, checked: action.checked, direction: action.direction,
-      key: action.type === "press" ? String(action.key) : undefined, tab_id: action.type === "switch_tab" ? action.tab_id : undefined, to_ref: action.type === "drag" ? action.to_ref : undefined,
-      ms, file: action.type === "upload" ? (coverLetter ? "cover_letter" : "resume") : undefined, label } };
+    const label = verb && el ? `${verb} ${String(el.group || el.name || "the field").slice(0, 80)}` : { review: "Reviewing the form", options: "Looking at the options" }[action.type] ?? String(action.type);
+    const ms = ["wait", "wait_for"].includes(action.type) && Number.isFinite(Number(action.ms)) ? Math.min(Math.max(0, Number(action.ms)), action.type === "wait" ? 5e3 : 1e4) : void 0;
+    return { ok: true, action: {
+      type: action.type,
+      ref: action.ref,
+      text: action.type === "press" ? void 0 : action.text,
+      checked: action.checked,
+      direction: action.direction,
+      key: action.type === "press" ? String(action.key) : void 0,
+      tab_id: action.type === "switch_tab" ? action.tab_id : void 0,
+      to_ref: action.type === "drag" ? action.to_ref : void 0,
+      ms,
+      file: action.type === "upload" ? coverLetter ? "cover_letter" : "resume" : void 0,
+      label
+    } };
   };
-
-  /** Whether a field (or a pick-one question) still waits for an answer. */
-  const open = (obs, el) => (grouped(el) ? !el.disabled && !el.submit_like && !chosenIn(obs, el) : empty(el));
+  const open = (obs, el) => grouped(el) ? !el.disabled && !el.submit_like && !chosenIn(obs, el) : empty(el);
   return { vet, open, skip, recordAnswer, noteWrite, missingRequired, emptyOptional, identity, isSkipped, uploadFile: (obs, el) => uploadFile(obs, el), formRoles: FORM_ROLES, botCheck: (el) => BOT_CHECK.test(`${el?.group ?? ""} ${el?.name ?? ""}`) };
 }
+export {
+  createGuards,
+  newGuardState,
+  questionKey
+};

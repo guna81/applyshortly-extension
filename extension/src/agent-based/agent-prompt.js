@@ -1,10 +1,5 @@
-// What the Agent based form assistant agent tells the model: one stable system message (rules, the candidate's profile, the job) and, per step, one compact
-// snapshot of the page. Generic by design: no company, no job-site and no form-specific wording.
 import { candidateContext } from "../shared/candidate-context.js";
-
-/** Tools that only look; an inspect-only request (a question about the page) may use no others. */
-export const INSPECT_TOOLS = ["read_page", "find", "get_page_text", "screenshot", "read_console", "read_network", "web_fetch", "options", "review", "ask_user", "done"];
-
+const INSPECT_TOOLS = ["read_page", "find", "get_page_text", "screenshot", "read_console", "read_network", "web_fetch", "options", "review", "ask_user", "done"];
 const RULES = `Fill the user's job application through native tools. Every assistant text MUST be exactly {"message":"your words","actions":[]}, even on silent tool turns: {"message":"","actions":[]}. Never omit this envelope or add markdown/free text. message is plain language, at most 1000 characters; actions are unique draft/skip/on_page buttons, at most three, only with ask_user. Native tool calls control the browser; actions control UI buttons. Multiple calls share one envelope. ask_user, done, posting_gone and no-tool replies require nonempty message. Put questions/closing words in message, never legacy tool arguments.
 
 Workflow
@@ -22,27 +17,42 @@ Safety and finish
 - Privacy/terms/data-processing consent requires candidate.preferences.auto_consent or the user's confirmation. Truth/legal/eligibility declarations require supported profile facts or the user's explicit option choice; check exactly that option, never type it elsewhere or tell the user to tick it themselves. Gender may use candidate.gender. Work authorization/sponsorship comes only from preferences.work_authorization for the job country; otherwise ask.
 - done only after required and enabled optional fields are settled or the user chose to handle them on-page (including Continue). Refusal feedback lists refs still needing attention: handle those, rather than rereading the whole form. Auto apply ON: say the extension will submit after required answers and a cancellable countdown; OFF: say the user reviews/submits. The agent never submits.
 - Speak briefly like a colleague, without repetition. ask_user buttons: draft for draftable text, skip for optional, on_page for on-page work, otherwise []. Never reply with words only to wait/pause: use a tool. A conversational user message may receive an envelope with no tools, pausing without completion; it is not an answer to the pending field.`;
+function buildSystem(profile, job) {
+  const brief = job && { title: job.title, company: job.company_name ?? job.company, location: job.location, description: String(job.description ?? "").slice(0, 4e3), has_cover_letter_file: Boolean(job.cover_letter) };
+  return `${RULES}
 
-/** The stable system message: rules, the candidate's profile and the job. Rebuilt identically on every call. */
-export function buildSystem(profile, job) {
-  const brief = job && { title: job.title, company: job.company_name ?? job.company, location: job.location, description: String(job.description ?? "").slice(0, 4000), has_cover_letter_file: Boolean(job.cover_letter) };
-  return `${RULES}\n\nCandidate profile (data):\n${JSON.stringify(candidateContext(profile))}\n\nJob (data):\n${JSON.stringify(brief ?? null)}`;
+Candidate profile (data):
+${JSON.stringify(candidateContext(profile))}
+
+Job (data):
+${JSON.stringify(brief ?? null)}`;
 }
-
-const clip = (value, n) => (typeof value === "string" && value.length > n ? `${value.slice(0, n)}…` : value);
-/** One element, brief: what a person would read off the page. Long texts are clipped: a snapshot must stay far below the gateway's limit. */
-export const snapElement = (el) => Object.fromEntries(Object.entries({
-  ref: el.ref, role: el.role, name: clip(el.name, 400), group: clip(el.group, 400), section: clip(el.section, 200), value: clip(el.value, 400),
-  popup: el.popup || undefined, checked: el.checked, pressed: el.pressed, selected: el.selected, expanded: el.expanded, required: el.required === true ? true : el.required === false ? false : undefined,
-  disabled: el.disabled || undefined, invalid: el.invalid || undefined, error: clip(el.error, 300), type: el.input_type && el.input_type !== "text" ? el.input_type : undefined,
-  options: Array.isArray(el.options) ? (el.options.length > 15 ? el.options.slice(0, 15) : el.options).map((o) => clip(o, 120)) : undefined,
-  option_count: Array.isArray(el.options) && el.options.length > 15 ? el.options.length : undefined, submit: el.submit_like || undefined, href: el.href ? String(el.href).slice(0, 120) : undefined,
-}).filter(([, value]) => value !== undefined && value !== null && value !== ""));
-
+const clip = (value, n) => typeof value === "string" && value.length > n ? `${value.slice(0, n)}\u2026` : value;
+const snapElement = (el) => Object.fromEntries(Object.entries({
+  ref: el.ref,
+  role: el.role,
+  name: clip(el.name, 400),
+  group: clip(el.group, 400),
+  section: clip(el.section, 200),
+  value: clip(el.value, 400),
+  popup: el.popup || void 0,
+  checked: el.checked,
+  pressed: el.pressed,
+  selected: el.selected,
+  expanded: el.expanded,
+  required: el.required === true ? true : el.required === false ? false : void 0,
+  disabled: el.disabled || void 0,
+  invalid: el.invalid || void 0,
+  error: clip(el.error, 300),
+  type: el.input_type && el.input_type !== "text" ? el.input_type : void 0,
+  options: Array.isArray(el.options) ? (el.options.length > 15 ? el.options.slice(0, 15) : el.options).map((o) => clip(o, 120)) : void 0,
+  option_count: Array.isArray(el.options) && el.options.length > 15 ? el.options.length : void 0,
+  submit: el.submit_like || void 0,
+  href: el.href ? String(el.href).slice(0, 120) : void 0
+}).filter(([, value]) => value !== void 0 && value !== null && value !== ""));
 const PAGE_TEXT = 2500;
-const MAX_SNAPSHOT = 100_000;
-/** The page as the model sees it this step. */
-export function snapshotText(obs, { saved = {}, fillOptional = true, allowDrafts = true, autoApply = false, notes = [], userMessage = "", skipped = [], links = [], stuck = null, omit = () => false, memory = null, pageText = true, unchangedControls = [] } = {}) {
+const MAX_SNAPSHOT = 1e5;
+function snapshotText(obs, { saved = {}, fillOptional = true, allowDrafts = true, autoApply = false, notes = [], userMessage = "", skipped = [], links = [], stuck = null, omit = () => false, memory = null, pageText = true, unchangedControls = [] } = {}) {
   const lines = [`Page: ${obs.url}`];
   lines.push(`Switches (current): Fill optional fields: ${fillOptional ? "ON" : "OFF"}. Let AI answer: ${allowDrafts ? "ON" : "OFF"}. Auto apply: ${autoApply ? "ON" : "OFF"}.`);
   if (obs.dialog) lines.push(`Dialog open: ${JSON.stringify(obs.dialog).slice(0, 400)}`);
@@ -51,23 +61,30 @@ export function snapshotText(obs, { saved = {}, fillOptional = true, allowDrafts
   if (obs.errors?.length) lines.push(`Page errors: ${JSON.stringify(obs.errors).slice(0, 600)}`);
   if (obs.more_below) lines.push("More of the page is below the visible area.");
   const elements = obs.elements.filter((el) => !omit(el));
-  // Deduplicate repeated labels without losing the question or section of any option.
-  const groups = {}; const sections = {};
+  const groups = {};
+  const sections = {};
   const intern = (table, value) => {
-    const found = Object.keys(table).find((key) => table[key] === value);
+    const found = Object.keys(table).find((key2) => table[key2] === value);
     const key = found ?? String(Object.keys(table).length + 1);
-    table[key] = value; return key;
+    table[key] = value;
+    return key;
   };
   const packed = elements.slice(0, 150).map((el) => {
     const e = snapElement(el);
-    if (e.group) { e.g = intern(groups, e.group); delete e.group; }
-    if (e.section) { e.s = intern(sections, e.section); delete e.section; }
+    if (e.group) {
+      e.g = intern(groups, e.group);
+      delete e.group;
+    }
+    if (e.section) {
+      e.s = intern(sections, e.section);
+      delete e.section;
+    }
     return JSON.stringify(e);
   });
   if (Object.keys(groups).length) lines.push(`Groups (g): ${JSON.stringify(groups)}`);
   if (Object.keys(sections).length) lines.push(`Sections (s): ${JSON.stringify(sections)}`);
   lines.push(`Elements (${elements.length}; current refs only; unchanged settled controls omitted; read_page/find retrieves all):`, ...packed);
-  if (elements.length > 150) lines.push(`… ${elements.length - 150} more; use find or read_page with a query.`);
+  if (elements.length > 150) lines.push(`\u2026 ${elements.length - 150} more; use find or read_page with a query.`);
   if (unchangedControls.length) lines.push(`Other unchanged controls (current refs): ${JSON.stringify(unchangedControls.map((el) => {
     const e = snapElement(el);
     return Object.fromEntries(Object.entries(e).filter(([key]) => ["ref", "role", "name", "submit", "href", "disabled"].includes(key)));
@@ -82,9 +99,15 @@ export function snapshotText(obs, { saved = {}, fillOptional = true, allowDrafts
   if (userMessage) lines.push(`The user wrote: ${userMessage}`);
   for (const note of notes) lines.push(note);
   const text = lines.join("\n");
-  // The gateway refuses a message over 150,000 characters (HTTP 422). Cut the middle of an oversized one, never the switches at its top.
-  return text.length > MAX_SNAPSHOT ? `${text.slice(0, MAX_SNAPSHOT - 400)}\n… (snapshot cut: ${text.length - MAX_SNAPSHOT + 400} characters over the limit; use find or read_page with a query for the rest.)\n${text.slice(-200)}` : text;
+  return text.length > MAX_SNAPSHOT ? `${text.slice(0, MAX_SNAPSHOT - 400)}
+\u2026 (snapshot cut: ${text.length - MAX_SNAPSHOT + 400} characters over the limit; use find or read_page with a query for the rest.)
+${text.slice(-200)}` : text;
 }
-
-/** What an old snapshot shrinks to once a newer one exists. */
-export const stubText = (obs) => `[Earlier snapshot of ${obs.url}: ${obs.elements.length} elements; superseded by a later one.]`;
+const stubText = (obs) => `[Earlier snapshot of ${obs.url}: ${obs.elements.length} elements; superseded by a later one.]`;
+export {
+  INSPECT_TOOLS,
+  buildSystem,
+  snapElement,
+  snapshotText,
+  stubText
+};
