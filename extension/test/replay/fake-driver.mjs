@@ -1,5 +1,5 @@
 // A scripted driver (no browser) for loop-level replay: the same shape agent-loop.test.mjs uses.
-import { Agent } from "../../src/agent/loop.js";
+import { Agent } from "../../src/page-control/loop.js";
 import { PAGE } from "../page-rules.mjs";
 
 export const TOP = { frameId: "top", isTop: true, parentId: null };

@@ -1,12 +1,17 @@
-import { candidateContext } from "../src/candidate-context.js";
+import { candidateContext } from "../src/shared/candidate-context.js";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import vm from 'node:vm';
-import { endpoint, canDraft, customAssist } from "../src/custom-ai.js";
-import { extensionPlanner } from "../src/custom-agent.js";
-import { externalBrowser } from "../src/external-browser.js";
-import { autoApplyUrl } from '../src/bridge.js';
+import { endpoint, canDraft, customAssist, providerSupport } from "../src/shared/custom-ai.js";
+// Changed 2026-11-18: background.js now builds the form agent (src/agent-based/form-agent.js) and the tool catalog; the harness strips imports, so they are supplied here.
+import { formAgent } from "../src/agent-based/form-agent.js";
+import { TOOL_CATALOG } from "../src/agent-based/tools.js";
+// Changed 2026-11-17: background.js now imports modelBody (src/shared/model-turn.js); the harness strips imports, so it is supplied here.
+import { modelBody } from "../src/shared/model-turn.js";
+import { completeTools } from "../src/shared/custom-ai.js";
+import { externalBrowser } from "../src/shared/external-browser.js";
+import { autoApplyUrl } from '../src/shared/bridge.js';
 import { webcrypto } from 'node:crypto';
 
 function harness({ autofillId = null, autoCode = null, claimed = false, blocked = false, revoked = false, accountRevoked = false, wrongState = false, wrongCallback = false, cancelExchange = false, configStatus = 200, invalidConfig = false, configNetworkError = false, signedOut = false, declined = false, noProfile = false, autopilotItem = null, reportFailures = 0, packagedOrigin = "http://localhost:3000", engine = "rules_led", customNegotiation = true, capabilityFailure = false, localPlanner = true } = {}) {
@@ -80,8 +85,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     commands: { onCommand: { addListener() {} } }, scripting: {},
     action: { setBadgeText: async (value) => { calls.push({ badge: value }); }, setBadgeBackgroundColor: async (value) => { calls.push({ badgeColor: value }); } },
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, extensionPlanner, candidateContext } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { endpoint, canDraft, extensionPlanner, candidateContext, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, formAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -90,19 +95,18 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
       return { ok: configStatus === 200, status: configStatus, json: async () => invalidConfig ? {} : ({ enabled: true }) };
     }
     if (url.endsWith('/browser/exchange')) {
-      if (cancelExchange) await new Promise((resolve) => listener({ type: 'pairingCancel' }, { id: runtime.id, url: runtime.getURL('src/options.html') }, resolve));
+      if (cancelExchange) await new Promise((resolve) => listener({ type: 'pairingCancel' }, { id: runtime.id, url: runtime.getURL('src/ui/options.html') }, resolve));
       return { ok: true, json: async () => ({ key: 'fixture-automatic-key' }) };
     }
     if (url.endsWith('/website-ticket')) return { ok: true, json: async () => ({ ticket: 'fixture-short-lived-ticket' }) };
     return { ok: true, json: async () => url.endsWith('/start') ? { secret: 'fixture-poll-secret', code: 'ABCDEF1234', expires_in: 600 } : { state: 'connected', key: 'fixture-new-bearer' } };
   } });
-  const ui = { id: runtime.id, url: runtime.getURL('src/options.html') };
-  const sidepanel = { id: runtime.id, url: runtime.getURL('src/sidepanel.html') };
+  const ui = { id: runtime.id, url: runtime.getURL('src/ui/options.html') };
   const content = { id: runtime.id, url: 'https://example.com/apply', tab: { id: 10, url: 'https://example.com/apply' } };
   const website = { id: runtime.id, url: `${packagedOrigin}/dashboard`, tab: { id: 11, url: `${packagedOrigin}/dashboard` } };
   const send = (msg, sender = ui) => new Promise((resolve) => listener(msg, sender, resolve));
   const alarm = () => alarmListener({ name: 'autopilot' });
-  return { local, session, calls, access, send, ui, sidepanel, content, website, alarm, timers, agentInstances };
+  return { local, session, calls, access, send, ui, content, website, alarm, timers, agentInstances };
 }
 
 test('agent handoff carries Auto apply once to the same tab, never through status replay', async () => {
@@ -687,6 +691,28 @@ test('custom provider sends draft context directly without a platform question l
   assert.equal(h.local.customAI, undefined);
 });
 
+test('saveCustomAI persists supportsTools and supportsVision settings and defaults appropriately', async () => {
+  const h = harness();
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret', supportsTools: true, supportsVision: true });
+  let settings = await h.send({ type: 'customAISettings' });
+  assert.equal(settings.data.supportsTools, true);
+  assert.equal(settings.data.supportsVision, true);
+  assert.equal(h.local.customAI.supportsTools, true);
+  assert.equal(h.local.customAI.supportsVision, true);
+
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret', supportsTools: false, supportsVision: false });
+  settings = await h.send({ type: 'customAISettings' });
+  assert.equal(settings.data.supportsTools, false);
+  assert.equal(settings.data.supportsVision, false);
+
+  // Migration: existing customAI in storage without supportsTools defaults to true
+  h.local.customAI = { baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret', enabled: true };
+  settings = await h.send({ type: 'customAISettings' });
+  assert.equal(settings.data.supportsTools, true);
+  assert.equal(settings.data.supportsVision, false);
+  assert.equal(h.local.customAI.supportsTools, true);
+});
+
 test('local sample forms stay untracked and remain available for filling', async () => {
   const h = harness();
   const localPage = { ...h.content, url: 'http://127.0.0.1:18972/', tab: { id: 10, url: 'http://127.0.0.1:18972/' } };
@@ -711,7 +737,7 @@ test('custom assistant chat goes directly to the selected provider without platf
   assert.equal(h.calls.some((c) => c.assist), false);
 });
 
-test('custom AI-led planning uses the selected engine and never calls the platform agent', async () => {
+test('custom Agent based form assistant planning uses the selected engine and never calls the platform agent', async () => {
   const h = harness({ engine: "ai_led" });
   await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture', apiKey: 'fixture' });
   const context = await h.send({ type: 'context', appId: null }, h.content);
@@ -753,7 +779,7 @@ test('disabling custom AI stops active custom agent', async () => {
   assert.equal(h.calls.some((call) => call.customRequest), false);
 });
 
-test('extension engine defaults to AI-led independently of the platform account setting', async () => {
+test('extension engine defaults to Agent based form assistant independently of the platform account setting', async () => {
   const h = harness({ engine: 'ai_led' });
   delete h.local.extensionEngine;
   assert.equal((await h.send({ type: 'connectionSettings' })).data.extensionEngine, 'ai_led');
@@ -797,9 +823,9 @@ test('platform AI fails closed against a backend without the model gateway', asy
   assert.equal(h.agentInstances.length, 0);
 });
 
-test('sidepanel is recognised as a privileged extension UI page', async () => {
+test('the settings page is recognised as a privileged extension UI page', async () => {
   const h = harness();
-  const res = await h.send({ type: 'connectionSettings' }, h.sidepanel);
+  const res = await h.send({ type: 'connectionSettings' }, h.ui);
   assert.equal(res.ok, true);
   assert.equal(res.data.configured, true);
 });

@@ -1,4 +1,4 @@
-// Tier 0: free replay of the AI-led planner against simulated forms with a fake model (see apply-assistant/docs/development/form-agent-testing/single-agent-test-guide.md).
+// Tier 0: free replay of the Agent based form assistant planner against simulated forms with a fake model (see apply-assistant/docs/development/form-agent-testing/single-agent-test-guide.md).
 // Every fixture asserts the safety counters are zero and nothing was asked twice, plus whatever its `expect` says.
 import assert from "node:assert/strict";
 import { test } from "node:test";

@@ -1,7 +1,7 @@
 // Tier 0 page simulator: an in-memory form that answers the planner like the guarded command layer would.
 // It holds element snapshots (the shape `observeTab` produces), applies accepted actions to them and
 // records every safety-relevant event (submit attempts, CAPTCHA touches, overwrites). No browser, no AI.
-import { scanFields, isChoiceOption, choiceGroup } from "../../src/agent/commands.js";
+import { scanFields, isChoiceOption, choiceGroup } from "../../src/page-control/commands.js";
 
 const SIM_KEYS = ["if", "goto", "captcha", "submit"];
 const clone = (value) => structuredClone(value);

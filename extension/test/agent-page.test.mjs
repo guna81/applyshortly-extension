@@ -1,4 +1,4 @@
-// Tests for src/agent/page.js (the agent's in-frame half) in jsdom.
+// Tests for src/page-control/page.js (the agent's in-frame half) in jsdom.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
@@ -6,8 +6,8 @@ import { test } from "node:test";
 import { ashbyYesNo } from "./ashby-fixture.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
-const PAGE_SRC = readFileSync(new URL("../src/agent/page.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/fill.js", import.meta.url), "utf8");
+const PAGE_SRC = readFileSync(new URL("../src/page-control/page.js", import.meta.url), "utf8");
 
 function page(html, url = "https://careers.example.com/apply") {
   const dom = new JSDOM(`<!doctype html><title>Apply</title><body>${html}</body>`, { url, runScripts: "outside-only" });
@@ -67,6 +67,15 @@ test("AX fallback preserves native input types for excluded search and password 
     assert.equal(result.role, "textbox");
     assert.equal(result.input_type, input.type);
   }
+});
+
+test("AX fallback shows a search-style combobox's pick and gives no checked state to a non-checkable control", () => {
+  const { doc, A } = page('<div class="select"><label for="loc">Location</label><div class="select__control"><div class="select__single-value">Austin, Texas</div><input id="loc" role="combobox" aria-haspopup="listbox" value=""></div></div>');
+  const input = doc.querySelector("#loc");
+  input.getClientRects = () => [{ width: 100, height: 20 }];
+  const result = A.describeAccessible(input, "combobox", "Location", []);
+  assert.equal(result.value, "Austin, Texas");
+  assert.equal("checked" in result, false);
 });
 
 test("observe: fields, radio options, buttons and the site's errors", () => {
@@ -223,6 +232,24 @@ test("actions: options of an open dropdown are matched to the answer", () => {
   const none = plain(A.matchOption(combo.ref, "Tokyo", false));
   assert.equal(none.ok, false);
   assert.deepEqual(none.options, ["Bengaluru, Karnataka, India", "Bengkulu, Indonesia"]);
+});
+
+test("activateOption clicks the option element itself, and refuses an option that is a link or a submit control", () => {
+  const { A, observe, doc } = page(`
+    <label id="l">How did you hear</label>
+    <input role="combobox" aria-labelledby="l" aria-controls="lb">
+    <ul id="lb" role="listbox"><li role="option" id="o1">Indeed</li><li role="option" id="o2">Other</li><li role="option" id="o3"><a href="/elsewhere">Careers page</a></li></ul>
+    <button type="submit" role="option" id="o4">Submit application</button>`);
+  const combo = observe().elements.find((e) => e.role === "textbox" || e.role === "combobox");
+  const picked = [];
+  for (const id of ["o1", "o2"]) doc.getElementById(id).addEventListener("click", () => picked.push(id));
+  const option = plain(A.matchOption(combo.ref, "Other", false));
+  assert.equal(option.ok, true);
+  assert.equal(plain(A.activateOption(option.ref)).ok, true);
+  assert.deepEqual(picked, ["o2"]); // only that option got the click, and in the order a pointer sends it
+  const submit = observe().elements.find((e) => e.name === "Submit application");
+  if (submit) assert.equal(plain(A.activateOption(submit.ref)).ok, false);
+  assert.equal(plain(A.activateOption("nope")).ok, false);
 });
 
 test("matchOption finds an option past the first hundred of a long list (Greenhouse's country picker)", () => {
@@ -657,4 +684,33 @@ test('a multi-value combobox reports selected chips, not its empty search input'
   const source = byName(observe({ extended: true }), 'Source');
   assert.equal(source.value, 'Professional network');
   assert.equal(A.committedValue(source.ref, true), 'Professional network');
+});
+
+
+test("agent execution lets clicks through its panel and restores its original pointer events", () => {
+  const { A, doc, win } = page('<jobhunt-autofill-panel style="display:block!important"></jobhunt-autofill-panel>');
+  const panel = doc.querySelector("jobhunt-autofill-panel");
+  panel.attachShadow({ mode: "open" }).innerHTML = '<button style="pointer-events:auto">Chat</button>';
+  A.executionState(true);
+  assert.equal(panel.style.getPropertyValue("pointer-events"), "none");
+  assert.equal(panel.style.getPropertyValue("display"), "block");
+  assert.equal(panel.hasAttribute("data-applyshortly-executing"), true);
+  A.executionState(true);
+  A.executionState(false);
+  assert.equal(panel.style.getPropertyValue("pointer-events"), "");
+  assert.equal(panel.style.getPropertyValue("display"), "block");
+  assert.equal(panel.hasAttribute("data-applyshortly-executing"), false);
+  win.close();
+});
+
+
+test("a required custom radio group inherits the requirement of its options without AX duplicates", () => {
+  const { A, doc, observe, win } = page('<span id="question">Have you built an API?</span><fieldset role="radiogroup" aria-labelledby="question"><div role="radio" aria-checked="false" aria-required="true"><label><input type="radio" name="q" required>Yes</label></div><div role="radio" aria-checked="false" aria-required="true"><label><input type="radio" name="q" required>No</label></div></fieldset>');
+  const radios = observe().elements.filter((e) => e.role === "radio");
+  assert.ok(radios.length >= 2);
+  assert.ok(radios.every((e) => e.required));
+  const wrapper = doc.querySelector('[role="radio"]');
+  wrapper.getClientRects = () => [{ width: 100, height: 20 }];
+  assert.equal(A.describeAccessible(wrapper, "radio", "Yes", radios.map((r) => r.ref)), null);
+  win.close();
 });

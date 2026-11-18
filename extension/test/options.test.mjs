@@ -1,11 +1,11 @@
-import { PROVIDER_PRESETS } from "../src/custom-ai.js";
+import { PROVIDER_PRESETS, providerSupport } from "../src/shared/custom-ai.js";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
 async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false } = {}) {
-  const dom = new JSDOM(readFileSync(new URL('../src/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
+  const dom = new JSDOM(readFileSync(new URL('../src/ui/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
   const calls = [];
   let connected = signedIn;
   let storageListener;
@@ -24,7 +24,7 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
           case 'connectionSettings': data = { configured: connected }; break;
           case 'test': data = connected ? { connected, configured: true, connectionType: 'automatic', name: 'Fixture', email: 'fixture@example.com', plan: 'pro', credits: 42, billingEnabled, ai } : { configured: false }; break;
           case 'browserSignIn': connected = autoConnect || message.interactive; data = { state: connected ? 'connected' : 'signin_required' }; break;
-          case 'saveCustomAI': custom = { enabled: true, baseUrl: message.baseUrl, model: message.model }; data = true; break;
+          case 'saveCustomAI': custom = { enabled: true, baseUrl: message.baseUrl, model: message.model, supportsTools: message.supportsTools, supportsVision: message.supportsVision }; data = true; break;
           case 'selectAI': ai = { ...ai, mode: message.mode, provider: message.provider ?? null }; data = ai; break;
           case 'customAISettings': data = custom; break;
           case 'disableCustomAI': custom = { ...custom, enabled: false }; data = true; break;
@@ -39,8 +39,9 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
     storage: { session: { get: async () => ({}) }, local: { set: async (values) => Object.assign(stored, values) }, onChanged: { addListener: (fn) => { storageListener = fn; } } },
   };
   window.PROVIDER_PRESETS = PROVIDER_PRESETS;
+  window.providerSupport = providerSupport;
   window.chrome.permissions = { request: async () => true };
-  window.eval(readFileSync(new URL('../src/options.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, ''));
+  window.eval(readFileSync(new URL('../src/ui/options.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, ''));
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
   await flush();
   return { window, document: window.document, calls, stored, flush, setConnected: (value) => { connected = value; }, storageChanged: (changes) => storageListener(changes, 'local'), close: () => window.close() };
@@ -51,7 +52,7 @@ test('active custom endpoint is selected until the user switches to credits', as
   try {
     const funding = h.document.querySelector('#aiFunding');
     assert.equal(funding.value, 'custom');
-    assert.match(funding.selectedOptions[0].textContent, /fixture-model/);
+    assert.match(funding.selectedOptions[0].textContent, /Custom AI provider/);
     funding.value = 'platform';
     funding.dispatchEvent(new h.window.Event('change'));
     await h.flush();
@@ -100,10 +101,32 @@ test('provider preset saves only on device with a default model and clears the k
     const saved = h.calls.find((item) => item.type === 'saveCustomAI');
     assert.equal(saved.baseUrl, PROVIDER_PRESETS.anthropic.baseUrl);
     assert.equal(saved.model, PROVIDER_PRESETS.anthropic.model);
+    assert.equal(saved.supportsTools, true);
+    assert.equal(saved.supportsVision, true);
     assert.equal(h.document.querySelector('#customKey').value, '');
     assert.equal(h.calls.some((item) => item.type === 'saveAIProvider'), false);
     assert.equal(h.document.querySelector('#providerForm'), null);
     assert.equal(h.document.querySelector('#aiFunding').value, 'custom');
+  } finally { h.close(); }
+});
+
+test('custom preset enables tools and disables vision by default and can be saved', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const preset = h.document.querySelector('#providerPreset');
+    preset.value = 'custom';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(h.document.querySelector('#customSupportsTools').checked, true);
+    assert.equal(h.document.querySelector('#customSupportsVision').checked, false);
+    h.document.querySelector('#customBaseUrl').value = 'http://localhost:11434/v1';
+    h.document.querySelector('#customModel').value = 'llama3';
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    await h.flush();
+    const saved = h.calls.find((item) => item.type === 'saveCustomAI');
+    assert.equal(saved.baseUrl, 'http://localhost:11434/v1');
+    assert.equal(saved.model, 'llama3');
+    assert.equal(saved.supportsTools, true);
+    assert.equal(saved.supportsVision, false);
   } finally { h.close(); }
 });
 
@@ -158,7 +181,7 @@ test('a connection made in the background shows without reloading', async () => 
   } finally { h.close(); }
 });
 
-test('extension has its own engine selector, defaulting to AI-led', async () => {
+test('extension has its own engine selector, defaulting to Agent based form assistant', async () => {
   const h = await setup();
   try {
     const select = h.document.querySelector('#extensionEngine');

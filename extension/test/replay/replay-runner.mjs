@@ -1,9 +1,10 @@
-// Tier 0 runner: the AI-led agent (the real extensionPlanner) against a PageSim, with a fake model and scripted user replies.
+// Tier 0 runner: the Agent based form assistant agent (the real formAgent, Changed 2026-11-18: it replaced extensionPlanner) against a PageSim, with a fake model and scripted user replies.
 // It reports the same metrics the live scorecard does, so a fixture can assert on them. Free: no network, no browser, no AI.
 import { readFileSync } from "node:fs";
-import { extensionPlanner } from "../../src/extension-agent.js";
-import { scanFields } from "../../src/agent/commands.js";
-import { profileFact, factMatches } from "../../src/profile-facts.js";
+import "../../src/rule-based/profile-answer.js"; // sets globalThis.JobHuntProfile, which the scoring and the fake model read
+import { formAgent } from "../../src/agent-based/form-agent.js";
+import { scanFields } from "../../src/page-control/commands.js";
+import { profileFact, factMatches } from "../../src/shared/profile-facts.js";
 import { fakeModel } from "./fake-model.mjs";
 import { PageSim } from "./page-sim.mjs";
 
@@ -20,13 +21,14 @@ const asked = (text) => norm(String(text).replace(/^please (?:answer|correct):\s
  * @param {any} fixture  {pages, url?, events?, profile?, job?, saved_answers?, model?, replies?: [[regex, answer]], max_turns?}
  * @param {{model?: any}} [options]
  */
-export async function runReplay(fixture, { model = fakeModel(fixture.model ?? {}) } = {}) {
+export async function runReplay(fixture, options = {}) {
   const profile = personWith(fixture.profile ?? {});
   const job = { title: "Backend Engineer", company_name: "Example Test Co", location: "Austin, Texas, United States", ...(fixture.job ?? {}) };
+  const model = options.model ?? fakeModel(fixture.model ?? {}, { profile, job });
   const saved = fixture.saved_answers ?? {};
   const sim = new PageSim({ url: fixture.url, pages: fixture.pages, events: fixture.events });
   const lookup = async (question) => (saved[question] ? { answer: saved[question] } : null);
-  const plan = extensionPlanner({}, profile, job, model, lookup, true);
+  const plan = formAgent({}, profile, job, model, lookup, true, undefined, { vision: false });
   const replies = (fixture.replies ?? []).map(([pattern, answer]) => [new RegExp(pattern, "i"), answer]);
   const log = { questions: [], statuses: [], answers: [], rejected: 0, errors: [] };
   let outcome = "timeout";

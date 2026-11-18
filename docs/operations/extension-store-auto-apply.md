@@ -21,7 +21,7 @@ Features
 - See fields that are filled, need input or need review.
 - Request optional AI drafts and use the on-page assistant.
 - Track supported applications in your ApplyShortly account.
-- Turn on the Auto apply switch (bottom of the side panel; or use the panel footer button) to click the employer website’s Submit button after a three-second countdown with Cancel. Closing or minimising the panel cancels it.
+- Turn on the Auto apply switch (under the chat in the panel; or use the panel's Submit button) to click the employer website’s Submit button after a three-second countdown with Cancel. Closing or minimising the panel cancels it.
 
 Auto apply checks detected required fields, browser-reported invalid fields, a single identifiable Submit button and tracked application status. It refuses when a tracked application was already sent or needs verification. Form support varies by website; custom controls, uploads, consent steps and embedded forms can need manual input. Checks do not guarantee correct answers or employer acceptance. Review AI drafts first: Auto apply can submit them as filled without separate approval of each draft. An attempted submission is not confirmed success.
 
@@ -47,7 +47,7 @@ Help users complete job application forms from their ApplyShortly profile and sa
 
 Scripting: Injects packaged scripts into the selected application tab to discover fields, insert answers and show the review panel. Auto apply clicks the page’s Submit button only after the user explicitly chooses it and the countdown completes.
 
-activeTab: Lets the toolbar action or shortcut operate on the user-selected application page, including injecting packaged scripts when needed. The side panel offers autofill and an explicit Auto apply action.
+activeTab: Lets the toolbar action or shortcut operate on the user-selected application page, including injecting packaged scripts when needed. The on-page panel offers autofill and an explicit Auto apply action.
 
 Host permissions: The configured ApplyShortly origin supports authentication, profile retrieval, optional AI drafts and tracked application events. Employer pages use many domains; packaged content scripts discover/fill fields and display the panel, and explicitly requested Auto apply clicks Submit after checks and a cancellable countdown. On ApplyShortly, scripts relay a signed-in indicator for linked sign-in; credentials do not pass through the page. Localhost/loopback and optional origins support self-hosted servers.
 
@@ -240,7 +240,7 @@ Reloading that page, or opening the same link again, only fills."
 
 The store text above is historical release copy, not the current implementation contract.
 Before publishing the unified-planner build, replace claims that personal keys are stored by
-ApplyShortly or that the current AI-led form agent sends screenshots. Custom/local keys stay
+ApplyShortly or that the current Agent based form assistant form agent sends screenshots. Custom/local keys stay
 on the device. Platform AI sends structured page/profile/job context and planner messages through
 the platform model gateway; custom/local AI sends those directly to its endpoint. Both share
 one extension planner and currently exclude images. Older installed builds and the server

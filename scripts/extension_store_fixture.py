@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             body, mime = PAGE.encode(), "text/html; charset=utf-8"
         elif self.path in ("/profile-answer.js", "/fill.js", "/panel-model.js", "/panel-view.js", "/content.js"):
-            body = (ROOT / "extension/src" / self.path[1:]).read_bytes()
+            body = (ROOT / "extension/src/rule-based" / self.path[1:]).read_bytes()
             mime = "text/javascript; charset=utf-8"
         else:
             self.send_error(404)

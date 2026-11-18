@@ -1,10 +1,10 @@
-// Tests for src/agent/loop.js with a scripted driver (no browser) and a scripted platform.
+// Tests for src/page-control/loop.js with a scripted driver (no browser) and a scripted platform.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BridgeError } from "../src/bridge.js";
+import { BridgeError } from "../src/shared/bridge.js";
 import { PAGE } from "./page-rules.mjs";
-import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/agent/loop.js";
-import { customPlanner } from "../src/custom-agent.js";
+import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/page-control/loop.js";
+import { formAgent } from "../src/agent-based/form-agent.js";
 
 test("recovery commands allow edits while questions and negations remain read-only", () => {
   for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year", "fetch data from here - https://guna81.netlify.app/", "Read https://github.com/guna81/applyshortly-extension and answer"]) {
@@ -363,6 +363,7 @@ test("Agent: a question about a search-style picker carries its choices, not a d
   const asked = updates.find((u) => u.status === "waiting" && u.question?.kind === "question");
   assert.deepEqual(asked.question.choices, ["Immediately", "Within 1 week", "Within 2 weeks"]);
   assert.equal(asked.question.role, "combobox");
+  assert.equal(asked.question.label, "When are you available to start?");
 });
 
 test("Agent: stop while waiting ends the run and detaches; closing the debug bar stops it too", async () => {
@@ -541,15 +542,14 @@ class GuardedDriver extends FakeDriver {
   }
 }
 
-test("custom planner drives a verified AI-led run without submitting", async () => {
+test("the form agent drives a verified Agent based form assistant run without submitting", async () => {
   let value = "";
   const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "textarea", name: "Describe a project", value, required: true }], { document_id: "doc" }) });
   driver.insertText = async (text) => { value = text; };
   driver.committed = "Built a system.";
   let calls = 0;
-  const step = customPlanner({}, {}, {}, async () => JSON.stringify(++calls <= 2
-    ? { status: "continue", message: "Filling project", action: { type: "type", ref: "0.1", text: "Built a system." } }
-    : { status: "ready_for_review", message: "Ready for review" }));
+  // Changed 2026-11-18: the model is the tool-calling form agent now (two writes, then done).
+  const step = formAgent({}, {}, {}, async () => ++calls <= 2 ? { text: JSON.stringify({ message: "", actions: [] }), tool_calls: [{ name: "type_text", arguments: { ref: "0.1", text: "Built a system." } }] } : { text: JSON.stringify({ message: "Ready for review", actions: [] }), tool_calls: [{ name: "done", arguments: { summary: "Ready for review" } }] }, undefined, true, undefined, { vision: false });
   let ready;
   let agent;
   let draftRequested = false;
@@ -675,6 +675,43 @@ test("a stall after failed fills asks the user instead of pausing", async () => 
   assert.equal(seen.includes("waiting"), true);
   // The card names the field ("Describe a project"), not the verb the action's label starts with.
   assert.match(agent.log.join("\n"), /couldn't fill: Describe a project\./i);
+});
+
+test("a stall after failed fills takes one more look, with a fresh screenshot, before asking the user", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Describe a project" }], { document_id: "doc" }) });
+  const bodies = [];
+  let asked = 0;
+  const agent = new Agent({
+    tabId: 4, driver, files: async () => null,
+    notify: async (update) => { if (update.status === "waiting") { asked += 1; agent.stop(); } },
+    report: async () => {},
+    step: async (body) => {
+      bodies.push(body);
+      return { guarded_commands: true, session_id: "s", status: "continue", actions: [{ type: "bogus", label: "Filled Describe a project", command_id: "c" + bodies.length, observation_id: "stale" }] };
+    },
+  });
+  await agent.run();
+  const retries = bodies.filter((b) => b.stuck_retry);
+  assert.equal(retries.length >= 1, true);
+  assert.deepEqual(retries[0].stuck_retry.fields, ["Describe a project"]);
+  assert.equal(bodies.findIndex((b) => b.stuck_retry) > 0, true); // after the first attempts, not before
+  assert.equal(asked, 1); // the user is asked once, after the retry also failed
+  assert.deepEqual(agent.recoveries.map((r) => r.kind), ['stuck_retry']);
+});
+
+test("the hand-off for a field the agent could not fill says what was tried and why it failed", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "Describe a project" }], { document_id: "doc" }) });
+  let calls = 0;
+  const agent = new Agent({
+    tabId: 4, driver, files: async () => null,
+    notify: async (update) => { if (update.status === "waiting") agent.stop(); },
+    report: async () => {},
+    step: async () => { calls += 1; return { guarded_commands: true, session_id: "s", status: "continue", actions: [{ type: "bogus", text: "Other", label: "Filled Describe a project", command_id: "c" + calls, observation_id: "stale" }] }; },
+  });
+  await agent.run();
+  const handoff = agent.log.find((line) => /^I couldn't fill: Describe a project\./.test(line) && /Fill it yourself/.test(line));
+  assert.ok(handoff, agent.log.join("\n"));
+  assert.match(handoff, /Tried "Other": .+\. Fill it yourself/);
 });
 
 test("ProgressGuard keeps the labels of the latest failed actions", () => {
@@ -975,7 +1012,6 @@ test("Agent: an embedded CAPTCHA does not interrupt accessible application field
   assert.equal(calls, 1);
   assert.equal(updates.some((u) => u.status === "waiting"), false);
   assert.equal(agent.status, "ready");
-  assert.match(agent.log.at(-1), /complete any CAPTCHA/);
   assert.equal(updates.find((u) => u.status === "ready").captchaPending, true);
 });
 
@@ -1010,6 +1046,7 @@ test("an exhausted network retry pauses then preserves the request when resumed"
   assert.equal((await agent.planningStep(body)).session_id, "s");
   assert.ok(seen.every(request => request === body));
   assert.equal(agent.controlRevision, 1, "the old plan is invalidated by the pause");
+  assert.match(agent.log.join(" "), /AI provider is temporarily unavailable/);
 });
 
 test("expired sessions require Resume and restart from a fresh observation without pending permissions", async () => {
@@ -1056,7 +1093,7 @@ test("a slow planning call is reported while it runs, so the chat is not silent"
   const agent = new Agent({ driver: {}, step: async () => { await new Promise((resolve) => setTimeout(resolve, 90)); return { ok: true }; }, notify() {}, report() {} });
   agent.silenceMs = 25;
   assert.deepEqual(await agent.planningStep({ request_id: "slow" }), { ok: true });
-  assert.ok(agent.log.some((line) => /Still waiting for the planning service \(\d+s\)/.test(line)), agent.log.join("|"));
+  assert.ok(agent.log.some((line) => /Still waiting for the AI provider \(\d+s\)/.test(line)), agent.log.join("|"));
   const quick = new Agent({ driver: {}, step: async () => ({ ok: true }), notify() {}, report() {} });
   quick.silenceMs = 25;
   await quick.planningStep({ request_id: "fast" });
@@ -1091,7 +1128,7 @@ test("the controller refuses an incompatible server before executing any command
   assert.equal(driver.calls.some(([name]) => name === "insertText" || name === "click"), false);
 });
 
-test('ready chat lists actual remaining fields with its submit-yourself handoff', async () => {
+test('ready hand-off adds no line from the loop', async () => {
   const driver = new FakeDriver({ top: () => frameObs([
     { ref: '1', role: 'textbox', name: 'Work authorization', required: true, value: '' },
     { ref: '2', role: 'checkbox', name: 'Optional contact consent', required: false, checked: false },
@@ -1103,8 +1140,8 @@ test('ready chat lists actual remaining fields with its submit-yourself handoff'
   });
   await agent.run();
   const ready = updates.find((u) => u.status === 'ready');
-  assert.match(ready.log.join('\n'), /Everything I could fill is done/);
-  assert.match(ready.log.join('\n'), /Remaining fields for you:[\s\S]*Work authorization[\s\S]*Optional contact consent/);
+  assert.doesNotMatch(ready.log.join('\n'), /Everything I could fill is done|Continuing|Started\. Watching/);
+  assert.equal(ready.log.join("\n"), ""); // the loop writes no line of its own at the hand-off; the agent's message is shown by the panel
   assert.equal(driver.calls.some(([name]) => name === 'submit'), false);
 });
 
@@ -1141,9 +1178,35 @@ test('a dropdown option is not clicked when its point hits a different control',
   const baseCall = driver.call.bind(driver);
   driver.call = async (frame, name, ...args) => name === 'matchOption'
     ? { ok: true, ref: 'option', text: 'Bengaluru' }
+    : name === 'activateOption' ? { ok: false, detail: 'not an option the page script accepts' }
     : name === 'hitTest' ? args[2] !== 'option' : baseCall(frame, name, ...args);
   const refs = new Map([['field', { frame: TOP, local: '1', role: 'combobox' }]]);
   await assert.rejects(execute(driver, refs, [TOP], { type: 'select', ref: 'field', text: 'Bengaluru', command_id: 'c' }, async () => null), /obscured|changed/);
+});
+
+test('an option whose point hits another control is activated on the option itself, and only when the page script accepts it', async () => {
+  const make = (activation) => {
+    const driver = new FakeDriver({ top: () => frameObs([]) });
+    const baseCall = driver.call.bind(driver);
+    driver.call = async (frame, name, ...args) => {
+      if (name === 'matchOption') return { ok: true, ref: 'option', text: 'Other' };
+      if (name === 'hitTest') return args[2] !== 'option';
+      if (name === 'activateOption') { driver.calls.push(['activateOption', args[0]]); return activation; }
+      if (name === 'committedValue') return 'Other';
+      if (name === 'showsChoice') return true;
+      return baseCall(frame, name, ...args);
+    };
+    return driver;
+  };
+  const refs = new Map([['field', { frame: TOP, local: '1', role: 'combobox' }]]);
+  const action = { type: 'select', ref: 'field', text: 'Other', command_id: 'c' };
+  const driver = make({ ok: true });
+  const result = await execute(driver, refs, [TOP], action, async () => null);
+  assert.equal(result.verified, true);
+  assert.deepEqual(driver.calls.filter(([name]) => name === 'activateOption'), [['activateOption', 'option']]);
+  assert.equal(result.via, 'activateOption');
+  // The page script refuses (not an option, a submit control, gone): the original refusal stands.
+  await assert.rejects(execute(make({ ok: false, detail: 'refused' }), refs, [TOP], action, async () => null), /obscured|changed/);
 });
 
 test('phone verification rejects the right national digits under the wrong international prefix', async () => {
@@ -1160,4 +1223,33 @@ test("console and network notes ride on an extended observation, never on a plai
   driver.diagnostics = () => ({ console: [{ level: "error", text: "x" }], network: [] });
   assert.equal((await observeTab(driver)).observation.diagnostics, undefined);
   assert.deepEqual((await observeTab(driver, { extended: true })).observation.diagnostics.console[0].text, "x");
+});
+
+test("a page step that never returns fails with a message instead of stalling the run", async () => {
+  const { withDeadline } = await import("../src/page-control/loop.js");
+  assert.equal(await withDeadline(Promise.resolve("fine"), 50, "observing the page"), "fine");
+  await assert.rejects(() => withDeadline(new Promise(() => {}), 30, "observing the page"), /Timed out after 0\.03 s observing the page|Timed out.*observing the page/);
+});
+
+test("run_js runs through the driver, its value comes back as the action's result, and an error fails it", async () => {
+  const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "button", name: "Next" }], { document_id: "doc" }) });
+  const scripts = [];
+  driver.evaluate = async (code) => { scripts.push(code); return code.includes("bad") ? { error: "ReferenceError: bad is not defined" } : { value: "42" }; };
+  const bodies = [];
+  await new Agent({ tabId: 1, appId: null, driver, files: {}, notify: () => {}, report: async () => {}, agentAvailable: true,
+    step: async (req) => {
+      bodies.push(structuredClone(req));
+      const id = req.observation.observation_id;
+      return bodies.length === 1
+        ? { guarded_commands: true, session_id: "s", status: "continue", actions: [
+          { type: "run_js", code: "document.title.length", command_id: "j1", observation_id: id },
+          { type: "run_js", code: "bad()", command_id: "j2", observation_id: id }] }
+        : { guarded_commands: true, session_id: "s", status: "failed", actions: [] };
+    } }).run();
+  assert.deepEqual(scripts, ["document.title.length", "bad()"]);
+  assert.equal(bodies[1].results[0].ok, true);
+  assert.equal(bodies[1].results[0].result.value, "42");
+  assert.equal(bodies[1].results[1].ok, false);
+  assert.match(bodies[1].results[1].detail, /bad is not defined/);
+  assert.equal(driver.calls.some(([name]) => ["click", "submit"].includes(name)), false);
 });

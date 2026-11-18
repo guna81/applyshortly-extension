@@ -6,6 +6,12 @@ const CONTACT_KNOWLEDGE = [];
 
 export default [
   {
+    name: "a closed posting (404 page, no form) ends the run as posting_gone, never as a review hand-off",
+    pages: [{ text: "Sorry, we couldn't find anything here. The job posting you're looking for might have closed, or it has been removed. (404 error).", elements: [] }],
+    model: { gone: "might have closed|404" },
+    expect: { outcome: "failed", questions_max: 0 },
+  },
+  {
     name: "profile fields fill without a single question, then the form is handed over",
     pages: [{ elements: [...contact(), file("cv", "Resume")] }],
     profile: { resume_url: "/api/extension/resume" },

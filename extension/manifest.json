@@ -5,21 +5,20 @@
   "description": "Fills multi-step job applications from your ApplyShortly profile and answers. Submits only when you choose Auto apply.",
   "minimum_chrome_version": "125",
   "background": { "service_worker": "src/background.js", "type": "module" },
-  "permissions": ["storage", "scripting", "activeTab", "identity", "debugger", "alarms", "sidePanel"],
+  "permissions": ["storage", "scripting", "activeTab", "identity", "debugger", "alarms"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
-  "side_panel": { "default_path": "src/sidepanel.html" },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/profile-answer.js", "src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"],
+      "js": ["src/rule-based/profile-answer.js", "src/rule-based/fill.js", "src/rule-based/panel-model.js", "src/rule-based/panel-view.js", "src/rule-based/content.js"],
       "run_at": "document_idle"
     }
   ],
-  "action": { "default_title": "Apply Shortly Form Agent", "default_icon": "icons/icon-48.png" },
+  "action": { "default_popup": "src/ui/popup.html", "default_title": "Apply Shortly Form Agent", "default_icon": "icons/icon-48.png" },
   "commands": {
     "autofill": { "suggested_key": { "default": "Alt+Shift+F" }, "description": "Autofill this page" }
   },
-  "options_ui": { "page": "src/options.html", "open_in_tab": true },
+  "options_ui": { "page": "src/ui/options.html", "open_in_tab": true },
   "icons": { "16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" }
 }

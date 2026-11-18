@@ -1,5 +1,10 @@
 # Contributor guide for coding agents
 
+> **Names (2026-11-18).** The extension now calls its two engines the **Rule based form assistant** (rules, saved answers, AI only for leftovers; `src/rule-based/`) and the
+> **Agent based form assistant** (one ReAct agent; `src/agent-based/`; both engines run on `src/page-control/`). Their old names, "Rules-led" and "AI-led", are
+> **still used by the platform** (website settings, docs, the `agent_engine` / `extensionEngine` values `rules_led` and `ai_led`). Those values are kept on purpose so the
+> extension and the platform stay in sync. **The platform will be renamed soon**; until then read "AI-led" there as the agent based form assistant.
+
 Check `git status --short` before editing and preserve existing work. Read the implementation and nearby tests before changing behavior.
 
 ## Working with the platform
@@ -28,11 +33,11 @@ Preserve user-chosen submission (the user clicks the site's Submit, or explicitl
 
 Autopilot windows (`src/background.js`, `autopilot*`) open only a link the platform returned from `/autopilot/next`, with its one-time code, only with the user's setting on, one at a time and never for a job board (the platform doesn't offer them; the extension also never opens a non-http(s) link). They are unattended, so they never start the form agent or AI drafting, never send an answer marked for checking, stop on a sign-in page, and close only the tab they opened, after the submit attempt. Keep it that way.
 
-The AI-led controller (`src/agent/loop.js`, `src/agent/cdp.js`) requires the platform to acknowledge guarded commands. It pauses locally on repeated page states or after forty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
+The Agent based form assistant controller (`src/page-control/loop.js`, `src/page-control/cdp.js`) requires the platform to acknowledge guarded commands. It pauses locally on repeated page states or after forty planning calls, follows only an application tab opened by its own recent click, and never clicks a final Submit. Keep `extension-bridge/` in sync with the platform and describe scripted tests as unit coverage, not real-model validation.
 
-## Testing the AI-led engine on a live form
+## Testing the Agent based form assistant engine on a live form
 
-Unit tests (`npm test` on Node 22) do not show how the AI-led engine behaves on a real page. The platform
+Unit tests (`npm test` on Node 22) do not show how the Agent based form assistant engine behaves on a real page. The platform
 repo has a headless harness that runs the built `dist/extension` against a live form with no
 Chrome reload (`scripts/live_extension/run.sh`, see `apply-assistant/docs/development/live-extension-testing.md`).
 It spends AI credits, and it covers the agent loop and command layer only, not the panel chat:
@@ -50,38 +55,66 @@ Test in this order: Tier 0 replay (`npm test`), then Tier 1 synthetic pages (fre
 becomes a Tier 0 fixture that fails (`todo` until fixed). Rebuild with `python3 scripts/build_extension.py` before any live run (the
 testbed does it for you). Report numbers as measured on those forms, not as general accuracy.
 
-## One form agent, no versions (rule for every contributor and coding agent)
+## Two engines, one agent each, no versions (rule for every contributor and coding agent)
 
-There is ONE AI-led form agent. Do not add another planner, mode, flag, setting, "experimental" tier or numbered
-variant (rule-led, AI-led, classic, model-led, tool-led, v2 ...) to compare against it: each one multiplies code,
-tests, docs and scorecard columns and makes the agent harder to maintain. Improve the one agent, or fold the idea
-into it. To try an idea, change the agent on a branch of your working tree and measure it against the recorded
-results; if it does not win, discard it instead of keeping it as an option. The classic, model-led and tool-led modes
-that once existed were consolidated into the one agent (the former tool-led behaviour, no mode name, no setting); the other
-two were deleted. Their measured results are kept in `apply-assistant/docs/development/form-agent-testing/form-agent-planner-results.md`.
+The extension has exactly two form engines, in plain words:
+
+- **Rule based form assistant** (`src/rule-based/`): saved rules, keyword mappings and site adapters fill the form; AI only answers what is left. Cheap and fast.
+- **Agent based form assistant** (`src/agent-based/`): one ReAct agent (an LLM with a prompt, tools and its own message history that decides every step: reason, call a tool, read the result, repeat). Slower and costlier, adapts to any form. It runs the same way for the platform's AI and for every custom provider.
+
+Both sit on `src/page-control/` (observe the page, run guarded commands, drive the tab). Do not add another planner, mode, flag, setting,
+"experimental" tier or numbered variant (classic, model-led, tool-led, v2, "new" ...) to compare against the agent: each one multiplies code,
+tests, docs and scorecard columns. Improve the one agent, or fold the idea into it. To try an idea, change the agent on a branch of your
+working tree and measure it against the recorded results; if it does not win, discard it. The earlier classic, model-led and tool-led modes
+and the old one-JSON-reply planner (`extensionPlanner`, with its four model-skipping shortcuts) are deleted. Their measured results are kept in
+`apply-assistant/docs/development/form-agent-testing/form-agent-planner-results.md`.
 
 The test framework follows the same rule. It only loads jobs (or simulated pages), runs the agent, and records
 the steps, questions, model calls, tokens and outcome. It has no planner selection and no per-planner columns.
 Comparing two versions of the agent means running the framework on two checkouts or builds, one after the other,
 never a switch inside the agent. Live runs: one run per job.
 
-## The AI-led form agent
+## The Agent based form assistant
 
-`extensionPlanner` (`extension/src/extension-agent.js`) is the only planner of the AI-led engine; the engine (`agent/loop.js`),
-the command layer and the safety rules sit around it. Each turn the model returns up to eight actions with a `source` for each
-value (the candidate key, saved answer or user reply it comes from). It is shown the profile's grounded answers as
-`suggested_actions` (the code never fills a field on its own), fills optional fields the profile can answer and asks the user
-once about the rest (they may skip; required fields come first), and gets refused actions back as `rejected_last_turn`. It can
-look before it acts: a screenshot of the page (each turn the layout changed), native tool calls (JSON when the provider has none),
-looking tools answered inside the same step (`find`, `read_page`, `get_page_text`, `screenshot`, read-only `read_console` /
-`read_network`), `click_at`, `drag`, `wait_for`, and a transcript of its own recent actions (`agent/tools.js`).
+`formAgent` (`src/agent-based/form-agent.js`) is a real ReAct agent on LangGraph JS (bundled at build time by `scripts/bundle_langgraph.mjs`;
+`src/agent-based/langgraph.js` is the one-line entry). The model gets a stable system message (rules, the candidate's profile, the job) and,
+each step, one message with the page (URL, dialog, blockers, tabs, numbered elements, page text) and the results of its last tool calls.
+Only the latest page snapshot stays in full; older ones shrink to a one-line stub, and history is kept under 80 messages. The model calls tools:
+read tools are answered inside the same step (`find`, `read_page`, `get_page_text`, `screenshot`, `read_console`, `read_network`, `options`, `web_fetch`);
+action tools (`type_text`, `select_option`, `press_key`, `fill_form`, `check`, `upload`, `click`, `click_at`, `drag`, `wait_for`, `run_js`, `ask_user`, `done`)
+end the graph run as a plan for the loop. The browser cannot pause a graph (`interrupt()` does not work there), so a run ends at an action or a question and the next
+step resumes with the tool results. The state is saved to `chrome.storage.session` (`agentState:<tabId>`) after every step. The agent's files: `form-agent.js`
+(graph and step), `agent-guards.js` (hard limits), `agent-prompt.js`, `tools.js` (catalog, `findElements`, `clickAtRef`). There are no model-skipping shortcuts:
+the model decides every step.
 
-`vetAction` (inside `extensionPlanner`) is the veto layer for every action: no submit, no CAPTCHA, consent and legal facts
-(visa, sponsorship, criminal record, previous employment) only from the profile or the user's chat answer, no overwrite, no
-passwords, key and origin limits. No tool runs JavaScript or submits; a screenshot point is resolved to the one control under it
-and then vetted as a click. The one setting is the user's privacy switch "Send page screenshots to the AI" (`agentVision`, on by
-default): the image goes only to the provider that already gets the page text, is never stored by ApplyShortly, and custom
-providers get it only when the host is known to take images or `supportsVision` is set. Details: `apply-assistant/docs/development/form-agent-testing/form-agent.md`.
+Every model turn uses assistant text containing exactly `{"message":"plain-language words","actions":[]}` alongside native tool calls.
+`message` is at most 1000 characters. It may be `""` on a turn that only fills, looks or moves through the form, and must be nonempty with `ask_user`,
+`done`, `posting_gone` or a reply without tool calls. `actions` contains at most three unique `draft`, `skip`, `on_page` UI button names,
+only with `ask_user` (otherwise `[]`). A ```json fence around the object is tolerated.
+`ask_user` carries only a field `ref`; `done` and `posting_gone` need no text arguments. Legacy question/summary/reason arguments are ignored.
+The agent validates before executing any calls and sends malformed turns back for correction (two retries). After that it carries on with the
+model's own plain words as the message (never raw JSON or markup), and hands the form back only when there is nothing to say or do.
+The loop still receives its existing plan/question/actions interface; UI actions are not browser commands.
+A valid no-tool conversational reply pauses without claiming completion; `user_message` is never recorded as the pending field's answer.
+
+Behaviour (prompted, not coded): top to bottom in page order, in two passes. The first pass fills everything the facts support without asking, silently, and ends
+with one message saying what was filled. The second pass asks about the rest one field at a time, in page order (optional fields in their place), moving on after
+each answer. On a multi-step form both passes finish on a step before the next one.
+
+The user's three switches are read fresh every turn (getters from `background.js`, which follows `chrome.storage` changes) and shown in every snapshot:
+"Fill optional fields" (`fillOptional`), "Let AI answer" (`aiDrafts` → `options.allowDrafts`: on, the agent writes open-ended answers at the length the
+question needs, from the profile and the job; off, it asks with the draft button, and "Draft it for me" allows that one field) and "Auto apply"
+(`autoApply`, or the run's one-time auto-submit code → `options.autoApply`: only changes what the agent tells the user; the panel's Auto apply submits after `done`
+with its checks and cancellable countdown, the agent never does).
+
+`agent-guards.js` holds the limits that apply whatever the model decides: no submit, no CAPTCHA or human check, consent and legal facts (visa, sponsorship,
+criminal record, previous employment, anything that accepts, agrees to or confirms) only from the profile or the user's answer, no overwrite, no password,
+key and origin limits, optional fields left alone when "Fill optional fields" is off, open-ended answers left to the user when "Let AI answer" is off, a repeated
+question refused, and `done` refused while required fields are still empty. It never rewrites what the model chose: a refusal is a tool error the model reads and
+works around (a click or text write on a Yes/No option or checkbox is refused with "use check", so the consent limits always apply). `run_js` runs model-written
+JavaScript through `chrome.debugger`; the page-level submit guard still blocks submission.
+The privacy switch "Send page screenshots to the AI" (`agentVision`, on by default) sends the image only to the provider that already gets the page text; custom providers get
+it only when the host is known to take images or `supportsVision` is set. Details: `apply-assistant/docs/development/form-agent-testing/form-agent.md`.
 
 Every platform call has a timeout (`bridge.js`: 30 s, 90 s for `agentModel` / `agentStep`); a timeout is a transient 408.
 
@@ -91,10 +124,10 @@ after pulling platform changes.
 
 ## One command layer for both AI controllers
 
-`extension/src/agent/commands.js` (`CommandRunner`) is the only place that guards and runs page
+`extension/src/page-control/commands.js` (`CommandRunner`) is the only place that guards and runs page
 commands (stale observation, document change, user-edited or replaced control, password, unapproved
-link; verified `type`/`select`/`check`, `fill_form`, `options`, `review`, delta replies). The AI-led
-engine (`agent/loop.js`) and the external controller (`external-browser.js`) both call it; do not
+link; verified `type`/`select`/`check`, `fill_form`, `options`, `review`, delta replies). The Agent based form assistant
+engine (`page-control/loop.js`) and the external controller (`external-browser.js`) both call it; do not
 copy its guards into a controller. Keep it in step with the platform's
 `services/browser_commands.py`.
 
@@ -117,16 +150,16 @@ boards beyond one job at a time or to CAPTCHA/sign-in pages.
 
 ## Generic controls (do not add a detector per site)
 
-The form agent follows the Playwright MCP / Claude in Chrome principle: observe every visible interactive control with its role, name and state (`checked`, `pressed`, `selected`, `expanded`), act on it with a generic action, then verify by observing again. When a control fails, fix the observation or the generic action, not a per-site rule. A pick-one question made of buttons, a switch or pills (two to six siblings sharing `aria-pressed`, `-checked` or `-selected` under one label) is a choice group: `type`, `select`, `click` and `check` at one of its options all become a `check` on the option the answer names (`extension-agent.js`, mirrored by `policy.as_choice` on the server). A click on a suggestion of an open typeahead becomes a `select` on its field. `press` (Tab, Escape, Space, arrows, Enter only inside an open dropdown) and `hover` are planner actions. The safety rules stay on top of every action: never submit (`submit_like`, a final-looking control next to a field or inside a form), consent and eligibility need the user (a choice question asks once and the run carries on), no overwrite of an answered group, no CAPTCHA.
+The form agent follows the Playwright MCP / Claude in Chrome principle: observe every visible interactive control with its role, name and state (`checked`, `pressed`, `selected`, `expanded`), act on it with a generic action, then verify by observing again. When a control fails, fix the observation or the generic action, not a per-site rule. A pick-one question made of buttons, a switch or pills (two to six siblings sharing `aria-pressed`, `-checked` or `-selected` under one label) is a choice group. The Agent based agent answers it with `check` on the option itself: its guards refuse `type`, `select` or `click` there with that hint and rewrite nothing (2026-11-18). The shared command layer's `fill_form` (`page-control/commands.js`, used by the platform and external controllers, mirrored by `policy.as_choice` on the server) still turns answer text at an option into a `check`. The agent picks a typeahead suggestion by clicking it or with `select_option` on the field. `press` (Tab, Escape, Space, arrows, Enter only inside an open dropdown) and `hover` are agent actions. The safety rules stay on top of every action: never submit (`submit_like`, a final-looking control next to a field or inside a form), consent and eligibility need the user (a choice question asks once and the run carries on), no overwrite of an answered group, no CAPTCHA.
 
 ## Paired form-agent fixes
 
-The extension AI-led planner is `extension/src/extension-agent.js` in the public repository,
+The extension's Agent based form assistant is `src/agent-based/form-agent.js` in the public repository,
 shared by Platform AI and custom/local providers. Change it once for both. The private server
 browser retains its Python planner; mirror shared policy fixes there when applicable.
 Add a page snapshot and scripted replies to the extension's `test/agent-scenarios.json` and run
 both the Node replay and backend `test_shared_scenario_replay`. Runtime policy data is in
-`extension/src/agent-rules.json`; regenerate `src/agent-rules.js` with
+`extension/src/shared/agent-rules.json`; regenerate `src/shared/agent-rules.js` with
 `python3 scripts/agent_rules.py` in the extension and keep the backend `services/agent/rules.json`
 copy identical. Shared tests check all copies. See the platform's
 `docs/development/shared-agent-rules.md`. Never restore server-stored personal-key calls.

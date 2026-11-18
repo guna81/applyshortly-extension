@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { endpoint, complete, completeTools, providerSupport, canDraft, customAssist } from '../src/custom-ai.js';
+import { endpoint, complete, completeTools, providerSupport, canDraft, customAssist } from '../src/shared/custom-ai.js';
 
 test('validates provider endpoint and keeps its path', () => {
   assert.equal(endpoint('http://127.0.0.1:8765/v1/'), 'http://127.0.0.1:8765/v1');
@@ -53,7 +53,7 @@ test('panel chat receives identity, preferences and saved answers even with long
 });
 
 test('Gemini uses its compatible endpoint and Anthropic uses a native Messages adapter', async () => {
-  const { PROVIDER_PRESETS } = await import('../src/custom-ai.js');
+  const { PROVIDER_PRESETS } = await import('../src/shared/custom-ai.js');
   const original = globalThis.fetch;
   const calls = [];
   try {

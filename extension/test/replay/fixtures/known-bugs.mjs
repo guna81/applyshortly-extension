@@ -55,15 +55,17 @@ export { contact, pills };
 
 // Generic widget bugs found by the synthetic pages (Tier 1).
 export const widgetBugs = [
+  // Changed 2026-11-18: the agent no longer extracts the number itself (no form-fixing rules). The page's read-back reports the dropped
+  // text as not verified; the model sees that and asks (or retries with a plain number), and the field is filled only when it sticks.
   {
-    name: "a number box is given a number: the profile's \"6 years\" becomes 6, and the field sticks",
-    pages: [{ elements: [text("fn", "Full name"), text("yx", "Years of experience", { input_type: "number" }), text("sl", "Expected salary (USD)", { input_type: "number" })] }],
-    profile: { total_experience_years: 6 },
+    name: "a number box that drops the model's text is reported as not verified, and the user's number then sticks",
+    pages: [{ elements: [text("fn", "Full name"), text("sl", "Expected salary (USD)", { input_type: "number" })] }],
     model: { knowledge: [{ match: "full name", value: "Alex Testperson" }, { match: "expected salary", value: "$90,000 per year" }] },
-    expect: { outcome: "ready_for_review", required_empty: [], questions_max: 0, values: { "Years of experience": "6", "Expected salary (USD)": "90000" } },
+    replies: [["expected salary", "90000"]],
+    expect: { outcome: "ready_for_review", required_empty: [], questions_max: 1, repeats: 0, values: { "Expected salary (USD)": "90000" } },
   },
   {
-    name: "a number box whose answer holds no single number is asked, not typed",
+    name: "a number box whose answer holds no single number is asked after the write does not stick",
     pages: [{ elements: [text("fn", "Full name"), text("dr", "Number of direct reports managed", { input_type: "number" })] }],
     model: { knowledge: [{ match: "full name", value: "Alex Testperson" }, { match: "direct reports", value: "between two and three" }] },
     replies: [["direct reports", "3"]],

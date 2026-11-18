@@ -5,11 +5,13 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+NODE = shutil.which("node") or "node"  # found once, so a test that clears the environment still builds
 
 
 def platform_url(value):
@@ -76,12 +78,19 @@ def build(destination, base_url=None, source=False):
     ext = ROOT / "extension"
     files = {"manifest.json": (ext / "manifest.json").read_bytes()}
     for folder, suffixes in [("src", {".js", ".html", ".css", ".json"}), ("icons", {".svg", ".png"})]:
-        # src/ has subfolders (src/agent/); nothing reached through a symlink is packaged.
+        # src/ has subfolders (src/agent-based/); nothing reached through a symlink is packaged.
         for item in sorted((ext / folder).rglob("*")):
             inside = [ext / parent for parent in item.relative_to(ext).parents if parent != Path(".")]
             linked = any(path.is_symlink() for path in [item, *inside])
             if item.is_file() and not linked and item.suffix in suffixes:
                 files[item.relative_to(ext).as_posix()] = item.read_bytes()
+    # The extension loads plain files and cannot resolve node_modules: LangGraph JS (npm) is bundled into one module here.
+    if not (ROOT / "node_modules/@langchain/langgraph").is_dir():
+        raise SystemExit("Run `npm ci` first: the agent's LangGraph dependency is bundled during the build.")
+    files["src/agent-based/langgraph.js"] = subprocess.run(
+        [NODE, str(ROOT / "scripts/bundle_langgraph.mjs")], cwd=ROOT, check=True, capture_output=True
+    ).stdout
+    files["THIRD_PARTY_NOTICES.md"] = (ext / "THIRD_PARTY_NOTICES.md").read_bytes()  # the vendored LangGraph build's license notice
     files["platform.json"] = (json.dumps({"baseUrl": base_url}, sort_keys=True) + "\n").encode()
     manifest = json.loads(files["manifest.json"])
     origin_permission = base_url + "/*"
@@ -111,6 +120,8 @@ def build(destination, base_url=None, source=False):
         for item in (ROOT / "extension-bridge").rglob("*"):
             if item.is_file() and not item.is_symlink() and item.suffix in {".ts", ".json", ".md"}:
                 source_files[item.relative_to(ROOT).as_posix()] = item.read_bytes()
+        source_files["extension/src/agent-based/langgraph.js"] = (ext / "src/agent-based/langgraph.js").read_bytes()  # the shim; the build bundles it
+        source_files["scripts/bundle_langgraph.mjs"] = (ROOT / "scripts/bundle_langgraph.mjs").read_bytes()
         source_files["scripts/build_extension.py"] = Path(__file__).read_bytes()
         source_files["scripts/test_build_extension.py"] = (
             ROOT / "scripts/test_build_extension.py"

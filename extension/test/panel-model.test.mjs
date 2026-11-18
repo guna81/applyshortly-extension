@@ -1,11 +1,11 @@
-// Tests for src/panel-model.js: the panel's checklist, counts, and error wording.
+// Tests for src/rule-based/panel-model.js: the panel's checklist, counts, and error wording.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 
 const ctx = vm.createContext({});
-vm.runInContext(readFileSync(new URL("../src/panel-model.js", import.meta.url), "utf8"), ctx);
+vm.runInContext(readFileSync(new URL("../src/rule-based/panel-model.js", import.meta.url), "utf8"), ctx);
 const P = ctx.JobHuntPanel;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
@@ -103,6 +103,12 @@ test("the chat carries on through the form only where filling in place can't fin
     assert.equal(P.isNavigateRequest(ask), true, ask);
   }
   for (const answer of ["continue", "Next month", "I can join next week", "the rest is fine"]) assert.equal(P.isNavigateRequest(answer), false, answer);
+});
+
+test("the Agent based form shows only the buttons the agent chose, with no code-written note", () => {
+  const ask = plain(P.agentAsk({ kind: "question", text: "Summary?", actions: ["draft", "skip"] }, "ai_led"));
+  assert.deepEqual(ask, { text: "", question: { label: "Summary?" }, choices: [P.DRAFT_REPLY, P.SKIP_REPLY], draftable: true });
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Notice period?", choices: ["30 days"] }, "ai_led").choices), ["30 days"]);
 });
 
 test("the agent's questions become chat lines with quick replies", () => {

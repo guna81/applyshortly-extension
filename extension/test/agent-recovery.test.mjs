@@ -2,8 +2,8 @@
 // Scripted driver, no browser, no AI. `todo` = wanted behavior of a known bug (Phase C); it reports but does not fail.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BridgeError } from "../src/bridge.js";
-import { Agent, ProgressGuard } from "../src/agent/loop.js";
+import { BridgeError } from "../src/shared/bridge.js";
+import { Agent, ProgressGuard } from "../src/page-control/loop.js";
 import { FakeDriver, frameObs } from "./replay/fake-driver.mjs";
 
 const stuck = () => ({ top: () => frameObs([{ ref: "n", role: "textbox", name: "Name", value: "" }]) });

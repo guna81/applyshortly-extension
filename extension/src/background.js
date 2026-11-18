@@ -1,22 +1,38 @@
-import { candidateContext } from "./candidate-context.js";
+import { candidateContext } from "./shared/candidate-context.js";
 // Background service worker: owns the API key and every request to the platform.
-// Content scripts and the side panel talk to it with chrome.runtime messages ({type, ...}).
+// Content scripts and the extension pages talk to it with chrome.runtime messages ({type, ...}).
 
-import { endpoint, complete, completeTools, canDraft, customAssist } from "./custom-ai.js";
-import { extensionPlanner } from "./extension-agent.js";
-import { externalBrowser } from "./external-browser.js";
-import { Agent } from "./agent/loop.js";
-import { TabDriver } from "./agent/cdp.js";
-import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./bridge.js";
+import { endpoint, complete, completeTools, canDraft, customAssist, providerSupport } from "./shared/custom-ai.js";
+import { formAgent } from "./agent-based/form-agent.js";
+import { TOOL_CATALOG } from "./agent-based/tools.js";
+import { modelBody } from "./shared/model-turn.js";
+import { externalBrowser } from "./shared/external-browser.js";
+import { Agent } from "./page-control/loop.js";
+import { TabDriver } from "./page-control/cdp.js";
+import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./shared/bridge.js";
 
-/** @type {{baseUrl: string, token: string, aiDrafts: boolean, autopilotWindows: boolean, extensionEngine: "ai_led" | "rules_led", agentVision: boolean, connectionType?: string}} */
+// The panel's switches ("Fill optional fields", "Let AI answer", "Auto apply") can change while an agent runs: the planner reads them every turn.
+const liveSwitches = /** @type {Record<"fillOptional" | "aiDrafts" | "autoApply", boolean | null>} */ ({ fillOptional: null, aiDrafts: null, autoApply: null });
+const liveFillOptional = (/** @type {any} */ owner) => liveSwitches.fillOptional ?? owner.fillOptional !== false;
+const liveAiDrafts = (/** @type {any} */ owner) => liveSwitches.aiDrafts ?? owner.aiDrafts !== false;
+const liveAutoApply = (/** @type {any} */ owner) => liveSwitches.autoApply ?? owner.autoApply === true;
+try {
+  chrome.storage?.onChanged?.addListener?.((changes, area) => {
+    if (area !== "local") return;
+    for (const key of /** @type {const} */ (["fillOptional", "aiDrafts", "autoApply"])) {
+      if (key in changes) liveSwitches[key] = key === "autoApply" ? changes[key].newValue === true : changes[key].newValue !== false;
+    }
+  });
+} catch { /* no storage events: the value at the start of the run stands */ }
+
+/** @type {{baseUrl: string, token: string, aiDrafts: boolean, autopilotWindows: boolean, extensionEngine: "ai_led" | "rules_led", agentVision: boolean, fillOptional: boolean, autoApply?: boolean, connectionType?: string}} */
 // AI drafts are on unless the user turns them off: the website's agent drafts what it can't answer too.
 // Autopilot windows are on too: the user turned Autopilot's auto-submit on, and the toggle here is the way out.
-const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true };
+const DEFAULT_SETTINGS = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true, fillOptional: true };
 const PROFILE_TTL_MS = 60_000;
-const CONTENT_SCRIPTS = ["src/profile-answer.js", "src/fill.js", "src/panel-model.js", "src/panel-view.js", "src/content.js"];
+const CONTENT_SCRIPTS = ["src/rule-based/profile-answer.js", "src/rule-based/fill.js", "src/rule-based/panel-model.js", "src/rule-based/panel-view.js", "src/rule-based/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
-const AGENT_PAGE_SCRIPTS = ["src/profile-answer.js", "src/fill.js", "src/agent/page.js"];
+const AGENT_PAGE_SCRIPTS = ["src/rule-based/profile-answer.js", "src/rule-based/fill.js", "src/page-control/page.js"];
 
 const storageReady = Promise.all([
   chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
@@ -42,7 +58,7 @@ async function platformOrigin() {
 
 async function settings() {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "autoApply"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -52,6 +68,17 @@ async function settings() {
     stored.token = "";
   }
   return { ...DEFAULT_SETTINGS, ...stored, baseUrl };
+}
+
+async function getCustomAI() {
+  await storageReady;
+  const custom = (await chrome.storage.local.get("customAI")).customAI;
+  if (!custom) return null;
+  if (custom.supportsTools === undefined) {
+    custom.supportsTools = true;
+    await chrome.storage.local.set({ customAI: custom });
+  }
+  return custom;
 }
 
 async function bridge() {
@@ -161,7 +188,7 @@ async function claimAutoApply(appId, url) {
   }
 }
 
-/** Side panel → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
+/** Toolbar icon, shortcut or the panel → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
 async function start(tabId, url, allowUntracked, autoSubmit = false) {
   await externalController.stop();
   const origin = new URL(url).origin;
@@ -171,8 +198,7 @@ async function start(tabId, url, allowUntracked, autoSubmit = false) {
   if (!app && !allowUntracked) return { found: false };
   const appId = app?.id ?? null;
   await setTab(tabId, { appId, origin, tracked: appId !== null });
-  sidepanelOpenState = true;
-  await sendToTab(tabId, { type: "run", appId, autoSubmit, useSidebar: true });
+  await sendToTab(tabId, { type: "run", appId, autoSubmit });
   return { found: true, appId };
 }
 
@@ -202,7 +228,7 @@ async function context(appId, tabId, url, page) {
   }
   // No AI drafting in Autopilot's window: nobody is there to check what it writes.
   const unattended = tabId !== undefined && (await autopilotWindow())?.tabId === tabId;
-  const custom = (await chrome.storage.local.get("customAI")).customAI;
+  const custom = await getCustomAI();
   // Autofill works without the agent. An unavailable or incompatible capability response must
   // not start the controller here; agentStart negotiates independently and still fails closed.
   const capabilities = unattended ? null : await b.agentCapabilities(Boolean(custom?.enabled), s.extensionEngine).catch(() => null);
@@ -212,7 +238,7 @@ async function context(appId, tabId, url, page) {
   return { agentAvailable: acknowledged, agentEngine: acknowledged ? capabilities.agent_engine : undefined, profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
 }
 
-/** What the side panel shows: connection, and which application (if any) the tab's page is. */
+/** The connection, and which application (if any) the tab's page is. */
 async function status(tabId, url) {
   const s = await settings();
   if (!s.token) return { configured: false, baseUrl: s.baseUrl };
@@ -224,7 +250,9 @@ async function status(tabId, url) {
     const appId = fromUrl ?? (tab && url && tab.origin === new URL(url).origin ? tab.appId : null);
     let app = appId != null ? await b.application(appId) : null;
     if (!app && url && /^https?:/.test(url)) app = await b.lookup(url);
-    return { connectionType: s.connectionType ?? "manual", configured: true, connected: true, baseUrl: s.baseUrl, name: account.name ?? account.email, email: account.email, credits: account.credits, plan: account.plan, billingEnabled: account.billing_enabled, ai: account.ai, tab, app, aiDrafts: s.aiDrafts };
+    const custom = await getCustomAI();
+    const customAI = custom?.enabled ? { model: custom.model, baseUrl: custom.baseUrl } : null;
+    return { connectionType: s.connectionType ?? "manual", extensionEngine: s.extensionEngine, customAI, configured: true, connected: true, baseUrl: s.baseUrl, name: account.name ?? account.email, email: account.email, credits: account.credits, plan: account.plan, billingEnabled: account.billing_enabled, ai: account.ai, tab, app, aiDrafts: s.aiDrafts };
   } catch (err) {
     if (err.status === 401) await clearConnection();
     return { configured: true, connected: false, baseUrl: s.baseUrl, error: err.message, status: err.status };
@@ -535,18 +563,20 @@ async function agentReport(appId, event, res, url) {
   await (await bridge()).report(body).catch((err) => console.warn("[JobHunt] agent report failed:", err.message));
 }
 
-/** Starts the agent in a tab: from the side panel (finds the application by URL) or the page's panel. */
-async function agentStart(tabId, url, appId, autoSubmit = false) {
+/** Starts the agent in a tab: from an extension page (finds the application by URL) or the page's panel. */
+async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) {
   const revision = customProviderRevision;
   if (customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
-  const custom = (await chrome.storage.local.get("customAI")).customAI;
+  const custom = await getCustomAI();
   await externalController.stop();
   // One job at a time. A run elsewhere that is only waiting on the user (a question, a pause, a
   // filled form left for review) ends when the user starts a new one; it is not doing anything.
   for (const previous of new Set(agents.values())) {
     if (previous.tabId === tabId || previous.stopped) continue;
     if (["waiting", "paused"].includes(previous.status) || previous.status === "ready") {
-      previous.stop("You started the agent on another application, so it stopped here. The form is yours to finish.");
+      // Name the tab that took over, so a run that ends here without the user starting anything is traceable.
+      const starter = clip((await chrome.tabs.get(tabId).catch(() => null))?.title ?? "", 80);
+      previous.stop(`A new agent run started in another tab${starter ? ` (“${starter}”)` : ""}, so this one stopped. The form is yours to finish.`);
       await previous.runPromise;
     }
   }
@@ -575,7 +605,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
   if (capabilities?.agent_engine !== owner.extensionEngine) throw new Error("The selected extension form engine is unavailable with this provider. Change the extension setting or provider.");
   if (custom?.enabled && capabilities?.planner !== "custom") throw new Error("ApplyShortly needs an update before this custom provider can use the selected form engine.");
   if (capabilities.guarded_commands !== true) throw new Error("Update ApplyShortly before starting the form agent; this server does not support guarded commands.");
-  if (custom?.enabled && (capabilities.guarded_commands !== true || capabilities.agent_engine !== "ai_led")) throw new Error("The selected Rules-led method cannot navigate this form with a custom provider. Change the form filling method in settings or complete it on the page.");
+  if (custom?.enabled && (capabilities.guarded_commands !== true || capabilities.agent_engine !== "ai_led")) throw new Error("The selected Rule based form assistant method cannot navigate this form with a custom provider. Change the form filling method in settings or complete it on the page.");
   if (!custom?.enabled && capabilities.agent_engine === "ai_led" && capabilities.local_planner !== true) throw new Error("Update ApplyShortly before starting the unified extension agent.");
   const sources = await pageSources();
   if (customProviderChanging || revision !== customProviderRevision) throw new Error("AI provider changed. Start a new form session.");
@@ -587,22 +617,22 @@ async function agentStart(tabId, url, appId, autoSubmit = false) {
     startUrl: url,
 
     verifiedCommands: capabilities?.verified_commands === true,
-    step: capabilities.agent_engine === "ai_led" ? extensionPlanner(custom, p, app, async (config, messages, maxTokens, look) => {
+    step: capabilities.agent_engine === "ai_led" ? formAgent(custom, p, app, async (config, messages, maxTokens, look) => {
       if (revision !== customProviderRevision || customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
-      // `look`: the planning turn's screenshot and native tool calls. A call without it (a draft shortening, the review audit) gets plain text back.
-      if (custom?.enabled) return look ? completeTools(config, messages, maxTokens, { images: look.images, tools: look.tools }) : complete(config, messages, maxTokens);
+      // One agent for every provider: the same message history and tool results go to the platform gateway or to the user's own provider.
+      if (custom?.enabled) return completeTools(config, messages, maxTokens, { images: look?.images, tools: TOOL_CATALOG.filter((t) => !look?.tool_names || look.tool_names.includes(t.name)), history: look?.history ?? [], results: look?.results });
       const current = await settings();
       if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) throw new Error("Account changed. Start a new form session.");
       const turn = { session_id: modelSession, application_id: id, request_id: crypto.randomUUID(), messages, max_output_tokens: maxTokens };
-      if (!look) return (await b.agentModel(turn)).text;
       try {
-        return await b.agentModel({ ...turn, ...(look.images?.length ? { images: look.images.slice(0, 1) } : {}), native_tools: look.native_tools === true });
+        return await b.agentModel(modelBody(turn, look));
       } catch (error) {
-        // A platform from before screenshots and tool calls rejects the new fields (422): ask it the plain way.
-        if (error?.status !== 422) throw error;
-        return { text: (await b.agentModel(turn)).text, tool_calls: [], tool_calls_unsupported: true };
+        // A platform from before the agent kept a message history rejects the new fields (422).
+        // Only when the rejected field is one of the new ones; any other 422 (a message too long, say) keeps its own text, which names the field.
+        if (error?.status === 422 && /\b(?:history|results|native_tools|allow_js|tool_names|images)\b.*(?:extra|not permitted|forbidden)/i.test(String(error?.message ?? ""))) throw new Error("Update ApplyShortly: this server does not support the form agent's message history yet.");
+        throw error;
       }
-    }, (question) => b.suggestAnswer({ question, application_id: id, allow_generate: false }), owner.aiDrafts, undefined, { vision: owner.agentVision !== false })
+    }, (question) => b.suggestAnswer({ question, application_id: id, allow_generate: false }), owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } })
       : (body) => b.agentStep({ ...body, extension_engine: owner.extensionEngine }),
     files: agentFiles(p, app),
     notify: async (message) => {
@@ -656,7 +686,7 @@ function setAttentionBadge(tabId, waiting) {
 function agentStatus(tabId) {
   const agent = agents.get(tabId);
   if (!agent) return null;
-  return { type: "agentUpdate", guarded_commands: true, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.progress, ...agent.last, planner: agent.planner };
+  return { type: "agentUpdate", guarded_commands: true, status: agent.status, log: agent.log.slice(-40), appId: agent.appId, ...agent.progress, ...agent.last, ...(agent.last?.debug ? { recoveries: agent.recoveries.slice(-40) } : {}), planner: agent.planner };
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -746,8 +776,17 @@ const handlers = {
   },
   browserSignIn: async (msg) => browserSignIn(await platformOrigin(), msg.interactive !== false),
   customAISettings: async () => {
-    const custom = (await chrome.storage.local.get("customAI")).customAI;
-    return custom ? { baseUrl: custom.baseUrl, model: custom.model, enabled: custom.enabled, hasKey: Boolean(custom.apiKey) } : null;
+    const custom = await getCustomAI();
+    if (!custom) return null;
+    const support = providerSupport(custom);
+    return {
+      baseUrl: custom.baseUrl,
+      model: custom.model,
+      enabled: custom.enabled,
+      hasKey: Boolean(custom.apiKey),
+      supportsTools: custom.supportsTools !== false,
+      supportsVision: custom.supportsVision !== undefined ? Boolean(custom.supportsVision) : support.vision,
+    };
   },
   saveCustomAI: async (msg) => {
     await bridge();
@@ -760,7 +799,9 @@ const handlers = {
     if (!await chrome.permissions.contains({ origins: [origin] })) throw new Error("Allow access to the provider before saving.");
     customProviderRevision += 1;
     for (const agent of new Set(agents.values())) agent.stop("AI provider changed. Start a new form session.");
-    await chrome.storage.local.set({ customAI: { baseUrl, model, apiKey, enabled: true } });
+    const supportsTools = msg.supportsTools !== false;
+    const supportsVision = msg.supportsVision !== undefined ? Boolean(msg.supportsVision) : providerSupport({ baseUrl }).vision;
+    await chrome.storage.local.set({ customAI: { baseUrl, model, apiKey, enabled: true, supportsTools, supportsVision } });
     return true;
   },
   disableCustomAI: async () => {
@@ -774,8 +815,8 @@ const handlers = {
   },
   testCustomAI: async () => {
     await bridge();
-    const custom = (await chrome.storage.local.get("customAI")).customAI;
-    if (!custom?.enabled) throw new Error("Save your custom provider first.");
+    const custom = await getCustomAI();
+    if (!custom?.enabled) throw new Error("No saved provider to test. Fill in the details and choose Save and use for AI first.");
     const revision = customProviderRevision;
     await complete(custom, [{ role: "user", content: "Reply with OK." }]);
     if (revision !== customProviderRevision) throw new Error("Provider changed during the test. Test the saved provider again.");
@@ -784,12 +825,12 @@ const handlers = {
   },
   aiSettings: async () => (await bridge()).aiSettings(),
   selectAI: async (msg) => {
-    if (msg.mode !== "platform") throw new Error("Configure My AI provider on this device.");
+    if (msg.mode !== "platform") throw new Error("Configure Custom AI provider on this device.");
     return (await bridge()).selectAI({ mode: "platform" });
   },
   deleteAIProvider: async () => {
     if (testedProviderRevision !== customProviderRevision) throw new Error("Test your saved on-device provider before deleting the retained key.");
-    const custom = (await chrome.storage.local.get("customAI")).customAI;
+    const custom = await getCustomAI();
     if (!custom?.enabled) throw new Error("Save and test your provider first.");
     const host = new URL(custom.baseUrl).hostname;
     const provider = ({ "api.openai.com": "openai", "api.anthropic.com": "anthropic", "generativelanguage.googleapis.com": "gemini" })[host];
@@ -800,7 +841,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, aiDrafts: s.aiDrafts, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();
@@ -832,7 +873,7 @@ const handlers = {
   context: (msg, sender) => context(msg.appId ?? null, sender.tab?.id, sender.url, msg.page),
   suggest: async (msg) => {
     const b = await bridge();
-    const custom = (await chrome.storage.local.get("customAI")).customAI;
+    const custom = await getCustomAI();
     const result = custom?.enabled ? { answer: null, source: "none", needs_review: true } : await b.suggestAnswer({ question: msg.question, application_id: msg.appId ?? null, allow_generate: custom?.enabled ? false : Boolean(msg.allowGenerate), page: custom?.enabled ? null : (msg.appId == null && msg.allowGenerate ? pageJob(msg.page) : null) });
     if (!custom?.enabled || result.answer || !msg.allowGenerate || !canDraft(msg.question)) return result;
     const [p, app] = await Promise.all([profile(), msg.appId == null ? Promise.resolve(pageJob(msg.page)) : b.application(msg.appId)]);
@@ -844,7 +885,7 @@ const handlers = {
   },
   // The panel's Assistant tab: fields and values come from the page, nothing is stored.
   assist: async (msg) => {
-    const custom = (await chrome.storage.local.get("customAI")).customAI;
+    const custom = await getCustomAI();
     if (custom?.enabled) return customAssist(custom, msg, await profile());
     return (await bridge()).assistFill({
       messages: msg.messages,
@@ -873,10 +914,10 @@ const handlers = {
   // Auto apply clicked the form's Submit button in this tab.
   autoApplied: (msg, sender) => autopilotAttempted(sender.tab.id),
   status: (msg) => status(msg.tabId, msg.url),
-  // From the page's panel: its own tab. From the side panel or options page: the tab they name.
+  // From the page's panel: its own tab. From an extension page: the tab it names.
   agentStart: (msg, sender) => (fromPage(sender)
     ? agentStart(sender.tab.id, sender.url, msg.appId ?? null, msg.autoSubmit === true)
-    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true)),
+    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true, msg.debug === true)), // debug only from an extension page (the test harness), never from a web page
   agentControl: (msg, sender) => agentControl(fromPage(sender) ? sender.tab.id : msg.tabId, msg.action, msg.text),
   agentStatus: (msg, sender) => agentStatus(fromPage(sender) ? sender.tab.id : msg.tabId),
   openOptions: () => chrome.runtime.openOptionsPage(),
@@ -885,18 +926,22 @@ const handlers = {
     profileCache = null;
     return status(undefined);
   },
-  isSidepanelOpen: () => ({ open: sidepanelOpenState }),
-  setSidepanelOpen: (msg) => { sidepanelOpenState = Boolean(msg.open); return true; },
-  panelSync: () => true,
 };
 
-// Keyboard shortcut (Alt+Shift+F by default): like the side panel button, but fills untracked
-// pages without asking, since there is no side panel open to ask in.
-chrome.commands?.onCommand.addListener((command, tab) => {
-  if (command !== "autofill" || !tab?.id || !/^https?:/.test(tab.url ?? "")) return;
-  openPanelForTab(tab.id);
-  start(tab.id, tab.url, true).catch((err) => console.warn("[JobHunt] shortcut failed:", err.message));
-});
+// Keyboard shortcut (Alt+Shift+F by default); the toolbar icon opens src/ui/popup.html instead. Open the panel on the page and start.
+// An untracked page is filled without asking. If starting fails (not connected, a lookup error), the page
+// runs it itself, so the panel shows the reason with a way to fix it.
+async function openPanel(tab) {
+  if (!tab?.id) return;
+  if (!/^https?:/.test(tab.url ?? "")) return void openWebsite("/applications").catch(() => {});
+  try {
+    await start(tab.id, tab.url, true);
+  } catch (err) {
+    console.warn("[JobHunt] could not start:", err.message);
+    await sendToTab(tab.id, { type: "run", appId: null }).catch(() => {});
+  }
+}
+chrome.commands?.onCommand.addListener((command, tab) => { if (command === "autofill") void openPanel(tab); });
 
 const clip = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 
@@ -907,15 +952,14 @@ function pageJob(page) {
   return job.title ? job : null;
 }
 
-let sidepanelOpenState = false;
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl", "isSidepanelOpen", "panelSync"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl"]);
 
 async function dispatch(msg, sender) {
   await storageReady;
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/options.html", "src/sidepanel.html", "src/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/ui/options.html", "src/ui/popup.html", "src/ui/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
@@ -944,27 +988,8 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   await storageReady;
   await platformOrigin();
   await ensureAutopilotAlarm();
-  await panelOffByDefault();
   if (reason === "install" && !(await settings()).token) await chrome.runtime.openOptionsPage();
 });
-
-// The side panel belongs to the tab the user clicked the icon on: it is off everywhere else, so
-// switching tabs never drags it along. The icon click enables it for that one tab and opens it.
-async function panelOffByDefault() {
-  if (!chrome.sidePanel) return;
-  await chrome.sidePanel.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
-  await chrome.sidePanel.setOptions?.({ enabled: false }).catch(() => {});
-}
-void panelOffByDefault();
-
-function openPanelForTab(tabId) {
-  if (!tabId || !chrome.sidePanel?.open) return;
-  // Both calls go out in the same tick so the click still counts as the user's gesture.
-  void chrome.sidePanel.setOptions?.({ tabId, path: "src/sidepanel.html", enabled: true }).catch(() => {});
-  chrome.sidePanel.open({ tabId }).catch(() => {});
-}
-
-chrome.action?.onClicked?.addListener((tab) => openPanelForTab(tab?.id));
 
 // The browser reconnects by itself once the user has connected it (a browser start, an
 // extension reload or a service-worker restart); Stop turns that off.

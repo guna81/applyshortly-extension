@@ -43,7 +43,7 @@ A source build with custom endpoint support can instead send answer-drafting and
 the extension to a user-configured OpenAI-compatible provider. The request contains the question,
 relevant professional profile fields and job context. The provider processes this information under
 its own terms. The ApplyShortly server is still used for the account, profile and answer-bank lookup;
-assistant chat also sends the conversation and form fields and values to the custom provider. When AI-led form filling is selected, the extension sends observed page content, form values, candidate profile, job context, action results and conversation directly to that provider for planning. It does not send screenshots to the custom provider. Page actions are subject to the extension's guarded command layer.
+assistant chat also sends the conversation and form fields and values to the custom provider. When Agent based form assistant form filling is selected, the extension sends observed page content, form values, candidate profile, job context, action results and conversation directly to that provider for planning. It does not send screenshots to the custom provider. Page actions are subject to the extension's guarded command layer.
 
 When the extension fills a field or attaches your résumé, that information becomes available to
 the employer website. The website may read or transmit it before submission. Review that site's
@@ -52,17 +52,17 @@ privacy policy. The extension cannot control employer page scripts.
 ## The form agent
 
 When you start the form agent, the extension uses Chrome's debugger permission on that tab only,
-until it finishes or you stop it (Chrome shows a bar while it is attached). For AI-led filling, one planner runs in the extension for both provider modes. It processes the
+until it finishes or you stop it (Chrome shows a bar while it is attached). For Agent based form assistant filling, one planner runs in the extension for both provider modes. It processes the
 page URL and title, questions, options, buttons, current field values, error messages, relevant
 candidate profile, job context, user replies and action results. Platform AI sends planner
 messages through ApplyShortly to its provider, subject to account usage and credit controls.
-My AI provider sends these directly to the selected provider; its API key stays on this device.
+Custom AI provider sends these directly to the selected provider; its API key stays on this device.
 The server remains involved in account/profile access and saved-answer lookup.
 
-Current AI-led planning and its separate completion audit do not send screenshots to either
+Current Agent based form assistant planning does not send screenshots to either
 provider path. Earlier extension Platform AI versions used a screenshot-aware server planner;
 legacy step clients and the separate server browser can still use screenshots. This source
-change does not update an already installed extension or a published privacy page. Rules-led
+change does not update an already installed extension or a published privacy page. Rule based form assistant
 continues to use the server step endpoint. Planner session state lives in extension runtime
 memory; platform gateway sessions keep short-lived billing, usage and retry state. User-approved
 answers may be saved to the answer bank. Employer pages can read filled values before submission.

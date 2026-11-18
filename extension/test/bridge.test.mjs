@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { AGENT_TIMEOUT_MS, JobHuntBridge, REQUEST_TIMEOUT_MS, autoApplyCodeFromUrl, autofillIdFromUrl, errorMessage } from '../src/bridge.js';
+import { AGENT_TIMEOUT_MS, JobHuntBridge, REQUEST_TIMEOUT_MS, autoApplyCodeFromUrl, autofillIdFromUrl, errorMessage } from '../src/shared/bridge.js';
 
 test('reads the application id and the one-time Auto apply code from the link', () => {
   const url = 'https://www.linkedin.com/jobs/view/9#jobhunt-autofill=12&jobhunt-auto=AbC_def-0123456789xyz';

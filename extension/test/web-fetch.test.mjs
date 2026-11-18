@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addTypedLinks, fetchPage, internalHost, isTypedLink, readableUrl, toText } from "../src/web-fetch.js";
+import { addTypedLinks, fetchPage, internalHost, isTypedLink, readableUrl, toText } from "../src/shared/web-fetch.js";
 
 const reply = (body, { url = "https://example.test/", status = 200, type = "text/html" } = {}) => ({ ok: status < 400, status, url, headers: { get: () => type }, text: async () => body });
 
