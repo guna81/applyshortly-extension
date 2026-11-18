@@ -8,3 +8,7 @@ __pycache__/
 .DS_Store
 *.log
 extension/config.local.json
+
+# Transpiled extension JS in source directory (source of truth is TypeScript)
+extension/src/**/*.js
+!extension/src/shared/agent-rules.js

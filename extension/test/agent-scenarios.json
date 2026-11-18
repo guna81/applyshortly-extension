@@ -229,7 +229,7 @@
     ]
   },
   {
-    "name": "skip question without a ref then reject a field write",
+    "name": "skip question across changed refs then reject a field write",
     "observation": {
       "observation_id": "replay-1",
       "url": "https://careers.example.test/apply",
@@ -247,6 +247,7 @@
       {
         "reply": {
           "tool": "ask_user",
+          "ref": "project",
           "question": "Describe your project"
         },
         "expected": "ask"
@@ -371,11 +372,10 @@
     },
     "turns": [
       {
-        "reply": {
-          "tool": "ask_user",
-          "ref": "transcript",
-          "question": "Attach transcript manually"
-        },
+        "replies": [
+          { "tool": "check", "ref": "privacy", "checked": true },
+          { "tool": "ask_user", "ref": "transcript", "question": "Attach transcript manually" }
+        ],
         "expected": "check"
       }
     ]
@@ -407,11 +407,18 @@
     },
     "turns": [
       {
+        "reply": { "tool": "ask_user", "ref": "no", "question": "Are you comfortable working in a hybrid setup?" },
+        "expected": "ask"
+      },
+      {
+        "user_reply": "No",
         "reply": {
           "tool": "click",
           "ref": "no"
         },
-        "expected": "check"
+        "expected": "check",
+        "expected_ref": "no",
+        "readback": true
       }
     ]
   },

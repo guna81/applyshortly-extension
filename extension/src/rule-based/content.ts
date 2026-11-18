@@ -77,10 +77,11 @@
 
   /** The job as this page shows it, so an AI draft on an untracked page knows what it answers for. */
   function pageJob() {
+    if (typeof document === "undefined" || !document) return { title: "", company: "", description: "" };
     const meta = (name) => document.querySelector(`meta[property="${name}"], meta[name="${name}"]`)?.getAttribute("content")?.trim() ?? "";
     const text = document.body?.innerText ?? document.body?.textContent ?? "";
     return {
-      title: (document.title.trim() || meta("og:title") || F.cleanLabel(document.querySelector("h1")?.textContent ?? "")).slice(0, 300),
+      title: (document.title?.trim?.() || meta("og:title") || F.cleanLabel(document.querySelector("h1")?.textContent ?? "")).slice(0, 300),
       company: meta("og:site_name").slice(0, 200),
       description: text.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, 6000),
     };
@@ -572,7 +573,9 @@
   /** Brings the agent's progress into the chat: every step it takes, its questions, and what happened when it stopped. */
   async function agentChanged(previous, next) {
     const logNew = narrate(next);
-    const fillNew = narrateFills(next);
+    // The agent-based assistant speaks for itself; do not turn its structured
+    // fill data into a separate, code-generated checklist in the conversation.
+    const fillNew = next.agent_engine === "ai_led" ? false : narrateFills(next);
     const key = (a) => (a?.status === "waiting" ? `waiting:${a.question?.kind}:${a.question?.text}` : a?.status);
     if (key(previous) === key(next)) {
       panel.agent(Boolean(logNew || fillNew));
@@ -609,9 +612,12 @@
     // The agent's own closing message is the whole hand-off; the Agent based form adds no counts, notes or questions.
     const agentBased = next.agent_engine === "ai_led";
     const framedNote = next.status === "ready" && !agentBased ? P.readinessNote({ missing: (next.readiness?.missing ?? []).filter((m: any) => m.framed) }) : "";
+    const leadWithNote = [lead, framedNote].filter(Boolean).join(" ");
     const follow = next.status === "ready" && state ? P.nextPrompt(state.results) : null;
-    const bodyText = follow ? followedBy(framedNote ? `${lead} ${framedNote}` : lead, follow) : { text: lead, choices: [] };
-    if (lead.trim() || follow) chat.lines.push({ role: "assistant", local: true, ...bodyText });
+    const bodyText = next.status === "ready"
+      ? (follow ? followedBy(leadWithNote, follow) : { text: leadWithNote || DONE_TEXT, choices: [] })
+      : { text: leadWithNote, choices: [] };
+    if (leadWithNote || follow) chat.lines.push({ role: "assistant", local: true, ...bodyText });
     panel.agent(true);
     // The agent never submits. Resume only this run's explicit Auto apply choice,
     // through the same required-field checks and cancellable countdown as a single page.
@@ -809,6 +815,7 @@
   // visible short element can carry it; the wording and the "new since the attempt" check decide.
   const RECEIPT_ELEMENTS = 'h1, h2, h3, p, div, span, [role="status"], [role="alert"], .alert, .toast';
   function receiptTexts() {
+    if (typeof document === "undefined" || !document) return [];
     return [...document.querySelectorAll(RECEIPT_ELEMENTS)].filter((el) => {
       if (!el.getClientRects().length || el.closest('jobhunt-autofill-panel')) return false;
       const text = F.cleanLabel(el.textContent ?? "");
@@ -824,7 +831,7 @@
 
   const hasReceipt = () => receiptTexts().some((text) => !receiptBaseline.includes(text));
   // The site moved to its own confirmation page (a single-page app changes the address without reloading).
-  const reachedConfirmationPage = () => location.href !== attemptUrl && F.confirmationPath(location.href);
+  const reachedConfirmationPage = () => typeof location !== "undefined" && Boolean(location?.href) && location.href !== attemptUrl && F.confirmationPath(location.href);
 
   function checkConfirmation() {
     if (!attemptPending || submittedReported) return;

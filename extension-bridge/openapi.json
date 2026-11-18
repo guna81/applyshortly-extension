@@ -660,6 +660,87 @@
         "title": "AgentFilled",
         "type": "object"
       },
+      "AgentHistoryCall": {
+        "additionalProperties": false,
+        "description": "A tool call the model made on an earlier turn, replayed so it sees its own history.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signature"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "AgentHistoryCall",
+        "type": "object"
+      },
+      "AgentHistoryMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHistoryCall"
+            },
+            "maxItems": 8,
+            "title": "Calls",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AgentToolResult"
+            },
+            "maxItems": 8,
+            "title": "Results",
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "assistant",
+              "user"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 30000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "AgentHistoryMessage",
+        "type": "object"
+      },
       "AgentModelMessage": {
         "additionalProperties": false,
         "properties": {
@@ -689,6 +770,11 @@
         "additionalProperties": false,
         "description": "Bounded model turn from the extension-owned AI-led planner. No credentials accepted.",
         "properties": {
+          "allow_js": {
+            "default": false,
+            "title": "Allow Js",
+            "type": "boolean"
+          },
           "application_id": {
             "anyOf": [
               {
@@ -701,12 +787,20 @@
             ],
             "title": "Application Id"
           },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHistoryMessage"
+            },
+            "maxItems": 80,
+            "title": "History",
+            "type": "array"
+          },
           "images": {
             "items": {
               "maxLength": 4000000,
               "type": "string"
             },
-            "maxItems": 1,
+            "maxItems": 3,
             "title": "Images",
             "type": "array"
           },
@@ -736,10 +830,34 @@
             "title": "Request Id",
             "type": "string"
           },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AgentToolResult"
+            },
+            "maxItems": 8,
+            "title": "Results",
+            "type": "array"
+          },
           "session_id": {
             "pattern": "^[a-zA-Z0-9_-]{16,64}$",
             "title": "Session Id",
             "type": "string"
+          },
+          "tool_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 40,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Names"
           }
         },
         "required": [
@@ -956,6 +1074,18 @@
       },
       "AgentQuestion": {
         "properties": {
+          "actions": {
+            "items": {
+              "enum": [
+                "draft",
+                "skip",
+                "on_page"
+              ],
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
           "kind": {
             "enum": [
               "blocker",
@@ -1278,6 +1408,34 @@
           "url"
         ],
         "title": "AgentTab",
+        "type": "object"
+      },
+      "AgentToolResult": {
+        "additionalProperties": false,
+        "description": "What the extension saw after running one tool call.",
+        "properties": {
+          "content": {
+            "maxLength": 30000,
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "is_error": {
+            "default": false,
+            "title": "Is Error",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "title": "AgentToolResult",
         "type": "object"
       },
       "AnswerSuggestionOut": {

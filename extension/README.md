@@ -32,7 +32,7 @@ Filling from your profile and saved answers is free with an ApplyShortly account
 - [Form compatibility and limitations](#limits)
 - [External AI assistant control pilot](#external-ai-assistant-control-pilot)
 
-Plain JavaScript with no compilation step. The build packages an allowlisted set of runtime files;
+> **TypeScript Migration (2026-11-19).** Runtime code in `src/` is written in TypeScript (`.ts`) and transpiled to JavaScript at build time. The build packages an allowlisted set of runtime files;
 it never reads `.env` or includes local credentials. An ApplyShortly account is required,
 including when using a personal AI key. See `../extension-bridge/README.md` for the API.
 

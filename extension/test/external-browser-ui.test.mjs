@@ -23,8 +23,9 @@ async function controlPage(initial = {}) {
     } },
     permissions: { contains: async () => false, request: async () => allowed },
   };
-  const helpers = source('shared/external-browser-state.js').replaceAll('export function', 'function') + source('shared/external-activity.js').replaceAll('export function', 'function');
-  const ui = source('ui/external-browser-ui.js').replace(/^import .*;$/gm, '');
+  const stripExports = (code) => code.replaceAll('export function', 'function').replace(/export\s*\{[\s\S]*?\};?/g, '');
+  const helpers = stripExports(source('shared/external-browser-state.js')) + stripExports(source('shared/external-activity.js'));
+  const ui = stripExports(source('ui/external-browser-ui.js').replace(/^import .*;$/gm, ''));
   await win.eval(`(async () => { ${helpers}\n${ui}\nwindow.refreshUx = refresh; })()`);
   return { win, sent, set: (patch) => { state = { ...state, ...patch }; }, allow: (value) => { allowed = value; }, refresh: () => win.refreshUx() };
 }

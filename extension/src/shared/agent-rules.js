@@ -1,4 +1,5 @@
-const AGENT_RULES = {
+// Generated from agent-rules.json. Shared tests verify this module and the Python copy.
+export const AGENT_RULES = {
   "version": 1,
   "consent": {
     "allow": "privacy|terms|data (?:processing|protection)",
@@ -12,13 +13,10 @@ const AGENT_RULES = {
     "allow_reask": false
   },
   "typed_links": {
-    "pattern": `https?://[^\\s<>"')\\]]+`,
+    "pattern": "https?://[^\\s<>\"')\\]]+",
     "allowed_scheme": "https://",
     "max_links": 10,
     "trailing_punctuation": ".,;:!?",
     "match": "exact_normalized_url"
   }
-};
-export {
-  AGENT_RULES
 };

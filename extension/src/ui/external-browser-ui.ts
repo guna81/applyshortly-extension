@@ -59,9 +59,10 @@ function renderAttention(data: any) {
     const card = el("div", "ask");
     card.append(el("b", "", "Review the new answers"), el("p", "muted", "Your assistant wants to submit these. Read each one first."));
     const list = el("ul", "answers");
-    for (const item of data.pendingReview.fields ?? []) list.append(el("li", "", `${item.label || item.ref}: ${item.value}`));
-    card.append(list, act("Submit this application", async () => {
-      try { await send("approveReview"); }
+    const answers = data.pendingReview.answers ?? (data.pendingReview.fields ?? []).map((f: any) => [f.label || f.ref, f.value]);
+    for (const [key, value] of answers) list.append(el("li", "", `${key}: ${value}`));
+    card.append(list, act("Approve these answers", async () => {
+      try { await send("reviewAnswers"); }
       catch (error: any) { status.textContent = error?.message; }
     }, "primary"));
     nodes.push(card);

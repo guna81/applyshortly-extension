@@ -257,7 +257,7 @@ export interface AgentStepResponse {
   status: "continue" | "ask_user" | "ready_for_review" | "failed";
   actions: AgentAction[];
   message: string;
-  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null; optional?: boolean } | null;
+  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null; optional?: boolean; actions?: ("draft" | "skip" | "on_page")[] } | null;
   focus_query?: string;
   want_screenshot: boolean;
   annotate_screenshot?: boolean;

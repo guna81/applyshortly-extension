@@ -65,12 +65,10 @@ for (const scenario of scenarios) test(`scenario replay: ${scenario.name}`, asyn
   for (const turn of scenario.turns) {
     const observation = structuredClone(scenario.observation);
     for (const reply of turn.replies || [turn.reply]) {
-      // A model that is expected to tick a box (standing consent) ticks every checkbox on the page in the same turn it asks its question.
-      if (turn.expected === "check" && reply.tool === "ask_user" && !reply.checked) queue.push(observation.elements.filter((e) => e.role === "checkbox").map((e) => ({ name: "check", arguments: { ref: e.ref, checked: true } })));
       queue.push(...modelCalls(reply));
     }
     if (turn.ref) observation.elements[0].ref = turn.ref;
-    const result = await planner({ observation, results: [], skip_question: turn.skip_question, user_message: turn.user_message });
+    const result = await planner({ observation, results: [], skip_question: turn.skip_question, user_message: turn.user_message, user_reply: turn.user_reply });
     queue.length = 0;
     if (turn.fetches !== undefined) assert.equal(fetched.length, turn.fetches);
     if (turn.expected === "check") assert.ok(result.actions.some((a) => a.type === "check" && a.checked === true));
@@ -79,6 +77,21 @@ for (const scenario of scenarios) test(`scenario replay: ${scenario.name}`, asyn
       assert.equal(result.actions.length, 0);
       if (turn.expected === "ask") assert.equal(result.question?.kind, "question");
       if (turn.expected === "no_reask") assert.notEqual(result.question?.kind, "question");
+    }
+    if (turn.expected_ref) {
+      assert.equal(result.actions.length, 1);
+      assert.equal(result.actions[0].ref, turn.expected_ref);
+    }
+    if (turn.readback) {
+      const action = result.actions[0];
+      assert.ok(action.command_id);
+      const next = structuredClone(observation);
+      next.observation_id += "-readback";
+      next.elements.find((e) => e.ref === action.ref).pressed = true;
+      const verified = await planner({ observation: next, results: [{ index: 0, ok: true, command_id: action.command_id, result: { verified: true, value_after: true } }] });
+      assert.equal(verified.actions.length, 0);
+      assert.notEqual(verified.question?.kind, "question");
+      assert.ok(verified.filled.some((field) => field.label === "Are you comfortable working in a hybrid setup?"));
     }
   }
 });

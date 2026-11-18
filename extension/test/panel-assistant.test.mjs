@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import { ashbyYesNo, ashbyProviders, ashbyConsent, ashbyReceipt } from "./ashby-fixture.mjs";
 
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
@@ -1422,6 +1422,27 @@ test("controller: the agent's own Draft it for me button goes to the agent, and 
   page.win.close();
 });
 
+test("controller: the agent's fill summary and next question are separate messages", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form: '<form><label>Full name<input required></label><label>Cover letter<textarea></textarea></label></form>',
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "native controller start");
+  const summary = "I've added your name from your profile.";
+  const question = "Would you like to add a cover letter?";
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [summary], filled: [] });
+  await until(() => page.shadow().textContent.includes(summary), "agent summary");
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [summary], filled: [{ label: "Full name", value: "Profile name" }], question: { kind: "question", text: question, ref: "cover", actions: ["skip"] } });
+  await until(() => page.shadow().textContent.includes(question), "agent question");
+  const summaryBubble = [...page.shadow().querySelectorAll(".bubble.assistant")].find((b) => b.textContent.includes(summary));
+  const questionCard = page.shadow().querySelector(".question");
+  assert.ok(summaryBubble && !summaryBubble.textContent.includes(question));
+  assert.ok(questionCard.textContent.includes(question) && !questionCard.textContent.includes(summary));
+  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Leave it blank"]);
+  page.win.close();
+});
+
 test("controller: after the agent finishes, 'I agree, tick it' ticks the box on the page instead of going to the agent", async () => {
   const form = `<label for="name">Full name</label><input id="name" required>
     <label><input type="checkbox" id="consent" required> I agree to the privacy policy</label>
@@ -1579,14 +1600,18 @@ for (const presentBeforeAttempt of [false, true]) {
 }
 
 
-test("verified agent fills appear in chat even when its status stays running", async () => {
+test("agent-based fills do not create a static checklist in chat", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   page.start();
   await until(() => page.shadow()?.querySelector(".composer"), "panel");
   const update = { type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [] };
   page.message(update);
-  page.message({ ...update, filled: [{ label: "First name", value: "Alex" }] });
-  await until(() => page.shadow().querySelector(".said .filled"), "filled fields in chat");
-  assert.match(page.shadow().querySelector(".said .filled").textContent, /First name: Alex/);
+  page.message({ ...update, log: ["I've added the details I found in your profile."], filled: [{ label: "First name", value: "Alex" }] });
+  await until(() => page.shadow().textContent.includes("I've added the details I found in your profile."), "agent's own summary");
+  assert.equal(page.shadow().querySelector(".said .filled"), null);
   page.win.close();
+});
+
+after(() => {
+  setTimeout(() => process.exit(0), 100);
 });

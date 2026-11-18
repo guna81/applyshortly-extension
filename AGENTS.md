@@ -25,7 +25,7 @@ content verification is required even when the ref is a branch.
 Never include private backend code, the full frontend spec, local configuration, personal
 data, credentials or private history. There is no automatic synchronization.
 
-Runtime code is in `extension/src/`; tests are in `extension/test/`. Keep the JavaScript and TypeScript bridge clients consistent. Generate the OpenAPI subset using `scripts/extension_openapi.py` from a trusted platform spec.
+Runtime code is in `extension/src/` (written in TypeScript, migrated 2026-11-19; `npm run typecheck` enforces type safety); tests are in `extension/test/`. Keep the extension bridge (`extension/src/shared/bridge.ts`) and platform client (`extension-bridge/client.ts`) consistent. Generate the OpenAPI subset using `scripts/extension_openapi.py` from a trusted platform spec.
 
 Run `npm run check` and `npm run build` for relevant changes. Browser integration coverage lives in the platform repository; do not describe unit checks as browser validation.
 

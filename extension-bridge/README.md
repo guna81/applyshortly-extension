@@ -1,8 +1,7 @@
 # Extension bridge (Tier B)
 
 The contract between the platform and a companion Chrome extension. The platform provides the API.
-The extension that uses it is in [`../extension/`](../extension/README.md); its `src/bridge.js` is a
-plain-JS port of `client.ts`. `client.ts` and `examples/autofill.ts` remain a typed starting point
+The extension that uses it is in [`../extension/`](../extension/README.md); its `src/shared/bridge.ts` (migrated to TypeScript on 2026-11-19) shares the same client contract as `client.ts`. `client.ts` and `examples/autofill.ts` remain a typed starting point
 for writing another.
 
 Tier B is for postings that Tier A (server-side Playwright for Greenhouse, Lever and Ashby) can't
