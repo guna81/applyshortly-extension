@@ -631,7 +631,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
         throw error;
       }
     }, (question) => b.suggestAnswer({ question, application_id: id, allow_generate: false }), owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } })
-      : (body) => b.agentStep({ ...body, extension_engine: owner.extensionEngine }),
+      : (body) => b.agentStep({ ...body, extension_engine: owner.extensionEngine, fill_optional: liveFillOptional(owner), allow_drafts: liveAiDrafts(owner), auto_apply: autoSubmit || liveAutoApply(owner) }),
     files: agentFiles(p, app),
     notify: async (message) => {
       // Keep approval in this background run across page navigation, and deliver it

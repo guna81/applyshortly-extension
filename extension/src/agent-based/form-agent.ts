@@ -256,10 +256,8 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             const missing = guards.missingRequired(obs, st.gs);
             if (missing.length) { put(`Required fields are still unanswered: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill them from supported facts or ask the user before calling done.`, true); refused += 1; continue; }
           }
-          if (!inspectOnly && options.fillOptional !== false) {
-            const missing = guards.emptyOptional(obs, st.gs);
-            if (missing.length) { put(`Optional fields still need attention: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill supported answers, or ask the user once about each missing answer before calling done.`, true); refused += 1; continue; }
-          }
+          // Optional applicability is a model decision (the full attention list is in the snapshot).
+          // Refusing every blank optional follow-up forces questions even when its parent excludes it.
           terminal = { kind: "done", id: c.id, summary: message.result.message }; results.push({ id: c.id, content: "", is_error: false }); results.pop(); ended = true;
         } else if (ACTION_TOOLS.has(c.name)) {
           if (ALONE.has(ALIAS[c.name] ?? c.name) && actions.length) { put("Not executed: this call must be alone in its message; the actions above run first.", true); ended = true; continue; }

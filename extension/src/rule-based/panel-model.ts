@@ -243,7 +243,7 @@
       // The agent chose its buttons itself (ask_user actions); nothing is added or explained by code.
       const named: Record<string, string> = { draft: DRAFT_REPLY, skip: SKIP_REPLY, on_page: ON_PAGE_REPLY };
       const actions = (question.actions ?? []).map((a: string) => named[a]).filter(Boolean);
-      return { text: "", question: { label: question.text }, choices: [...(question.choices ?? []).slice(0, MAX_CHOICES), ...actions], draftable: actions.includes(DRAFT_REPLY) };
+      return { text: "", question: { label: question.text }, choices: [...(question.choices ?? []), ...actions], draftable: actions.includes(DRAFT_REPLY) };
     }
     if (question.kind === "question") {
       const choices = (question.choices ?? []).slice(0, MAX_CHOICES);

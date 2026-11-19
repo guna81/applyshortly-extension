@@ -263,6 +263,7 @@ test("fill_form expands into one action per field, each vetted; results come bac
   const obs = observation([el("e1", "textbox", "First name"), el("e2", "textbox", "Last name")]);
   const plan = await step(body(obs));
   assert.equal(plan.actions.length, 2);
+  assert.deepEqual(plan.actions.map((a) => a.ref), ["e1", "e2"], "batch preserves page order");
   await step(body(observation(obs.elements.map((e) => ({ ...e, value: "x" })), { observation_id: "obs-2" }), {
     results: plan.actions.map((a, index) => ({ index, ok: true, command_id: a.command_id, result: { verified: true, value_after: "x" } })),
   }));
@@ -385,6 +386,7 @@ test("the system message asks for one question about each optional field the fac
   const system = seen[0].messages[0].content;
   assert.match(system, /optional field[^.]*(?:ask|question)[^.]*once/i);
   assert.match(system, /top to bottom, in page order/i);
+  assert.match(system, /separate tool calls in page order, including uploads/i);
   assert.doesNotMatch(system, /after the required/i);
   assert.doesNotMatch(system, /two plain sentences/i);
 });
@@ -427,24 +429,22 @@ test("Draft it for me lets the agent write that one field with the switch off", 
 });
 
 
-test("done cannot silently skip an optional dropdown when filling optional fields is enabled", async () => {
-  const { request, seen } = scripted(
-    { tool_calls: [call("done", { summary: "Done" })] },
-    { tool_calls: [call("ask_user", { question: "How did you hear about us?", ref: "e1" })] });
+test("optional dropdowns remain in the model attention checklist and are asked before completion", async () => {
+  const { request, seen } = scripted({ tool_calls: [call("ask_user", { question: "How did you hear about us?", ref: "e1" })] });
   const plan = await make(request)(body(observation([el("e1", "combobox", "How did you hear about us?", { required: false })])));
   assert.equal(plan.status, "ask_user");
-  assert.match(seen[1].look.results[0].content, /Optional fields still need attention/);
+  assert.match(seen[0].messages.at(-1).content, /How did you hear about us/);
+  assert.match(seen[0].messages[0].content, /every applicable enabled optional field must be answered or offered once/);
 });
 
-
-test("an available optional cover letter must be handled before done", async () => {
-  const { request } = scripted({ tool_calls: [call("done", { summary: "Done" })] }, { tool_calls: [call("upload", { ref: "e1", file: "cover_letter" })] });
+test("an available optional cover letter is offered to the model and can be uploaded", async () => {
+  const { request, seen } = scripted({ tool_calls: [call("upload", { ref: "e1", file: "cover_letter" })] });
   const step = formAgent({}, profile, { cover_letter: "Synthetic test cover letter" }, request, undefined, true, undefined, { vision: false });
   const plan = await step(body(observation([el("e1", "file", "Cover letter", { required: false })])));
+  assert.match(seen[0].messages.at(-1).content, /Cover letter/);
   assert.equal(plan.actions[0].type, "upload");
   assert.equal(plan.actions[0].file, "cover_letter");
 });
-
 
 test("done is refused until the missing required field has been addressed", async () => {
   const { request, seen } = scripted({ tool_calls: [call("done", { summary: "Done" })] }, { tool_calls: [call("ask_user", { question: "What is your country of residence?", ref: "e1" })] });
@@ -544,12 +544,12 @@ test("field questions require a current ref; a bound skip settles the optional f
   assert.equal((await step(body(obs, { skip_question: true }))).status, "ready_for_review");
 });
 
-test("completion feedback disambiguates duplicate labels by ref", async () => {
+test("completion attention disambiguates duplicate labels by ref", async () => {
   const { request, seen } = scripted(
     { tool_calls: [call("done", { summary: "Ready." })] },
     { tool_calls: [call("ask_user", { question: "Other details?", ref: "e2" })] });
   await make(request)(body(observation([el("e1", "textbox", "Other", { required: false }), el("e2", "textbox", "Other", { required: false })])));
-  const result = seen[1].look.results[0].content;
+  const result = seen[0].messages.at(-1).content;
   assert.match(result, /"ref":"e1"/); assert.match(result, /"ref":"e2"/);
 });
 
@@ -642,4 +642,19 @@ test("delta keeps navigation discoverable and unanswered button-choice groups fu
   assert.ok(snap.elements.some((e) => e.ref === "next" && e.name === "Continue"));
   assert.ok(snap.elements.some((e) => e.ref === "yes" && e.group === "Relocate?" && e.pressed === false));
   assert.ok(snap.elements.some((e) => e.ref === "no" && e.group === "Relocate?" && e.pressed === false));
+});
+
+test("model completion can leave optional follow-ups blank but cannot exclude required fields", async () => {
+  const optional = scripted({ tool_calls: [call("done", { summary: "Review and submit." })] });
+  assert.equal((await make(optional.request)(body(observation([el("e1", "textbox", "If yes, details", { required: false })])))).status, "ready_for_review");
+  const required = scripted({ tool_calls: [call("done", { summary: "Review." })] }, { tool_calls: [call("ask_user", { ref: "e1", question: "What details are required?" })] });
+  assert.equal((await make(required.request)(body(observation([el("e1", "textbox", "Details")])))).status, "ask_user");
+  assert.match(required.seen[1].look.results[0].content, /Required fields/);
+});
+
+test("required conditional follow-ups must be resolved before later questions", async () => {
+  const { request, seen } = scripted({ tool_calls: [call("ask_user", { ref: "e1", question: "What details should be entered?" })] });
+  await make(request)(body(observation([el("e1", "textbox", "If yes, details")])));
+  assert.match(seen[0].messages[0].content, /resolve it NOW before any later question/);
+  assert.match(seen[0].messages[0].content, /Never defer a required conditional field until done/);
 });

@@ -36,7 +36,7 @@ export const TOOL_CATALOG = [
   tool("read_network", "Read recent failed requests: status, method and URL without query (read-only)."),
   tool("ask_user", "Ask one specific field question. Put the question and UI buttons in the assistant message/actions JSON, not tool arguments. ALWAYS bind the current field or choice option ref.", { ref: REF }, ["ref"]),
   tool("posting_gone", "The job posting is closed or removed (a 404 / \"not found\" page, \"position filled\", \"no longer accepting applications\") so there is no application form to fill. Ends the run; never use it for a form that merely failed to load.", {}),
-  tool("done", "Everything the agent can fill is done: hand over for the candidate's review. Never submits.", {}),
+  tool("done", "Applicable required and enabled optional fields are settled; leave inapplicable conditional follow-ups blank. Hand over for review. Never submits.", {}),
 ];
 
 /** The one observed control under a screenshot point (image pixels), or an error: ambiguous points are refused. */

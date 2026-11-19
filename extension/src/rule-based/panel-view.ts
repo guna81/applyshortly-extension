@@ -78,10 +78,11 @@
       .p, .pill { pointer-events: auto; }
       :host([data-applyshortly-executing]) .p, :host([data-applyshortly-executing]) .pill { pointer-events: none; }
       .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 380px;
-        max-width: calc(100vw - 32px); min-height: min(520px, calc(100vh - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+        max-width: calc(100vw - 32px); height: min(680px, calc(100vh - 32px)); min-height: 0; max-height: calc(100vh - 32px); display: flex; flex-direction: column;
         background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
         box-shadow: 0 18px 48px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.08); overflow: hidden;
         }
+      .p > :not(.body) { flex-shrink: 0; }
       .p.enter { animation: in .18s ease-out; }
       @keyframes in { from { opacity: 0; transform: translateY(8px); } }
       .h { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 14px; cursor: grab; touch-action: none; user-select: none; }
@@ -102,7 +103,7 @@
       .bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .3s; }
       .bar.full i { background: var(--good); }
       .meta { color: var(--muted); font-size: 12px; }
-      .body { flex: 1 1 auto; overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
+      .body { flex: 1 1 auto; min-height: 0; overflow: auto; border-top: 1px solid var(--line); padding: 10px 12px 12px; }
       .chip { flex: none; font-size: 12px; padding: 1px 7px; border-radius: 99px; background: var(--bg);
         color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
       .recheck { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
@@ -158,7 +159,7 @@
       .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
       .p:focus { outline: none; }
       .p.left, .pill.left { right: auto; left: 16px; }
-      .p.compact { width: 340px; min-height: 0; }
+      .p.compact { width: 340px; height: auto; min-height: 0; }
       .p.compact .body, .p.compact .composer { display: none; }
       .icon svg { width: 18px; height: 18px; }
       .why { padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
@@ -188,9 +189,12 @@
       .question .note { font-size: 12px; color: var(--muted); }
       .question .quick { padding-top: 4px; }
       .said .warn { margin: 0; color: var(--bad); font-size: 12px; }
-      .quick { display: flex; flex-wrap: wrap; gap: 6px; }
+      .quick { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
+      .quick.options-list { flex-direction: column; flex-wrap: nowrap; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
+      .quick.options-list button { flex-shrink: 0; width: 100%; text-align: left; border-radius: 8px; padding: 8px 10px; }
       .quick button { font: inherit; font-size: 12.5px; border-radius: 99px; padding: 4px 11px; cursor: pointer;
-        border: 1px solid var(--accent); color: var(--accent); background: var(--bg); }
+        border: 1px solid var(--accent); color: var(--accent); background: var(--bg);
+        min-width: 0; max-width: 100%; box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
       .quick button:hover:not(:disabled) { background: var(--accent-soft); }
       .quick button:disabled { opacity: .6; cursor: default; }
       .thinking { align-self: flex-start; padding-left: 32px; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
@@ -436,22 +440,25 @@
       const working = agentLive();
       const paused = agent?.status === "paused";
       const busy = agentBusy() && !paused;
+      const completed = agent?.status === "ready";
       const full = ctl.submittedReported || summary.progress >= 1;
       const headline = ctl.submittedReported ? "Saved in ApplyShortly ✓"
         : agent && ["stopped", "failed"].includes(agent.status) ? "Stopped: review the form"
+        : completed ? "Ready for your review"
         : working ? (agent.status === "waiting" ? "Needs you" : agent.status === "paused" ? "Paused" : "Working through the form…")
         : summary.headline;
       // The page scan is not repeated while the agent works: use the agent's own live count until it is.
       const filledCount = agent?.filled_count ?? 0;
       // Before the agent has read the form, the page's own quick count stands in.
       const early = working && !summary.total && !agent?.field_total ? ctl.pageCount : null;
-      const total = summary.total || (working ? agent?.field_total || early?.total || 0 : 0);
-      const live = working ? Math.max(summary.answered, filledCount, agent?.field_answered ?? 0, early?.answered ?? 0) : summary.answered;
+      const total = summary.total || (working || completed ? agent?.field_total || early?.total || 0 : 0);
+      const live = working ? Math.max(summary.answered, filledCount, agent?.field_answered ?? 0, early?.answered ?? 0) : completed ? Math.max(summary.answered, agent?.field_answered ?? 0, filledCount) : summary.answered;
       const done = full && total ? total : total ? Math.min(live, total) : live;
       const pct = full ? 100 : total ? Math.round((done / total) * 100) : 0;
       const reading = busy && !full && !total && !filledCount;
       const unknownTotal = busy && !full && !total && filledCount > 0;
       const meta = ctl.submittedReported ? "Tracked in ApplyShortly"
+        : completed ? "Review your answers on the form before submitting."
         : paused ? "Paused. Press Resume to continue."
         : reading ? "Reading the form to see what it asks…"
         : !total ? (working || filledCount ? `${filledCount} ${filledCount === 1 ? "step" : "steps"} done` : "Try again once the form has loaded")
@@ -468,15 +475,17 @@
         el("div", { class: "meta", role: "status" }, meta));
     }
 
-    /** While it clicks through: the latest step. Every step is also told in the chat, which is the history. */
+    /** A transient status describes current work, never repeats an earlier assistant reply. */
     function agentActivity() {
       if (!ctl.agent || !agentBusy()) return null;
-      const steps = ctl.agent.log ?? [];
-      if (!steps.length && ctl.agent.status !== "paused") return null;
       const paused = ctl.agent.status === "paused";
-      // An automatic pause (stalled page, call limit) explains itself in its last log line.
-      const why = paused && /Paused to avoid|temporarily unavailable/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
-      return el("div", { class: "thinking", role: "status" }, paused ? why : steps.at(-1));
+      const steps = ctl.agent.log ?? [];
+      const why = /Paused to avoid|temporarily unavailable/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
+      const replied = ctl.chat.lines.some((line) => line.role === "user");
+      const text = paused ? why : replied ? "Applying your answer and checking the form…"
+        : steps.length ? "Filling and checking the form…"
+        : "Reading the form and matching your profile. The first fill may take a moment…";
+      return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), text);
     }
 
     const STEP_ICON = { done: "✓", error: "✕", warn: "!" };
@@ -573,7 +582,7 @@
         // Like the website's chat: a bot avatar, the message, what it filled, then the question it asks.
         const q = line.question;
         const quick = i === lines.length - 1 && line.choices?.length
-          ? el("div", { class: "quick", role: "group", "aria-label": "Quick replies" },
+          ? el("div", { class: `quick${line.choices.length > 4 || line.choices.some((c) => String(c).length > 60) ? " options-list" : ""}`, role: "group", "aria-label": "Quick replies" },
             line.choices.map((c) => el("button", { type: "button", disabled: ctl.chat.pending || agentBusy(), onclick: () => void ctl.askAssistant(c) }, c)))
           : null;
         log.append(el("div", { class: line.step ? "turn step-turn" : "turn" },
@@ -590,10 +599,7 @@
       });
       if (ctl.chat.pending) log.append(el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), "Thinking…"));
       else {
-        // The chat already shows each step; don't repeat the last one as a status line.
-        const lastBot = [...lines].reverse().find((l) => l.role !== "user")?.text;
-        const lastStep = ctl.agent?.log?.at(-1);
-        const activity = lastBot && lastStep && String(lastBot).trim() === String(lastStep).trim() ? null : agentActivity();
+        const activity = agentActivity();
         if (activity) log.append(activity);
       }
       return log;
@@ -785,6 +791,8 @@
           btn("Not yet", () => { view.confirmSubmit = false; render(); }, "ghost"));
         if (working) {
           p.append(composer(), agentControls());
+        } else if (!ctl.submittedReported && ctl.agent && !ctl.state?.ctx) {
+          p.append(composer(), el("div", { class: "f" }, el("small", { class: "meta" }, "Review and submit using the form on this page.")));
         } else if (!ctl.submittedReported && ctl.state?.ctx && !ctl.state.postingGone) {
           if (view.countdown) p.append(countdown());
           p.append(composer());

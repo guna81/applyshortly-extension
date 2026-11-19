@@ -1615,3 +1615,47 @@ test("agent-based fills do not create a static checklist in chat", async () => {
 after(() => {
   setTimeout(() => process.exit(0), 100);
 });
+
+test("agent status explains the initial wait and long choices preserve the full answer", async () => {
+  const page = panelPage(() => null, {
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [] });
+  await until(() => page.shadow().querySelector(".thinking")?.textContent.includes("first fill"), "first-fill explanation");
+  const choices = Array.from({ length: 12 }, (_, i) => `${i}: ${"A detailed choice with complete wording. ".repeat(4)}`.trim());
+  const oldMessage = "I filled the supported details.";
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [oldMessage], question: { kind: "question", text: "Select an answer", ref: "choice", choices } });
+  await until(() => page.shadow().querySelector(".quick.options-list"), "bounded option list");
+  assert.equal(page.shadow().querySelector(".thinking"), null);
+  const buttons = [...page.shadow().querySelectorAll(".quick.options-list button")];
+  assert.deepEqual(buttons.map((b) => b.textContent), choices);
+  buttons[7].click();
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.text === choices[7]), "full selected answer delivered");
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [oldMessage] });
+  await until(() => page.shadow().querySelector(".thinking")?.textContent.includes("Applying your answer"), "working indicator");
+  assert.equal(page.shadow().querySelectorAll(".thinking").length, 1);
+  assert.ok(!page.shadow().querySelector(".thinking").textContent.includes(oldMessage));
+  page.win.close();
+});
+
+test("agent ready header survives an empty legacy scan and long chat stays bounded", async () => {
+  const page = panelPage(() => null, { context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }) });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, field_total: 30, field_answered: 30, log: ["Review your answers before submitting."] });
+  await until(() => /Ready for your review/.test(page.shadow().querySelector(".hero strong")?.textContent), "ready header");
+  assert.doesNotMatch(page.shadow().querySelector(".hero").textContent, /No fields found|form has loaded/);
+  assert.ok(page.shadow().querySelector(".composer"));
+  page.win.close();
+});
+
+test("a ready agent without a legacy form context keeps the composer and on-page footer", async () => {
+  const page = panelPage(() => null, { context: () => { throw new Error("Legacy scan context unavailable"); } });
+  page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, field_total: 30, field_answered: 26, log: ["Review your answers before submitting."] });
+  await until(() => page.shadow()?.querySelector(".composer"), "composer without legacy context");
+  assert.match(page.shadow().querySelector(".f").textContent, /submit using the form/);
+  assert.match(page.shadow().querySelector(".hero strong").textContent, /Ready for your review/);
+  page.win.close();
+});
