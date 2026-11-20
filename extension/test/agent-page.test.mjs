@@ -733,3 +733,56 @@ test("matchOption deduplicates options when aria-controls and aria-owns referenc
   assert.equal(matched.text, "1 month");
   win.close();
 });
+
+test("Google Places pac-target-input reports popup/expanded/required and formats .pac-item options with comma separation", () => {
+  const { A, observe, win } = page(`
+    <label for="currentLocation">Current Location</label>
+    <input id="currentLocation" class="form-control required pac-target-input" value="Trichy" />
+    <div class="pac-container">
+      <div class="pac-item"><span class="pac-icon"></span><span class="pac-item-query"><span class="pac-matched">Trichy</span></span><span>Tamil Nadu, India</span></div>
+      <div class="pac-item"><span class="pac-icon"></span><span class="pac-item-query"><span class="pac-matched">Teppakulam</span></span><span>Tamil Nadu, India</span></div>
+    </div>
+  `);
+  const obs = observe();
+  const loc = obs.elements.find((e) => e.name === "Current Location");
+  assert.ok(loc);
+  assert.equal(loc.required, true);
+  assert.equal(loc.popup, true);
+  assert.equal(loc.expanded, true);
+  const opt = obs.elements.find((e) => e.role === "option" && e.group === "Current Location");
+  assert.equal(opt?.name, "Trichy, Tamil Nadu, India");
+  const matched = A.matchOption(loc.ref, "Trichy, Tamil Nadu, India", false, false);
+  assert.equal(matched.ok, true);
+  assert.equal(matched.text, "Trichy, Tamil Nadu, India");
+  // Lazy Google Places: .pac-container created hidden after first focus; re-notifying focus reveals it.
+  const pac = win.document.querySelector(".pac-container");
+  const inp = win.document.querySelector("#currentLocation");
+  pac.style.display = "none";
+  inp.focus();
+  inp.addEventListener("focus", () => { pac.style.display = "block"; });
+  assert.equal(A.pickerOpen(loc.ref, false, true), true);
+  assert.equal(pac.style.display, "block");
+  win.close();
+});
+
+test("when multiple Google Places inputs exist, only the focused input claims expanded and .pac-item options", () => {
+  const { observe, win } = page(`
+    <label for="cur">Current Location</label>
+    <input id="cur" class="pac-target-input" value="Trichy" />
+    <label for="pref">Preferred Location</label>
+    <input id="pref" class="pac-target-input" value="" />
+    <div class="pac-container">
+      <div class="pac-item"><span class="pac-icon"></span><span class="pac-item-query">Trichy</span><span>Tamil Nadu, India</span></div>
+    </div>
+  `);
+  win.document.querySelector("#cur").focus();
+  const obs = observe();
+  const cur = obs.elements.find((e) => e.name === "Current Location");
+  const pref = obs.elements.find((e) => e.name === "Preferred Location");
+  assert.equal(cur?.expanded, true);
+  assert.notEqual(pref?.expanded, true);
+  const options = obs.elements.filter((e) => e.role === "option");
+  assert.equal(options.length, 1);
+  assert.equal(options[0].group, "Current Location");
+  win.close();
+});

@@ -86,7 +86,12 @@ export function describeResult(result: any): string {
   const shown = result.result;
   if (shown && typeof shown === "object") {
     const after = shown.value_after ?? shown.value ?? shown.checked;
-    return `ok${shown.changed ? " (page formatted value; check)" : shown.verified === false ? " (page did not show the value)" : shown.verified ? " (verified)" : ""}${after !== undefined ? `, now ${JSON.stringify(cut(after, 80))}` : ""}`;
+    const status = shown.changed ? " (page formatted value; check)"
+      : shown.picker_open ? " (suggestions list opened; pick an option)"
+      : shown.search_pending ? " (typed into popup; check next observation for suggestions)"
+      : shown.verified === false ? " (page did not show the value)"
+      : shown.verified ? " (verified)" : "";
+    return `ok${status}${after !== undefined ? `, now ${JSON.stringify(cut(after, 80))}` : ""}`;
   }
   return "ok";
 }
