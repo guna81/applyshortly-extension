@@ -27,6 +27,7 @@ function setMsg(text: string, kind = "") {
   $("formMsg").className = kind;
 }
 let customPicked = false;
+let clearKeyFlag = false;
 function setCustomStatus(text: string, kind = "") {
   $("customStatus").textContent = text;
   $("customStatus").className = kind;
@@ -73,7 +74,13 @@ async function test() {
     const custom = await send("customAISettings");
     currentCustomAI = custom;
     renderAI(s.ai);
-    if (custom?.enabled) $("aiMode").textContent = `Custom endpoint: ${custom.model}. AI chat, drafts and Agent based form assistant planning are billed by your provider.`;
+    if (custom?.enabled) {
+      $("aiMode").textContent = `Custom endpoint: ${custom.model}. AI chat, drafts and Agent based form assistant planning are billed by your provider.`;
+      if ($("customKeyHint")) {
+        $("customKeyHint").hidden = !custom.hasKey;
+        $("customKey").placeholder = custom.hasKey ? "Leave blank to keep saved key" : "";
+      }
+    }
     return true;
   }
   $("aiMode").textContent = "Connect your account to see AI settings.";
@@ -105,13 +112,24 @@ async function load() {
   const custom = await send("customAISettings");
   if (custom?.enabled) {
     $("customDetails").open = true;
-    $("providerPreset").value = Object.keys(PROVIDER_PRESETS).find((key) => PROVIDER_PRESETS[key].baseUrl === custom.baseUrl) || "custom";
+    const presetKey = Object.keys(PROVIDER_PRESETS).find((key) => (PROVIDER_PRESETS as any)[key].baseUrl === custom.baseUrl) || "custom";
+    $("providerPreset").value = presetKey;
     $("customBaseUrl").value = custom.baseUrl;
+    updatePresetVisibility(presetKey);
     $("customModel").value = custom.model;
     const support = providerSupport(custom);
     $("customSupportsTools").checked = support.tools;
     $("customSupportsVision").checked = support.vision;
-    $("customStatus").textContent = "Custom provider is active for AI chat, drafts and Agent based form assistant planning. Re-enter the key when saving changes.";
+    if (custom.hasKey) {
+      $("customKeyHint").hidden = false;
+      $("customKey").placeholder = "Leave blank to keep saved key";
+    } else {
+      $("customKeyHint").hidden = true;
+      $("customKey").placeholder = "";
+    }
+    setCustomStatus(`Custom provider is active (${custom.model}).`, "good");
+  } else {
+    updatePresetVisibility($("providerPreset")?.value || "openai");
   }
 }
 /** Checks the stored connection; without one, silently reuses the website sign-in. */
@@ -253,11 +271,28 @@ $("manageAI").addEventListener("click", async () => { try { await send("openWebs
 $("openWebsite").addEventListener("click", async () => { try { await send("openWebsite"); } catch (error: any) { setMsg(error?.message, "bad"); } });
 void load().catch((error: any) => showConn("bad", "Could not load settings", error?.message));
 
+$("clearSavedCustomKey")?.addEventListener("click", () => {
+  clearKeyFlag = true;
+  if ($("customKeyHint")) $("customKeyHint").hidden = true;
+  $("customKey").value = "";
+  $("customKey").placeholder = "Key cleared (will be removed on Save)";
+  setCustomStatus("Saved key staged for removal. Save to apply.", "wait");
+});
+
+function updatePresetVisibility(presetKey: string) {
+  const isCustom = presetKey === "custom";
+  if ($("customBaseUrlWrapper")) $("customBaseUrlWrapper").hidden = !isCustom;
+  if ($("customBaseUrl")) $("customBaseUrl").required = isCustom;
+}
+
 $("customAIForm").addEventListener("submit", async (event: any) => {
   event.preventDefault();
   if (!$("customAIForm").reportValidity()) return;
   try {
-    const raw = $("customBaseUrl").value.trim();
+    const presetKey = $("providerPreset").value;
+    const preset = (PROVIDER_PRESETS as any)[presetKey];
+    const raw = (preset?.baseUrl || $("customBaseUrl").value).trim();
+    if (!raw) throw new Error("Enter an API base URL before saving.");
     const url = new URL(raw);
     if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) || url.username || url.password || url.search || url.hash) throw new Error("Use an HTTPS URL or a local HTTP URL without credentials, query or fragment.");
     const allowed = await chrome.permissions.request({ origins: [`${url.origin}/*`] });
@@ -265,45 +300,97 @@ $("customAIForm").addEventListener("submit", async (event: any) => {
     $("deleteRetainedKey").disabled = true;
     await send("saveCustomAI", {
       baseUrl: raw,
-      model: $("customModel").value.trim() || PROVIDER_PRESETS[$("providerPreset").value]?.model || "",
+      model: $("customModel").value.trim() || preset?.model || "",
       apiKey: $("customKey").value.trim(),
+      clearKey: clearKeyFlag,
       supportsTools: $("customSupportsTools").checked,
       supportsVision: $("customSupportsVision").checked,
     });
     $("customKey").value = "";
-    $("customStatus").textContent = "Custom provider saved and active for AI chat, drafts and Agent based form assistant planning.";
+    clearKeyFlag = false;
+    setCustomStatus("Custom provider saved and active for AI chat, drafts and Agent based form assistant planning.", "good");
     await test();
-  } catch (error: any) { $("customStatus").textContent = error?.message; }
+  } catch (error: any) { setCustomStatus(error?.message, "bad"); }
 });
+
 $("customTest").addEventListener("click", async () => {
-  setCustomStatus("Testing saved model and key…");
   try {
-    await send("testCustomAI");
-    setCustomStatus("Connection successful. You can now delete this provider's retained server key.", "good");
+    const presetKey = $("providerPreset").value;
+    const preset = (PROVIDER_PRESETS as any)[presetKey];
+    const raw = (preset?.baseUrl || $("customBaseUrl").value).trim();
+    if (!raw) throw new Error("Enter an API base URL before testing.");
+    const url = new URL(raw);
+    if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) || url.username || url.password || url.search || url.hash) {
+      throw new Error("Use an HTTPS URL or a local HTTP URL without credentials, query or fragment.");
+    }
+    const origin = `${url.origin}/*`;
+    const allowed = await chrome.permissions.request({ origins: [origin] });
+    if (!allowed) throw new Error("Provider access was not granted.");
+
+    const model = $("customModel").value.trim() || preset?.model || "";
+    if (!model) throw new Error("Enter a model identifier before testing.");
+
+    setCustomStatus(`Testing connection to ${model}…`, "wait");
+    $("customTest").disabled = true;
+
+    await send("testCustomAI", {
+      baseUrl: raw,
+      model,
+      apiKey: clearKeyFlag ? "" : $("customKey").value.trim(),
+      supportsTools: $("customSupportsTools").checked,
+      supportsVision: $("customSupportsVision").checked,
+    });
+    setCustomStatus(`Connection successful! ${model} responded.`, "good");
     $("deleteRetainedKey").disabled = false;
+  } catch (error: any) {
+    setCustomStatus(error?.message || "Connection failed.", "bad");
+  } finally {
+    $("customTest").disabled = false;
+  }
+});
+
+$("customDisable").addEventListener("click", async () => {
+  try {
+    await send("disableCustomAI");
+    customPicked = false;
+    clearKeyFlag = false;
+    $("customKey").value = "";
+    if ($("customKeyHint")) $("customKeyHint").hidden = true;
+    $("customKey").placeholder = "";
+    setCustomStatus("Switched to ApplyShortly credits.", "good");
+    await test();
   }
   catch (error: any) { setCustomStatus(error?.message, "bad"); }
-});
-$("customDisable").addEventListener("click", async () => {
-  try { await send("disableCustomAI"); customPicked = false; $("customKey").value = ""; $("customStatus").textContent = "Custom provider removed."; await test(); }
-  catch (error: any) { $("customStatus").textContent = error?.message; }
 });
 
 $("providerPreset").addEventListener("change", () => {
   const presetKey = $("providerPreset").value;
-  const preset = PROVIDER_PRESETS[presetKey];
-  $("customBaseUrl").value = preset?.baseUrl || "";
-  $("customModel").value = "";
-  $("customModel").placeholder = preset?.model || "Enter a model identifier";
-  $("customKey").value = "";
+  const preset = (PROVIDER_PRESETS as any)[presetKey];
+  updatePresetVisibility(presetKey);
+
   if (preset) {
+    $("customBaseUrl").value = preset.baseUrl;
+    $("customModel").value = "";
+    $("customModel").placeholder = preset.model || "Enter a model identifier";
     const support = providerSupport(preset as any);
     $("customSupportsTools").checked = support.tools;
     $("customSupportsVision").checked = support.vision;
+    if ($("customKeyLabelText")) $("customKeyLabelText").textContent = "API key";
   } else {
+    if (Object.values(PROVIDER_PRESETS).some((p) => p.baseUrl === $("customBaseUrl").value.trim())) {
+      $("customBaseUrl").value = "";
+    }
+    $("customModel").value = "";
+    $("customModel").placeholder = "Enter a model identifier";
     $("customSupportsTools").checked = true;
     $("customSupportsVision").checked = false;
+    if ($("customKeyLabelText")) $("customKeyLabelText").textContent = "API key (optional for local servers)";
   }
+  $("customKey").value = "";
+  clearKeyFlag = false;
+  const hasSavedKeyForUrl = currentCustomAI?.hasKey && currentCustomAI?.baseUrl === $("customBaseUrl").value.trim();
+  if ($("customKeyHint")) $("customKeyHint").hidden = !hasSavedKeyForUrl;
+  $("customKey").placeholder = hasSavedKeyForUrl ? "Leave blank to keep saved key" : "";
 });
 if (!$("customBaseUrl").value) {
   $("customBaseUrl").value = PROVIDER_PRESETS.openai.baseUrl;
@@ -311,11 +398,12 @@ if (!$("customBaseUrl").value) {
   $("customSupportsTools").checked = support.tools;
   $("customSupportsVision").checked = support.vision;
 }
+updatePresetVisibility($("providerPreset")?.value || "openai");
 
 $("deleteRetainedKey").addEventListener("click", async () => {
   try {
     await send("deleteAIProvider");
     $("deleteRetainedKey").disabled = true;
-    $("customStatus").textContent = "Retained server key deleted. Your on-device provider remains active.";
-  } catch (error: any) { $("customStatus").textContent = error?.message; }
+    setCustomStatus("Retained server key deleted. Your on-device provider remains active.", "good");
+  } catch (error: any) { setCustomStatus(error?.message, "bad"); }
 });

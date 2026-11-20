@@ -219,7 +219,6 @@
 
   const PAGE_ACTION = /\b(?:links?|urls?|web ?sites?|pages?|tabs?|buttons?|click|open|navigate|sign[- ]?in|log[- ]?in|captcha|upload|attach|tick|untick|check ?box(?:es)?|consent)\b/i;
   // A question about one of these is answered by choosing or doing, never by drafted text.
-  const TYPED_ROLES = ["textbox", "textarea", "searchbox"];
 
   // A message that opens like a question or a command is for the agent to act on, not the answer to its question.
   // "fetch data from https://…" must reach it as an instruction, or the sentence itself is typed into the form.
@@ -248,8 +247,7 @@
     if (question.kind === "question") {
       const choices = (question.choices ?? []).slice(0, MAX_CHOICES);
       // A request to open a page, link or button is for the user to act on, never an answer to draft.
-      const typed = !question.role || TYPED_ROLES.includes(question.role);
-      const draft = typed && !choices.length && !PAGE_ACTION.test(question.text ?? "") && (draftable({ kind: "text", label: question.text }) || groundedDraft(question.text));
+      const draft = false;
       // An optional field never blocks: it can be left blank (the agent moves on), not just "filled on the page".
       if (question.optional) {
         const note = choices.length ? "Optional: pick an answer, or leave it blank." : draft ? "Optional: type an answer, I can draft one, or leave it blank." : "Optional: type an answer, or leave it blank.";
@@ -383,7 +381,7 @@
       const first = open[0];
       const all = likelyFirst((first.field.options ?? []).map((o: any) => o.text).filter(Boolean), first.suggestion);
       const options = all.slice(0, MAX_CHOICES);
-      const draft = !options.length && draftable(first.field);
+      const draft = false;
       const required = open.some((r) => r.field.required);
       // Worded like the web app's review chat: a short line, then the question as a card.
       return {
@@ -410,11 +408,7 @@
       const options = (optional.field.options ?? []).map((o: any) => o.text).filter(Boolean);
       const prompt = options.length
         ? { text: `Everything required is filled in. “${bare(optional)}” is optional: pick an answer, or leave it blank.`, choices: [...options.slice(0, MAX_CHOICES - 1), SKIP_REPLY] }
-        : optional.draftAttempted
-          ? { text: `I couldn't draft “${bare(optional)}”. Tell me the details, try drafting again, or leave it blank.`, choices: [DRAFT_REPLY, SKIP_REPLY] }
-        : draftable(optional.field)
-          ? { text: `Everything required is filled in. “${bare(optional)}” is optional, but a good answer helps. Want me to draft one, or tell me what to say?`, choices: [DRAFT_REPLY, SKIP_REPLY] }
-          : { text: `Everything required is filled in. “${bare(optional)}” is optional: tell me what to put, or leave it blank.`, choices: [SKIP_REPLY] };
+        : { text: `Everything required is filled in. “${bare(optional)}” is optional: tell me what to put, or leave it blank.`, choices: [SKIP_REPLY] };
       return { ...prompt, target: optional };
     }
     return null;

@@ -68,6 +68,29 @@ test('a platform call that never answers fails as a transient 408 instead of han
   }
 });
 
+test('agentStep strips local observation.diagnostics before sending to the platform', async () => {
+  const bodies = [];
+  const realFetch = globalThis.fetch;
+  globalThis.chrome = { runtime: { getManifest: () => ({ version: '9.9.9' }) } };
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ status: 'ok' }), { status: 200 });
+  };
+  try {
+    const bridge = new JobHuntBridge('http://x.test', 't');
+    const obs = { url: 'https://x.test', diagnostics: { console: [{ level: 'error' }], network: [] } };
+    const res = await bridge.agentStep({ observation: obs });
+    assert.deepEqual(res, { status: 'ok' });
+    assert.equal('diagnostics' in bodies[0].observation, false);
+    assert.equal(bodies[0].observation.url, 'https://x.test');
+    // Caller's original observation object is not mutated.
+    assert.ok('diagnostics' in obs);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete globalThis.chrome;
+  }
+});
+
 test('the agent model and step calls get the longer agent timeout, others the default', async () => {
   const realFetch = globalThis.fetch;
   const timers = [];

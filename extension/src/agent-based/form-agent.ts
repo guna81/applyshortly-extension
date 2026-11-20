@@ -25,7 +25,7 @@ const OLD_RESULT = 400; // characters kept of a tool result once a newer page me
 export const MAX_INPUT_TOKENS = 1_000_000; // per application run (set 2026-11-18): the input sent to the model, estimated as characters / 4, history included
 const MAX_PAGE_READS = 2;
 // The "Draft it for me" button on the agent's question. A draft request typed in the user's own words is not matched here: the model reads it as the user's say (agent-prompt.js).
-const DRAFT_REQUEST = /^draft it for me\b/i;
+const DRAFT_REQUEST = "Draft it for me";
 const TERMINAL_TOOLS = new Set(["ask_user", "done", "posting_gone"]);
 const UI_ACTIONS = ["draft", "skip", "on_page"];
 const READ_TOOLS = new Set(["find", "read_page", "get_page_text", "screenshot", "read_console", "read_network", "web_fetch"]);
@@ -80,7 +80,7 @@ export interface FormAgentOptions {
  * (the extension submits after done, with a cancellable countdown; the agent itself never submits).
  * `options.state` / `options.onState` restore and save the agent's state; `options.debug` adds what happened to each reply.
  */
-export function formAgent(config: any, profile: any, job: any, request: (config: any, messages: any[], maxTokens: number, look?: any) => Promise<any>, lookup?: (question: string) => Promise<any>, allowDrafts = true, fetchPage: (url: string) => Promise<string> = readPage, options: FormAgentOptions = {}): (body: any) => Promise<any> {
+export function formAgent(config: any, profile: any, job: any, request: (config: any, messages: any[], maxTokens: number, look?: any) => Promise<any>, _lookup?: (question: string) => Promise<any>, allowDrafts = true, fetchPage: (url: string) => Promise<string> = readPage, options: FormAgentOptions = {}): (body: any) => Promise<any> {
   const vision = options.vision !== false;
   const st = options.state ? { ...blankState(), ...clone(options.state) } : blankState();
   const draftsOn = () => (options.allowDrafts === undefined ? allowDrafts !== false : options.allowDrafts !== false);
@@ -137,7 +137,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             : item.type === "options" ? ` ${cut(JSON.stringify(shown ?? null), 1500)}`
             : fresh && ["type", "select", "check"].includes(item.type) && (shown?.value_after ?? shown?.value ?? shown?.checked) === undefined ? `. The page now shows ${JSON.stringify(cut(fresh.value ?? (fresh.checked !== undefined ? String(fresh.checked) : ""), 200))}` : "";
           lines.push(`${r.ok !== false && ["type", "select", "check"].includes(item.type) ? `${item.type} ${item.ref}` : item.desc} → ${r.ok === false ? `failed: ${cut(r.detail, 200)}` : describeResult(r)}${extra}`);
-          if (r.ok === false || shown?.verified === false) error = true;
+          if (r.ok === false || (shown?.verified === false && !shown?.changed)) error = true;
           if (["type", "select", "check"].includes(item.type)) {
             if (r.ok !== false && shown?.verified === true) delete st.unverified[item.ref];
             else st.unverified[item.ref] = true;
@@ -147,7 +147,6 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             const verified = obs.elements.find((e: any) => e.ref === item.ref);
             if (verified) st.verified[item.ref] = JSON.stringify([obs.url, obs.document_id, snapElement(verified)]);
             const field = obs.elements.find((e: any) => e.ref === item.ref);
-            if (item.type === "type" && field && st.gs.draftFor && [guards.identity(obs, field), "*"].includes(st.gs.draftFor)) st.gs.draftFor = null; // the draft they asked for is written
             if (field) st.filled[guards.identity(obs, field)] = { label: cut(field.group || field.name, 500), value: cut(item.value ?? field.value ?? field.name, 200), source: "llm", needs_review: true };
           }
         }
@@ -175,7 +174,10 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
   };
 
   /** The agent could not go on: hand the form back with the agent's own last words, nothing made up here. */
-  const handBack = () => ({ status: "ready_for_review", message: st.messages.findLast((m: any) => m.result?.message)?.result.message ?? "" });
+  const handBack = () => ({
+    status: "ask_user",
+    question: { kind: "blocker", text: "The agent could not continue. Check the form on the page and resume when ready." },
+  });
 
   const State = Annotation.Root({
     messages: Annotation({ reducer: (a: any[], b: any[]) => a.concat(b), default: () => [] }),
@@ -195,7 +197,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
       // A limit on what one application may spend: stop cleanly and hand the form to the user (never a fake provider error).
       if (st.tokens >= MAX_INPUT_TOKENS) {
         note("recovery", { kind: "token_limit", tokens: st.tokens });
-        return { outcome: { status: "ready_for_review", message: `I stopped here: this application has used its limit of about ${MAX_INPUT_TOKENS.toLocaleString("en-US")} input tokens. Please finish the remaining fields on the page yourself and review them before submitting.` } };
+        return { outcome: { status: "failed", failure_code: "agent_budget", message: `I stopped here: this application has used its limit of about ${MAX_INPUT_TOKENS.toLocaleString("en-US")} input tokens. Please finish the remaining fields on the page yourself and review them before submitting.` } };
       }
       st.tokens += Math.ceil((system.length + last.text.length + JSON.stringify(history).length) / 4);
       const raw = await request(config, [{ role: "system", content: system }, { role: "user", content: last.text }], MAX_TOKENS,
@@ -370,16 +372,11 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
   const planStep = async (inputBody: any) => {
     let body = inputBody;
     const obs = normalizeObservation(body.observation);
-    // The "Draft it for me" button on the agent's question: that one field may be written whatever the "Let AI answer" switch says.
-    if (DRAFT_REQUEST.test(String(body.user_reply ?? ""))) {
-      const asked = st.pending.find((p: any) => p.kind === "ask");
-      const field = asked?.ref ? obs.elements.find((e: any) => e.ref === asked.ref) : null;
-      st.gs.draftFor = field ? guards.identity(obs, field) : "*";
+    // The "Draft it for me" button on the agent's question: tells the model to draft that one field regardless of the "Let AI answer" switch.
+    if (String(body.user_reply ?? "") === DRAFT_REQUEST) {
       body = { ...body, user_reply: undefined, user_message: "Draft it for me: write the answer to the pending question yourself, as long as the question asks for, using only my profile, the job and my earlier answers. Never invent legal status, consent, employment, numbers or qualifications; ask if a needed fact is missing." };
     }
-    if (body.user_message) { st.gs.instruction = cut(body.user_message, 2000); st.instructions.push(st.gs.instruction); }
-    // A typed reply is the user's say too: the guard reads it like an instruction, so a model that took it as a request to write the answer may write it.
-    else if (body.user_reply) st.gs.instruction = cut(String(body.user_reply), 2000);
+    if (body.user_message) st.instructions.push(cut(body.user_message, 2000));
     const inspectOnly = body.inspect_only === true;
     inspecting = inspectOnly;
     st.typedLinks = addTypedLinks(addTypedLinks(st.typedLinks, body.user_message), body.user_reply);
@@ -387,13 +384,8 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     // A sign-in or verification the user must do on the page is theirs; the model is not asked.
     if (obs.blockers?.some((b: string) => b !== "captcha" || !hasApplicationFields(obs))) return { ...base, status: "ask_user", message: "", question: { kind: "blocker", text: "Complete the sign-in or verification on the page, then Continue." } };
     const { results, notes } = deliver(body, obs);
-    // Saved answers from the user's earlier applications, looked up once per label.
-    if (lookup) {
-      const labels = [...new Set(obs.elements.filter((e: any) => guards.formRoles.includes(e.role) && guards.open(obs, e) && e.name).map((e: any) => cut(e.group || e.name, 1000)))].filter((l: any) => l.trim() && !(l in st.saved)).slice(0, 25);
-      await Promise.all(labels.map(async (label: any) => { try { const r = await lookup(label); st.saved[label] = r?.needs_review ? null : r?.answer ?? null; } catch { /* retried on a later step */ } }));
-    }
-    const wanted = new Set(obs.elements.filter((e: any) => guards.open(obs, e)).map((e: any) => cut(e.group || e.name, 1000)));
-    const saved = Object.fromEntries(Object.entries(st.saved).filter(([label, answer]) => answer && wanted.has(label)));
+    // Raw saved answers are candidate data. Matching them is the model's responsibility.
+    const saved = profile.answers ?? [];
     const stuck = body.stuck_retry?.fields ?? null;
     const pageContext = JSON.stringify([obs.url, obs.document_id]);
     const samePage = st.pageContext === pageContext;

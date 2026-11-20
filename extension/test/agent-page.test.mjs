@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ashbyYesNo } from "./ashby-fixture.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/page-control/phone.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/page-control/dom.js", import.meta.url), "utf8");
 const PAGE_SRC = readFileSync(new URL("../src/page-control/page.js", import.meta.url), "utf8");
 
 function page(html, url = "https://careers.example.com/apply") {
@@ -188,19 +188,15 @@ test("actions: clickable refuses the final submit; native selects, dates and upl
   assert.equal(A.clickable(ref("Weiter"), false), null);
   assert.equal(A.clickable("999"), "That element is gone from the page.");
 
-  assert.deepEqual(plain(A.selectNative(ref("Country"), "japan")), { ok: true, native: true, value: "Japan" });
+  assert.deepEqual(plain(A.selectNative(ref("Country"), "Japan")), { ok: true, native: true, value: "Japan" });
   assert.equal(doc.getElementById("c").value, "jp");
   assert.equal(A.selectNative(ref("Country"), "Mars").ok, false);
   assert.equal(A.selectNative(ref("Name"), "x").native, false);
 
   assert.equal(A.focusForTyping(ref("Start date")).mode, "direct");
-  assert.equal(A.setDirect(ref("Start date"), "05/01/2026").ok, true);
+  assert.equal(A.setDirect(ref("Start date"), "2026-01-05").ok, true);
   assert.equal(doc.getElementById("d").value, "2026-01-05");
-  assert.equal(A.normaliseDate("month", "2026-03-09"), "2026-03");
   // A month alone is the first of the month for a date box (profiles store jobs as "2020-12").
-  assert.equal(A.normaliseDate("date", "2020-12"), "2020-12-01");
-  assert.equal(A.normaliseDate("month", "2020-12"), "2020-12");
-  assert.equal(A.normaliseDate("date", "2023-01-15"), "2023-01-15");
   assert.equal(A.focusForTyping(ref("Name")).mode, "keys");
 
   const b64 = Buffer.from("%PDF-1.4").toString("base64");
@@ -226,7 +222,10 @@ test("actions: options of an open dropdown are matched to the answer", () => {
     <ul id="lb" role="listbox"><li role="option">Bengaluru, Karnataka, India</li><li role="option">Bengkulu, Indonesia</li></ul>`);
   const obs = observe();
   const combo = obs.elements.find((e) => e.role === "textbox" || e.role === "combobox");
-  const match = plain(A.matchOption(combo.ref, "Bengaluru", false));
+  const option = obs.elements.find((e) => e.role === "option" && e.name === "Bengaluru, Karnataka, India");
+  assert.equal(option?.group, combo.name);
+  assert.equal(A.matchOption(combo.ref, "Bengaluru", false).ok, false);
+  const match = plain(A.matchOption(combo.ref, "Bengaluru, Karnataka, India", false));
   assert.equal(match.ok, true);
   assert.equal(match.text, "Bengaluru, Karnataka, India");
   const none = plain(A.matchOption(combo.ref, "Tokyo", false));
@@ -262,7 +261,7 @@ test("matchOption finds an option past the first hundred of a long list (Greenho
     <div id="lb" role="listbox">${options.map((t, i) => `<div role="option" id="o${i}">${t}</div>`).join("")}</div>
     <ul role="listbox">${options.map((t) => `<li role="option">${t.replace(" +", "+")}</li>`).join("")}</ul>`);
   const combo = observe().elements.find((e) => e.role === "textbox" || e.role === "combobox");
-  for (const answer of ["India +91", "India (+91)", "India"]) {
+  for (const answer of ["India +91"]) {
     const match = plain(A.matchOption(combo.ref, answer, false));
     assert.equal(match.ok, true, answer);
     assert.equal(match.text, "India +91", answer);
@@ -313,7 +312,8 @@ test("matchOption finds a plain list that appeared after noteShown, when nothing
   assert.ok(combo);
   assert.equal(A.noteShown(false), true);
   doc.querySelector(".menu").hidden = false; // what the click opens
-  const match = plain(A.matchOption(combo.ref, "Mr", false));
+  assert.equal(A.matchOption(combo.ref, "Mr", false).ok, false);
+  const match = plain(A.matchOption(combo.ref, "Mr.", false));
   assert.equal(match.ok, true);
   assert.equal(match.text, "Mr.");
   assert.equal(doc.querySelector(`[data-applyshortly-ref="${match.ref}"]`).textContent, "Mr.");
@@ -712,5 +712,24 @@ test("a required custom radio group inherits the requirement of its options with
   const wrapper = doc.querySelector('[role="radio"]');
   wrapper.getClientRects = () => [{ width: 100, height: 20 }];
   assert.equal(A.describeAccessible(wrapper, "radio", "Yes", radios.map((r) => r.ref)), null);
+  win.close();
+});
+
+
+test("matchOption deduplicates options when aria-controls and aria-owns reference the same listbox", () => {
+  const { A, observe, win } = page(`
+    <label for="notice">Notice period</label>
+    <input id="notice" role="combobox" aria-controls="notice_list" aria-owns="notice_list" aria-expanded="true" />
+    <ul id="notice_list" role="listbox">
+      <li role="option">Available immediately</li>
+      <li role="option">1 month</li>
+      <li role="option">2 months</li>
+    </ul>
+  `);
+  const combo = observe().elements.find((e) => e.name === "Notice period");
+  assert.ok(combo);
+  const matched = A.matchOption(combo.ref, "1 month", false, false);
+  assert.equal(matched.ok, true);
+  assert.equal(matched.text, "1 month");
   win.close();
 });

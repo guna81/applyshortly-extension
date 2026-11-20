@@ -8,6 +8,11 @@
 
 (() => {
   const F = globalThis.JobHuntFill;
+  const exactOption = (options, answer) => {
+    const matches = options.filter((option) => String(option.text) === String(answer));
+    return matches.length === 1 ? matches[0] : null;
+  };
+
   const userEdited = new WeakSet();
   let executing = false;
   const trackEdit = (event) => {
@@ -267,12 +272,14 @@
   /** The listbox(es) a dropdown names in aria-controls / aria-owns. */
   function ownedLists(el) {
     const doc = el.ownerDocument;
-    return ["aria-controls", "aria-owns"]
-      .map((a) => el.getAttribute(a))
-      .filter(Boolean)
-      .flatMap((ids) => ids.split(/\s+/))
-      .map((id) => doc.getElementById(id))
-      .filter(Boolean);
+    return [...new Set(
+      ["aria-controls", "aria-owns"]
+        .map((a) => el.getAttribute(a))
+        .filter(Boolean)
+        .flatMap((ids) => ids.split(/\s+/))
+        .map((id) => doc.getElementById(id))
+        .filter(Boolean),
+    )];
   }
 
   /** Answers without "-None-"/"Select…" entries or repeats. */
@@ -613,6 +620,19 @@
     if (extended) {
       for (const item of elements) Object.assign(item, contextOf(find(item.ref)));
     }
+    for (const parent of elements.slice()) {
+      if (!parent.popup && parent.role !== "combobox" && parent.role !== "listbox") continue;
+      const el = find(parent.ref);
+      if (!el) continue;
+      const lists = ownedLists(el).filter((list) => isVisible(list, checkLayout));
+      for (const list of lists) {
+        for (const option of list.querySelectorAll('[role="option"]')) {
+          const name = clip(clean(option.getAttribute("aria-label") || option.textContent), 500);
+          if (!name || !isVisible(option, checkLayout) || !F.applicationControl(option)) continue;
+          push([base(option, { ...(extended ? contextOf(option) : {}), role: "option", name, group: parent.name, section: parent.section })]);
+        }
+      }
+    }
     const win = doc.defaultView;
     const scroller = doc.scrollingElement ?? doc.documentElement;
     return {
@@ -745,25 +765,10 @@
     if (!el) return { ok: false, detail: "That field is gone from the page." };
     const win = el.ownerDocument.defaultView;
     const proto = el instanceof win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, normaliseDate(el.type, value));
+    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
     el.dispatchEvent(new win.Event("input", { bubbles: true }));
     el.dispatchEvent(new win.Event("change", { bubbles: true }));
     return { ok: Boolean(el.value), detail: el.value ? null : `"${value}" isn't a valid ${el.type}` };
-  }
-
-  /** "05/01/2026", "Jan 5 2026" → "2026-01-05" for <input type=date>; others are left alone. */
-  function normaliseDate(type, value) {
-    const v = String(value).trim();
-    if (type !== "date" && type !== "month") return v;
-    // A month alone ("2020-12", how résumés and profiles store a job's dates) is a full date's
-    // first day: a date box refuses it without a day.
-    if (/^\d{4}-\d{2}$/.test(v)) return type === "month" ? v : `${v}-01`;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return type === "month" ? v.slice(0, 7) : v;
-    const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(v);
-    const parsed = dmy ? new Date(Date.UTC(+dmy[3], +dmy[2] - 1, +dmy[1])) : new Date(`${v} UTC`);
-    if (Number.isNaN(parsed.getTime())) return v;
-    const iso = parsed.toISOString().slice(0, 10);
-    return type === "month" ? iso.slice(0, 7) : iso;
   }
 
   function blur(ref) {
@@ -772,12 +777,12 @@
   }
 
   /** A native <select>: choose the matching option. Returns the chosen text, or a reason. */
-  function selectNative(ref, answer) {
+  function selectNative(ref, answer, ruleMatch = false) {
     const el = find(ref);
     if (!el) return { ok: false, detail: "That field is gone from the page." };
     if (el.tagName !== "SELECT") return { ok: false, native: false };
     const options = [...el.options].filter((o) => o.value !== "" && !F.isPlaceholderOption(o.text)).map((o) => ({ text: clean(o.text), el: o }));
-    const option = F.chooseOption(options, answer);
+    const option = ruleMatch ? F.chooseOption(options, answer) : exactOption(options, answer);
     if (!option) return { ok: false, native: true, detail: `No option matches "${answer}". Options: ${options.slice(0, 15).map((o) => o.text).join(", ")}` };
     const win = el.ownerDocument.defaultView;
     el.value = option.el.value;
@@ -800,9 +805,11 @@
     const doc = el.ownerDocument;
     const owned = ownedLists(el);
     const scopes = owned.length ? owned : roots(doc);
-    let found = scopes
-      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location')])
-      .filter((o) => isVisible(o, checkLayout) && o.getAttribute("aria-disabled") !== "true");
+    let found = [...new Set(
+      scopes
+        .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location')])
+        .filter((o) => isVisible(o, checkLayout) && o.getAttribute("aria-disabled") !== "true"),
+    )];
     if (!found.length && shownBefore) found = F.appearedOptions(shownBefore, doc, checkLayout).map((o) => o.el);
     return found
       .slice(0, limit)
@@ -814,12 +821,11 @@
     return answerTexts(visibleOptions(ref, checkLayout).map((o) => o.text)).slice(0, 30);
   }
 
-  /** The option to click for an answer among the showing ones; partial matches allowed. */
-  function matchOption(ref, answer, checkLayout = true) {
+  /** The uniquely matching option among the visible choices. */
+  function matchOption(ref, answer, checkLayout = true, ruleMatch = false) {
     // The whole list, not the first hundred: a country picker has 244 entries and India is past 100.
     const options = visibleOptions(ref, checkLayout, Infinity);
-    const chosen = F.chooseOption(options, answer)
-      ?? options.find((o) => o.text.toLowerCase().startsWith(String(answer).toLowerCase().slice(0, 12)));
+    const chosen = ruleMatch ? F.chooseOption(options, answer) : exactOption(options, answer);
     return chosen ? { ok: true, ref: chosen.ref, text: chosen.text } : { ok: false, options: options.map((o) => o.text).slice(0, 15) };
   }
 
@@ -829,10 +835,10 @@
    * narrow on "+91", so its first entry (Afghanistan) would be picked. known=false when no option
    * can be read (role-less lists), where the caller falls back on reading the widget back.
    */
-  function firstOptionMatches(ref, answer) {
+  function firstOptionMatches(ref, answer, ruleMatch = false) {
     const [first] = visibleOptions(ref, true, 3);
     if (!first) return { known: false, matches: false };
-    const matches = Boolean(F.chooseOption([first], answer)) || first.text.toLowerCase().startsWith(String(answer).toLowerCase().slice(0, 12));
+    const matches = Boolean(ruleMatch ? F.chooseOption([first], answer) : exactOption([first], answer));
     return { known: true, matches };
   }
 
@@ -842,7 +848,7 @@
    * fields unlock only when a suggestion is clicked. { ok: false } for a plain text answer,
    * which stays as typed. noteShown must run before the typing for boxes without ARIA roles.
    */
-  function typedSuggestion(ref, answer, checkLayout = true) {
+  function typedSuggestion(ref, answer, checkLayout = true, ruleMatch = false) {
     const el = find(ref);
     if (!el) return { ok: false };
     let options;
@@ -850,8 +856,8 @@
       options = visibleOptions(ref, checkLayout);
     } else {
       // A plain box: trust only what appeared since noteShown, in response to the typing. One
-      // item is enough here (typing often narrows the list to the single match); chooseOption
-      // still has to match the answer before anything is clicked.
+      // item is enough here (typing often narrows the list to the single match); the option
+      // still has to match the answer exactly before it can be clicked.
       if (!shownBefore) return { ok: false };
       const items = [];
       for (const leaf of F.shownTexts(document, checkLayout)) {
@@ -862,8 +868,7 @@
       }
       options = items.map((item) => ({ ref: refOf(item), text: clip(clean(item.textContent), 200) }));
     }
-    const chosen = F.chooseOption(options, answer)
-      ?? options.find((o) => o.text.toLowerCase().startsWith(String(answer).toLowerCase().slice(0, 12)));
+    const chosen = ruleMatch ? F.chooseOption(options, answer) : exactOption(options, answer);
     return chosen ? { ok: true, ref: chosen.ref, text: chosen.text } : { ok: false };
   }
 
@@ -896,13 +901,13 @@
     return ownedLists(el).some((list) => isVisible(list, true));
   }
 
-  function pickerOpen(ref, checkLayout = true) {
+  function pickerOpen(ref, checkLayout = true, boundOnly = false) {
     const el = find(ref);
     if (!el) return false;
     const opener = el.closest?.('[aria-expanded]') ?? el;
     if (opener.getAttribute?.("aria-expanded") === "true" || el.getAttribute?.("aria-expanded") === "true") return true;
     if (ownedLists(el).some((list) => isVisible(list, checkLayout))) return true;
-    return visibleOptions(ref, checkLayout).length > 0;
+    return !boundOnly && visibleOptions(ref, checkLayout).length > 0;
   }
 
   /** Whether `text` shows anywhere visible in this frame (wait_for). */
@@ -1060,14 +1065,6 @@
    * For a phone box that has a country selector (intl-tel-input and friends): what to type, or
    * which country to pick first. null when the box has no selector, so plain typing applies.
    */
-  function phoneTypePlan(ref, answer) {
-    const el = find(ref);
-    if (!el) return null;
-    const field = F.collectFields(document, { checkLayout: false }).find((f) => f.el === el);
-    if (!field?.phoneCountry) return null;
-    const plan = F.phonePlan(field, answer);
-    return { ...plan, countryRef: refOf(field.phoneCountry.el) };
-  }
 
   /**
    * A control the site re-rendered keeps no ref on its new node. Finds the one control with the
@@ -1139,7 +1136,6 @@
     clickable,
     focusForTyping,
     setDirect,
-    normaliseDate,
     blur,
     selectNative,
     committedValue,
@@ -1149,7 +1145,6 @@
     keyCommitCheck,
     typedText,
     activate,
-    phoneTypePlan,
     rebind,
     visibleOptions,
     shownChoices,

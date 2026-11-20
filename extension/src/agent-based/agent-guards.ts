@@ -1,8 +1,8 @@
 // The hard limits of the Agent based form assistant agent, enforced in code whatever the model decides. The model chooses every step; this file only
 // refuses: never submit, never touch a human check, consent and legal facts only from the profile or the user, no overwrite, optional
-// fields left alone and open-ended answers left to the user when their switches are off, and the list of required fields `done` is
-// checked against. It never rewrites what the model chose (no form-fixing rules): a refusal is a tool error the model reads and works
-// around. Generic by design: it knows roles, labels and states, never a company or a form.
+// fields left alone when their switch is off, and the list of required fields `done` is checked against. Open-ended drafting ("Let AI answer")
+// is decided by the model from the current switch in every snapshot rather than a DOM textarea heuristic. It never rewrites what the model chose
+// (no form-fixing rules): a refusal is a tool error the model reads and works around. Generic by design: it knows roles, labels and states, never a company or a form.
 import { AGENT_RULES } from "../shared/agent-rules.js";
 import { candidateContext } from "../shared/candidate-context.js";
 import { factMatches, profileFact } from "../shared/profile-facts.js";
@@ -18,7 +18,6 @@ const BOT_CHECK = /\b(?:not a (?:robot|bot)|i(?:'| a)?m human|i am human|verify 
 const LEGAL_FACT = /visa|sponsor|work (?:permit|authori[sz]ation)|authori[sz]ed to work|right to work|eligible to work|criminal|convict|felon|previously (?:employed|worked)|former(?:ly)? (?:employee|employed)|ever (?:been )?employed (?:by|at|with)/i;
 const CONSENT = /\b(?:consent|certify|declare|swear|truthful|agree|accept|confirm|authori[sz](?:e|ed|ation)|permission to (?:call|contact)|terms (?:of|and)|privacy policy|acknowledge)\b/i;
 const CITIZENSHIP = /\bcitizen(?:ship)?\b|permanent residen(?:t|ce|cy)/i;
-const LONG_ANSWER = /\b(?:describe|explain|tell us|why|motivation|cover letter)\b/i;
 const ACKNOWLEDGEMENT = new RegExp(AGENT_RULES.consent.allow, "i");
 const NOT_ACKNOWLEDGEMENT = new RegExp(AGENT_RULES.consent.deny, "i");
 const MAX_WAITS = 6;
@@ -31,9 +30,6 @@ const onLastStep = (text: any) => {
   if (counted) return Number(counted[1]) >= Number(counted[2]);
   return /\b(?:final|last) step\b|\breview (?:and|&) submit\b/i.test(body);
 };
-const plainText = (value: any) => String(value).replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1 ($2)")
-  .replace(/(^|\n)\s{0,3}#{1,6}\s+/g, "$1").replace(/(^|\n)\s*[-*+]\s+/g, "$1• ")
-  .replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/__([^_\n]+)__/g, "$1").replace(/`([^`\n]+)`/g, "$1").trim();
 export const questionKey = (text: any) => `q:${(AGENT_RULES.skip.case_sensitive ? String(text) : String(text).toLowerCase()).replace(/\s+/g, " ").trim()}`;
 const controlHint = (el: any) => isChoiceOption(el) ? "It is one option of a question: choose it with check."
   : el.role === "button" || el.role === "link" ? "It is a button: click it only to move through the form."
@@ -42,14 +38,13 @@ const controlHint = (el: any) => isChoiceOption(el) ? "It is one option of a que
   : "Pick the matching control from the snapshot.";
 
 /** The part of the guards' state that survives a restart: plain JSON. */
-// `draftFor`: the field the user tapped "Draft it for me" on (its identity, or "*" when the question named no field); cleared once written.
-export const newGuardState = (): any => ({ skipped: [], labels: [], answers: {}, groupAnswers: {}, wrote: [], navigations: 0, waits: 0, instruction: "", draftFor: null });
+export const newGuardState = (): any => ({ skipped: [], labels: [], answers: {}, groupAnswers: {}, wrote: [], writeValues: {}, navigations: 0, waits: 0 });
 
 /**
- * @param {{profile: any, job: any, allowDrafts: () => boolean, fillOptional: () => boolean}} config `allowDrafts` and `fillOptional` are
+ * @param {{profile: any, job: any, allowDrafts?: () => boolean, fillOptional: () => boolean}} config `fillOptional` is
  * read fresh on every check (the user's switches can change mid-run)
  */
-export function createGuards({ profile, job, allowDrafts, fillOptional }: { profile: any; job?: any; allowDrafts: () => boolean; fillOptional: () => boolean }) {
+export function createGuards({ profile, job, fillOptional }: { profile: any; job?: any; allowDrafts?: () => boolean; fillOptional: () => boolean }) {
   const candidate = candidateContext(profile);
   const identity = (obs: any, el: any) => JSON.stringify([obs.url, el?.frame, el?.section, el?.identity ?? "", el?.name, el?.group, el?.role]);
   const groupKey = (obs: any, el: any) => (el?.group ? JSON.stringify([obs.url, el.frame, el.section, el.group, "choice"]) : null);
@@ -82,7 +77,10 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }: { prof
   };
   const noteWrite = (state: any, obs: any, ref: string) => {
     const el = obs.elements.find((e: any) => e.ref === ref);
-    if (el && !state.wrote.includes(identity(obs, el))) state.wrote.push(identity(obs, el));
+    if (!el) return;
+    const key = identity(obs, el);
+    if (!state.wrote.includes(key)) state.wrote.push(key);
+    (state.writeValues ??= {})[key] = choiceState(el) ?? el.value ?? "";
   };
 
   /** Required fields still empty, leaving out what the user took on, human checks and attachments the agent cannot make. */
@@ -126,25 +124,21 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }: { prof
     if (!["review", "options", "scroll", "switch_tab", "wait", "wait_for"].includes(action.type) && !el) return refuse("That ref is not on the page any more. Use a ref from the latest snapshot.");
     if (el && isSkipped(state, obs, el) && ["type", "select", "check", "upload", "click", "press", "hover"].includes(action.type)) return refuse("The user said they will fill this themselves on the page: leave it alone.");
     if (el?.disabled || el?.input_type === "password") return refuse("The selected field cannot be changed.");
-    const mine = el ? state.wrote.includes(identity(obs, el)) : false;
+    const mine = el && state.writeValues?.[identity(obs, el)] === (choiceState(el) ?? el.value ?? "");
     const answered = el ? state.answers[identity(obs, el)] : undefined;
     if (["type", "select"].includes(action.type)) {
       if (action.type === "type" && !["textbox", "textarea"].includes(el.role)) return refuse(`The selected control is a ${el.role}, not a text field. ${controlHint(el)}`);
       if (action.type === "select" && !["select", "combobox"].includes(el.role) && !el.popup) return refuse(`The selected control is a ${el.role}, not a dropdown. ${controlHint(el)}`);
       if (typeof action.text !== "string" || !action.text.trim() || action.text.length > 2000) return refuse("The answer text is missing or too long.");
-      if (action.type === "type") action.text = plainText(action.text);
+
+      if (action.type === "type" && Number.isInteger(el.text_limit) && action.text.length > el.text_limit) return refuse(`The control accepts at most ${el.text_limit} characters.`);
+      if (action.type === "select" && el.options?.length && !el.options.includes(action.text)) return refuse("Choose an option exactly as shown by the control.");
+
       const name = `${el.group ?? ""} ${el.name ?? ""}`;
       const userSaidIt = answered !== undefined && answered.trim().toLowerCase() === action.text.trim().toLowerCase();
       if ((CONSENT.test(String(el.name ?? "")) || CITIZENSHIP.test(String(el.name ?? "")) || LEGAL_FACT.test(name)) && !userSaidIt && !profileBacked(el.name, action.text)) return refuse(ASK_CONSENT);
-      // An open-ended answer follows the user's "Let AI answer" switch (read fresh): off, it is theirs to give unless they asked for a draft of it.
-      if (action.type === "type" && empty(el) && (el.role === "textarea" || LONG_ANSWER.test(el.name ?? "")) && !userSaidIt) {
-        const asked = /\b(?:draft|write|compose|explain|describe|summari[sz]e)\b/i.test(state.instruction) && !/\b(?:don't|do not|never)\b/i.test(state.instruction);
-        const tapped = state.draftFor === "*" || state.draftFor === identity(obs, el);
-        if (!allowDrafts() && !tapped && !asked) return refuse("This is an open-ended answer and the user's \"Let AI answer\" switch is off: do not write it. Call ask_user with the draft action so they can type it or choose Draft it for me.");
-      }
-      const explicitEdit = /\b(?:change|replace|correct|update|clear)\b/i.test(state.instruction) && String(el.name ?? "").length >= 3 && state.instruction.toLowerCase().includes(String(el.name).toLowerCase());
       const holds = String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim());
-      if (!explicitEdit && !mine && (el.user_edited || holds)) return refuse("The agent will not overwrite an existing answer.");
+      if (el.user_edited || (!mine && holds)) return refuse("The agent will not overwrite an existing answer.");
     }
     if (action.type === "check") {
       const option = isChoiceOption(el);
@@ -155,7 +149,7 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }: { prof
       const userChose = said !== undefined && namesOption(optionsOf(obs.elements, el), said, el);
       if ((CONSENT.test(text) || NOT_ACKNOWLEDGEMENT.test(text) || LEGAL_FACT.test(text)) && !standing && !userChose && !profileBacked(el.group || el.name, el.name)) return refuse(ASK_CONSENT);
       const otherChosen = option && el.group && obs.elements.some((m: any) => isChoiceOption(m) && m.group === el.group && m.ref !== el.ref && choiceState(m) === true);
-      if (!mine && (el.user_edited || (el.checked && !action.checked) || otherChosen)) return refuse("The agent will not overwrite an existing answer.");
+      if (el.user_edited || otherChosen || (!mine && el.checked && !action.checked)) return refuse("The agent will not overwrite an existing answer.");
       if (mine && el.checked && action.checked) return refuse("That is already chosen.");
     }
     if (action.type === "click") {
@@ -171,6 +165,15 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }: { prof
       }
       // A choice is made with check (so its consent and overwrite limits apply) and a file with upload; a click would bypass them.
       if (["checkbox", "radio"].includes(el.role) || isChoiceOption(el)) return refuse(`Use check for this control, not click. ${controlHint(el)}`);
+      if (el.role === "option") {
+        const parents = obs.elements.filter((parent: any) => el.group?.trim() && parent.name === el.group && parent.frame === el.frame && parent.section === el.section && (["select", "combobox", "listbox"].includes(parent.role) || parent.popup) && parent.expanded !== false);
+        const parent = parents.length === 1 ? parents[0] : null;
+        if (!parent || parent.disabled || parent.user_edited || isSkipped(state, obs, parent) || el.selected || el.checked) return refuse("Choose an unselected option from the current, editable picker.");
+        if (parent.value && !PLACEHOLDER.test(String(parent.value).trim()) && parent.expanded !== true) return refuse("The picker already has an answer.");
+        if (fillOptional() === false && parent.required === false) return refuse("The user turned off filling optional fields.");
+        const question = String(parent.name ?? "");
+        if (CONSENT.test(question) || LEGAL_FACT.test(question) || NOT_ACKNOWLEDGEMENT.test(question)) return refuse(ASK_CONSENT);
+      }
       const said = `${el.group ?? ""} ${el.name ?? ""}`;
       if (el.role === "switch" && (CONSENT.test(said) || LEGAL_FACT.test(said)) && !(answered !== undefined && /^(?:yes|on|true)$/i.test(answered.trim()))) return refuse(ASK_CONSENT);
       if (el.role === "file") return refuse("Use upload for a file field, not click.");
@@ -179,10 +182,10 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }: { prof
         state.navigations += 1;
       }
     }
-    const coverLetter = action.type === "upload" && uploadFile(obs, el) === "cover_letter";
+
     if (action.type === "upload") {
       if (el.role !== "file") return refuse("upload works on a file field only.");
-      if (!uploadFile(obs, el)) return { ask: { kind: "click", ref: el.ref, text: `Attach ${el.name || "the file"} on the page, then Continue.`, optional: el.required === false } };
+      if (!uploadFile(obs, el) || action.file !== uploadFile(obs, el)) return { ask: { kind: "click", ref: el.ref, text: `Attach ${el.name || "the file"} on the page, then Continue.`, optional: el.required === false } };
     }
     if (action.type === "drag") {
       const to = obs.elements.find((e: any) => e.ref === action.to_ref);
@@ -199,7 +202,7 @@ export function createGuards({ profile, job, allowDrafts, fillOptional }: { prof
     const ms = ["wait", "wait_for"].includes(action.type) && Number.isFinite(Number(action.ms)) ? Math.min(Math.max(0, Number(action.ms)), action.type === "wait" ? 5000 : 10000) : undefined;
     return { ok: true, action: { type: action.type, ref: action.ref, text: action.type === "press" ? undefined : action.text, checked: action.checked, direction: action.direction,
       key: action.type === "press" ? String(action.key) : undefined, tab_id: action.type === "switch_tab" ? action.tab_id : undefined, to_ref: action.type === "drag" ? action.to_ref : undefined,
-      ms, file: action.type === "upload" ? (coverLetter ? "cover_letter" : "resume") : undefined, label } };
+      ms, file: action.type === "upload" ? action.file : undefined, label } };
   };
 
   /** Whether a field (or a pick-one question) still waits for an answer. */

@@ -1,11 +1,11 @@
-// Phone numbers beside a country selector (src/rule-based/fill.js in jsdom, src/rule-based/panel-model.js).
+// Phone numbers beside a country selector (src/page-control/dom.js in jsdom, src/shared/ui/panel-model.js).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 import { JSDOM } from "jsdom";
 
-const FILL_SRC = readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/page-control/phone.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/page-control/dom.js", import.meta.url), "utf8");
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
 function page(html) {
@@ -74,7 +74,7 @@ test("a country-code option is chosen by whole dial code, not by substring", () 
 });
 
 const ctx = vm.createContext({});
-vm.runInContext(readFileSync(new URL("../src/rule-based/panel-model.js", import.meta.url), "utf8"), ctx);
+vm.runInContext(readFileSync(new URL("../src/shared/ui/panel-model.js", import.meta.url), "utf8"), ctx);
 const P = ctx.JobHuntPanel;
 
 test("an open phone is asked as the number, never as the selector's text", () => {

@@ -1,6 +1,7 @@
 // Tier 0 runner: the Agent based form assistant agent (the real formAgent, Changed 2026-11-18: it replaced extensionPlanner) against a PageSim, with a fake model and scripted user replies.
 // It reports the same metrics the live scorecard does, so a fixture can assert on them. Free: no network, no browser, no AI.
 import { readFileSync } from "node:fs";
+import "../../src/page-control/phone.js";
 import "../../src/rule-based/profile-answer.js"; // sets globalThis.JobHuntProfile, which the scoring and the fake model read
 import { formAgent } from "../../src/agent-based/form-agent.js";
 import { scanFields } from "../../src/page-control/commands.js";

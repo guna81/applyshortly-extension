@@ -17,7 +17,7 @@ export const TOOL_CATALOG = [
   tool("type_text", "Replace a text field's value with its supported answer.", { ref: REF, text: TEXT }, ["ref", "text"]),
   tool("select_option", "Choose a dropdown or picker option by its text.", { ref: REF, text: TEXT }, ["ref", "text"]),
   tool("check", "Set a checkbox, radio or yes/no choice.", { ref: REF, checked: { type: "boolean" } }, ["ref", "checked"]),
-  tool("upload", "Attach the candidate's resume or cover letter.", { ref: REF, file: { type: "string", enum: ["resume", "cover_letter"] } }, ["ref"]),
+  tool("upload", "Attach the candidate's resume or cover letter.", { ref: REF, file: { type: "string", enum: ["resume", "cover_letter"] } }, ["ref", "file"]),
   tool("press_key", "Press a key on a focused control (Tab, Escape, Space, arrows; Enter only in an open dropdown).", { ref: REF, key: { type: "string" } }, ["ref", "key"]),
   tool("scroll", "Scroll the page or a control.", { ref: REF, direction: { type: "string", enum: ["up", "down"] } }, ["direction"]),
   tool("wait", "Wait briefly for loading, then look again.", { ms: { type: "integer", minimum: 0, maximum: 5000 } }, ["ms"]),
@@ -86,7 +86,7 @@ export function describeResult(result: any): string {
   const shown = result.result;
   if (shown && typeof shown === "object") {
     const after = shown.value_after ?? shown.value ?? shown.checked;
-    return `ok${shown.verified === false ? " (page did not show the value)" : shown.verified ? " (verified)" : ""}${after !== undefined ? `, now ${JSON.stringify(cut(after, 80))}` : ""}`;
+    return `ok${shown.changed ? " (page formatted value; check)" : shown.verified === false ? " (page did not show the value)" : shown.verified ? " (verified)" : ""}${after !== undefined ? `, now ${JSON.stringify(cut(after, 80))}` : ""}`;
   }
   return "ok";
 }

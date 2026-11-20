@@ -3,23 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/shared/bridge.js";
 import { PAGE } from "./page-rules.mjs";
-import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, isEditingInstruction, stepWithRetry } from "../src/page-control/loop.js";
+import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, stepWithRetry } from "../src/page-control/loop.js";
 import { formAgent } from "../src/agent-based/form-agent.js";
-
-test("recovery commands allow edits while questions and negations remain read-only", () => {
-  for (const text of ["Recover this application using my saved profile", "Proceed with the edits", "Please remove the blank rows", " Clear the inaccurate title", "Go ahead", "Do the edits now", "put guna81.netlify.app", "Type 5-6 years", "enter my website as example.com", "use the second option", "Pick 21,00,000 to 25,00,000 per year", "fetch data from here - https://guna81.netlify.app/", "Read https://github.com/guna81/applyshortly-extension and answer"]) {
-    assert.equal(isEditingInstruction(text), true, text);
-  }
-  for (const text of ["Can you see City?", "What would you change?", "Don't change anything", "Please do not edit", "Do not fill this", "Go away", "Why did you pick that?", "Check what? Did you use it?"]) {
-    assert.equal(isEditingInstruction(text), false, text);
-  }
-});
-
-test("the panel's explicit draft instruction may type the draft, while a question about drafting stays read-only", () => {
-  const panelMessage = 'Draft it for me: answer the open question "Please describe your visa situation" yourself: type one or two plain sentences into that field using only facts from my profile and my earlier answers in this chat (user_answered). Do not invent anything; if a fact is missing, ask me for it.';
-  for (const text of [panelMessage, "Draft it for me", "please draft one"]) assert.equal(isEditingInstruction(text), true, text);
-  for (const text of ["Can you draft an answer?", "Would you draft it for me?", "What would you draft?"]) assert.equal(isEditingInstruction(text), false, text);
-});
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
 const FRAME = { frameId: "child", isTop: false, parentId: "top", sessionId: "oopif" };
@@ -126,18 +111,12 @@ test("execute select: a pick that does not read back is retried once and reporte
   assert.equal(driver.calls.filter((c) => c[0] === "click").length >= 4, true, "opened and picked twice");
 });
 
-test("execute type: a phone box with a country selector picks the country, then types the national number", async () => {
+test("execute type preserves a model-selected phone value without choosing a country", async () => {
   const driver = new FakeDriver({ top: () => frameObs([]) });
-  driver.phonePlans = [
-    { ok: false, needCountry: "+91", reason: "Choose +91 as the country first", countryRef: "c" },
-    { ok: true, text: "6381868258", countryRef: "c" },
-  ];
-  driver.committed = "India";
   const refs = new Map([["0.1", { frame: TOP, local: "1" }]]);
-  const result = await execute(driver, refs, [TOP], { type: "type", ref: "0.1", text: "+91 6381868258" }, async () => null);
-  assert.ok(driver.calls.some((c) => c[0] === "insertText" && c[1] === "6381868258"));
-  assert.equal(result.country, "India");
-  assert.equal(result.matched, "6381868258");
+  await execute(driver, refs, [TOP], { type: "type", ref: "0.1", text: "+91 6381868258" }, async () => null);
+  assert.ok(driver.calls.some((c) => c[0] === "insertText" && c[1] === "+91 6381868258"));
+  assert.equal(driver.calls.some((c) => c.includes("phoneTypePlan")), false);
 });
 
 test("resuming a paused run immediately reports running to the panel", () => {
@@ -276,6 +255,15 @@ test("execute: typing commits a matching typeahead suggestion instead of blurrin
     ["insertText", "India"],
     ["click", 10, 20], // the suggestion that appeared
   ]);
+});
+
+test("execute: model typing leaves an open picker for the next tool call", async () => {
+  const driver = new FakeDriver({ top: () => frameObs([]) });
+  driver.suggestion = { ok: true, ref: "opt-9", text: "India" };
+  const refs = new Map([["0.1", { frame: TOP, local: "1" }]]);
+  const result = await execute(driver, refs, [TOP], { type: "type", ref: "0.1", text: "India" }, async () => null, true);
+  assert.deepEqual(result, { matched: "India", verified: false });
+  assert.deepEqual(driver.calls, [["click", 10, 20], ["insertText", "India"]]);
 });
 
 test("execute: a masked input that drops inserted text is cleared and typed key by key", async () => {
@@ -547,6 +535,7 @@ test("the form agent drives a verified Agent based form assistant run without su
   const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "textarea", name: "Describe a project", value, required: true }], { document_id: "doc" }) });
   driver.insertText = async (text) => { value = text; };
   driver.committed = "Built a system.";
+  driver.pickerOpen = false;
   let calls = 0;
   // Changed 2026-11-18: the model is the tool-calling form agent now (two writes, then done).
   const step = formAgent({}, {}, {}, async () => ++calls <= 2 ? { text: JSON.stringify({ message: "", actions: [] }), tool_calls: [{ name: "type_text", arguments: { ref: "0.1", text: "Built a system." } }] } : { text: JSON.stringify({ message: "Ready for review", actions: [] }), tool_calls: [{ name: "done", arguments: { summary: "Ready for review" } }] }, undefined, true, undefined, { vision: false });
@@ -1252,4 +1241,47 @@ test("run_js runs through the driver, its value comes back as the action's resul
   assert.equal(bodies[1].results[1].ok, false);
   assert.match(bodies[1].results[1].detail, /bad is not defined/);
   assert.equal(driver.calls.some(([name]) => ["click", "submit"].includes(name)), false);
+});
+
+test("execute passes ruleMatch=true for rules_led selects and ruleMatch=false for model-driven selects", async () => {
+  const seen = [];
+  const makeDriver = () => {
+    const driver = new FakeDriver({ top: () => frameObs([]) });
+    const baseCall = driver.call.bind(driver);
+    driver.call = async (frame, name, ...args) => {
+      if (name === "selectNative") {
+        seen.push(args[2]);
+        return { native: true, ok: true, value: "India (+91)" };
+      }
+      return baseCall(frame, name, ...args);
+    };
+    return driver;
+  };
+  const refs = new Map([["0.1", { frame: TOP, local: "1", role: "select" }]]);
+  const action = { type: "select", ref: "0.1", text: "+91" };
+  await execute(makeDriver(), refs, [TOP], action, async () => null, false);
+  await execute(makeDriver(), refs, [TOP], action, async () => null, true);
+  assert.deepEqual(seen, [true, false]);
+});
+
+test("execute marks model-driven formatted writes as changed (not failed), while dropped writes stay unverified", async () => {
+  const makeDriver = (afterValue) => {
+    const driver = new FakeDriver({ top: () => frameObs([]) });
+    let typed = false;
+    const baseInsert = driver.insertText.bind(driver);
+    driver.insertText = async (t) => { typed = true; return baseInsert(t); };
+    const baseCall = driver.call.bind(driver);
+    driver.call = async (frame, name, ...args) => {
+      if (name === "committedValue") return typed ? afterValue : "";
+      if (name === "pickerOpen") return false;
+      return baseCall(frame, name, ...args);
+    };
+    return driver;
+  };
+  const refs = new Map([["0.1", { frame: TOP, local: "1", role: "textbox" }]]);
+  const formatted = await execute(makeDriver("(555) 010-0199"), refs, [TOP], { type: "type", ref: "0.1", text: "5550100199", command_id: "c1" }, async () => null, true);
+  assert.deepEqual(formatted, { matched: "5550100199", committed: "(555) 010-0199", verified: false, changed: true });
+
+  const dropped = await execute(makeDriver(""), refs, [TOP], { type: "type", ref: "0.1", text: "~5 years", command_id: "c2" }, async () => null, true);
+  assert.deepEqual(dropped, { matched: "~5 years", committed: "", verified: false });
 });

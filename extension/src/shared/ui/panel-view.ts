@@ -457,11 +457,12 @@
       const pct = full ? 100 : total ? Math.round((done / total) * 100) : 0;
       const reading = busy && !full && !total && !filledCount;
       const unknownTotal = busy && !full && !total && filledCount > 0;
+      const stopped = Boolean(agent && ["stopped", "failed"].includes(agent.status));
       const meta = ctl.submittedReported ? "Tracked in ApplyShortly"
         : completed ? "Review your answers on the form before submitting."
         : paused ? "Paused. Press Resume to continue."
         : reading ? "Reading the form to see what it asks…"
-        : !total ? (working || filledCount ? `${filledCount} ${filledCount === 1 ? "step" : "steps"} done` : "Try again once the form has loaded")
+        : !total ? (working || filledCount ? `${filledCount} ${filledCount === 1 ? "step" : "steps"} done` : stopped ? "Review the form and finish any remaining fields." : "Try again once the form has loaded")
         : `${done}/${total} steps`;
       const indeterminate = reading || unknownTotal;
       return el("div", { class: "hero" },

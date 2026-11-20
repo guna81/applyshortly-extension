@@ -1,11 +1,11 @@
-// Tests for src/rule-based/panel-model.js: the panel's checklist, counts, and error wording.
+// Tests for src/shared/ui/panel-model.js: the panel's checklist, counts, and error wording.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 
 const ctx = vm.createContext({});
-vm.runInContext(readFileSync(new URL("../src/rule-based/panel-model.js", import.meta.url), "utf8"), ctx);
+vm.runInContext(readFileSync(new URL("../src/shared/ui/panel-model.js", import.meta.url), "utf8"), ctx);
 const P = ctx.JobHuntPanel;
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
@@ -115,8 +115,8 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Notice period?", choices: ["30 days", "60 days"] })),
     { text: "", question: { label: "Notice period?" }, choices: ["30 days", "60 days", P.ON_PAGE_REPLY], draftable: false });
   const open = P.agentAsk({ kind: "question", text: "Why do you want to work at Actowiz?" });
-  assert.equal(open.question.note, "Type your answer, or I can draft one.");
-  assert.deepEqual(plain(open.choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
+  assert.equal(open.question.note, undefined);
+  assert.deepEqual(plain(open.choices), [P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Years of experience?" }).choices), [P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "question", text: "Can you open the application form, or give me the direct link?" }).choices), [P.ON_PAGE_REPLY]);
   assert.deepEqual(plain(P.agentAsk({ kind: "blocker", text: "Solve the CAPTCHA on the page." })),
@@ -130,7 +130,7 @@ test("the agent's questions become chat lines with quick replies", () => {
 
 test("a free-text visa or work-authorization situation question offers a grounded draft", () => {
   const ask = P.agentAsk({ kind: "question", role: "textarea", text: "Please briefly describe your current situation regarding work authorization (for example, your current location and visa status). What should I write?" });
-  assert.deepEqual(plain(ask.choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
+  assert.deepEqual(plain(ask.choices), [P.ON_PAGE_REPLY]);
   assert.equal(P.groundedDraft("Do you require visa sponsorship?"), false);
   assert.equal(P.draftable({ kind: "text", label: "Please briefly describe your visa situation" }), false);
 });
@@ -144,7 +144,7 @@ test("questions about a checkbox, upload or choice never offer a draft", () => {
     assert.deepEqual(plain(ask.choices), [P.ON_PAGE_REPLY], role);
     assert.equal(ask.question.note, undefined, role);
   }
-  assert.deepEqual(plain(P.agentAsk({ kind: "question", text, role: "textarea" }).choices), [P.DRAFT_REPLY, P.ON_PAGE_REPLY]);
+  assert.deepEqual(plain(P.agentAsk({ kind: "question", text, role: "textarea" }).choices), [P.ON_PAGE_REPLY]);
 });
 
 test("a long option list shows the likely answer first and says it can be typed", () => {
@@ -240,21 +240,21 @@ test("optional personal facts are not offered as an AI draft", () => {
   }
 });
 
-test("optional open questions still offer a draft", () => {
+test("rule optional questions never offer a draft", () => {
   for (const label of ["Why do you want to join us?", "Tell us about a project you're proud of", "Why are you a good candidate?", "Personal statement", "Describe your capacity to lead"]) {
     const field = { kind: "text", label, el: { type: "textarea" } };
     assert.equal(P.draftable(field), true, label);
-    assert.deepEqual(plain(P.nextPrompt([{ field, status: "optional", optional: true }]).choices), [P.DRAFT_REPLY, P.SKIP_REPLY], label);
+    assert.deepEqual(plain(P.nextPrompt([{ field, status: "optional", optional: true }]).choices), [P.SKIP_REPLY], label);
   }
   assert.equal(P.draftable({ kind: "select", label: "Why do you want to join us?" }), false);
   assert.equal(P.draftable(null), false);
 });
 
-test("a required open question offers a draft before the user types", () => {
+test("a rule required question asks the user without offering a draft", () => {
   const field = { kind: "text", label: "Why do you think you are suitable for this position? Brief in less than 100 words", required: true, el: { tagName: "TEXTAREA" } };
   const prompt = P.nextPrompt([{ field, status: "unresolved" }]);
-  assert.deepEqual(plain(prompt.choices), [P.DRAFT_REPLY]);
-  assert.equal(prompt.question.note, "Type your answer, or I can draft one.");
+  assert.deepEqual(plain(prompt.choices), []);
+  assert.equal(prompt.question.note, undefined);
   // Personal facts and choice questions get no draft button.
   assert.deepEqual(plain(P.nextPrompt([{ field: { kind: "text", label: "Years of work experience (in years)", required: true }, status: "unresolved" }]).choices), []);
   assert.equal(P.nextPrompt([{ field: { kind: "text", label: "Notice period", required: true }, status: "unresolved" }]).question.note, undefined);

@@ -6,7 +6,7 @@
 // (content.js); this file just finds the button.
 
 (() => {
-  const { profileAnswer, dialCode, splitInternational, DIAL_COUNTRIES } = globalThis.JobHuntProfile;
+  const { dialCode, splitInternational, DIAL_COUNTRIES } = globalThis.JobHuntPhone;
   // Custom dropdowns that aren't a <select> or a Google Forms listbox: Angular Material's mat-select
   // and the ARIA combobox / listbox-popup pattern. Their options only exist while open.
   const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
@@ -1240,7 +1240,6 @@
     isRequired,
     collectFields,
     applicationControl,
-    profileAnswer,
     chooseOption,
     isPhoneBox,
     phoneProgress,

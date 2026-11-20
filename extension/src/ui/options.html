@@ -73,9 +73,16 @@
         <summary>Custom AI provider <span>Stored on this device</span></summary>
         <form id="customAIForm">
           <label>Provider preset<select id="providerPreset"><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic Claude</option><option value="custom">Custom URL</option></select></label>
-          <label>API base URL<input id="customBaseUrl" type="url" placeholder="http://localhost:11434/v1" required></label>
+          <label id="customBaseUrlWrapper" hidden>API base URL<input id="customBaseUrl" type="url" placeholder="http://localhost:11434/v1"></label>
           <label>Model identifier<input id="customModel" type="text" placeholder="Preset default (optional)" maxlength="200"></label>
-          <label>API key (optional for local servers)<input id="customKey" type="password" autocomplete="off" maxlength="4096"></label>
+          <label id="customKeyWrapper">
+            <span id="customKeyLabelText">API key</span>
+            <input id="customKey" type="password" autocomplete="off" maxlength="4096">
+            <span id="customKeyHint" class="key-status-indicator" hidden>
+              <span class="key-status-badge">Key saved</span> Leave blank to keep current key
+              <button type="button" id="clearSavedCustomKey" class="text-btn">Clear key</button>
+            </span>
+          </label>
           <label class="switch-row">
             <span>Model supports tool calling
               <small class="muted">Required for Agent based form assistant to inspect and fill the form. Enabled by default.</small></span>
@@ -86,10 +93,12 @@
               <small class="muted">Send screenshots to this provider if enabled under Preferences. Enabled for OpenAI, Gemini, and Claude presets.</small></span>
             <input id="customSupportsVision" type="checkbox" class="switch" role="switch">
           </label>
-          <div class="actions custom-actions"><button class="primary" type="submit">Save and use for AI</button>
-          <button type="button" id="customTest">Test connection</button>
-          <button type="button" id="deleteRetainedKey" disabled>Delete retained server key after successful test</button>
-          <button type="button" id="customDisable">Use ApplyShortly credits</button></div>
+          <div class="actions custom-actions">
+            <button type="button" id="customTest">Test connection</button>
+            <button class="primary" type="submit" id="customSave">Save and activate</button>
+            <button type="button" id="customDisable" class="ghost-btn">Switch to ApplyShortly credits</button>
+            <button type="button" id="deleteRetainedKey" hidden disabled>Delete retained server key</button>
+          </div>
         </form>
         <p id="customStatus" role="status"></p>
         <p class="hint">The key stays on this device and is removed on sign-out. AI chat, drafts, and Agent based form assistant form planning use this endpoint. The provider receives relevant profile, job, and form details; screenshots are not sent. Select Agent based form assistant under Preferences to use your provider for form navigation.</p>
@@ -170,7 +179,7 @@
     </div>
     <footer class="muted foot-page">Version <span id="version"></span> · Connection credentials stay inside the extension. AI provider keys stay on this device.</footer>
   </main>
-  <script src="rule-based/panel-model.js"></script>
+  <script src="../shared/ui/panel-model.js"></script>
   <script src="options.js" type="module"></script>
 </body>
 </html>

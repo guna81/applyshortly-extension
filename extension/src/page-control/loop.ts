@@ -37,15 +37,6 @@ const CALL_LIMIT = 40;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Only explicit commands unlock edits. Polite prefixes and recovery commands are commands
-// too ("put my website in", "type 5 years", "use the second one"); questions and negations
-// must retain the inspection-only path.
-export function isEditingInstruction(message) {
-  const text = String(message).trim().replace(/^please\s+/i, "");
-  if (/^(do not|don't|never)\b/i.test(text) || text.endsWith("?")) return false;
-  return /^(fill|set|change|select|choose|pick|upload|attach|click|tick|check|mark|continue|resume|complete|open|scroll|replace|update|recover|proceed|delete|remove|clear|correct|fix|add|commit|verify|put|type|enter|write|draft|input|insert|paste|use|answer|make|leave|switch|turn|fetch|read|look|visit|browse|pull|take|get)\b|^do\s+(?:the|these|those|it)\b|^go\s+(?:ahead|on)\b/i.test(text);
-}
-
 // Ignore transient IDs and screenshot bytes when detecting stalled planning.
 export class ProgressGuard {
   states: string[] = [];
@@ -260,7 +251,7 @@ async function waitForResult(probe, ready, timeout = 2500) {
   return result;
 }
 
-async function typeInto(driver, target, frames, text, adaptive = false) {
+async function typeInto(driver, target, frames, text, adaptive = false, modelDriven = false) {
   await clickRef(driver, target, frames);
   const focus = await driver.call(target.frame, "focusForTyping", target.local);
   if (!focus?.ok) throw new Error(focus?.detail ?? "Couldn't focus that field.");
@@ -268,7 +259,7 @@ async function typeInto(driver, target, frames, text, adaptive = false) {
     const set = await driver.call(target.frame, "setDirect", target.local, text);
     if (!set.ok) throw new Error(set.detail);
   } else {
-    await driver.call(target.frame, "noteShown");
+    if (!modelDriven) await driver.call(target.frame, "noteShown");
     await driver.insertText(text);
     if (text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
       const now = await driver.call(target.frame, "state", target.local);
@@ -279,23 +270,29 @@ async function typeInto(driver, target, frames, text, adaptive = false) {
         await driver.typeKeys(text);
       }
     }
-    // A "Search…" box that is really a pick-one typeahead: the page drops text that was never
-    // picked from its list, and dependent fields (State after Country) unlock only on a pick.
-    if (!adaptive) await sleep(TYPEAHEAD_WAIT_MS);
-    const pick = adaptive
-      ? await waitForResult(() => driver.call(target.frame, "typedSuggestion", target.local, text), (r) => r?.ok, 1500)
-      : await driver.call(target.frame, "typedSuggestion", target.local, text);
-    if (pick?.ok) {
-      await clickOption(driver, { ...target, local: pick.ref, selectionOption: true }, frames);
-      return;
+    if (modelDriven) {
+      // Leave an open picker visible for the next model turn.
+      if (await driver.call(target.frame, "pickerOpen", target.local, true, true)) return false;
+    } else {
+      // A "Search…" box that is really a pick-one typeahead: the page drops text that was never
+      // picked from its list, and dependent fields (State after Country) unlock only on a pick.
+      if (!adaptive) await sleep(TYPEAHEAD_WAIT_MS);
+      const pick = adaptive
+        ? await waitForResult(() => driver.call(target.frame, "typedSuggestion", target.local, text, true), (r) => r?.ok, 1500)
+        : await driver.call(target.frame, "typedSuggestion", target.local, text, true);
+      if (pick?.ok) {
+        await clickOption(driver, { ...target, local: pick.ref, selectionOption: true }, frames);
+        return;
+      }
     }
   }
   await driver.call(target.frame, "blur", target.local);
 }
 
 /** Native selects directly; custom dropdowns and typeaheads by opening, typing and picking. */
-async function choose(driver, target, frames, answer, adaptive = false) {
-  const native = await driver.call(target.frame, "selectNative", target.local, answer);
+async function choose(driver, target, frames, answer, adaptive = false, modelDriven = false) {
+  const ruleMatch = !modelDriven;
+  const native = await driver.call(target.frame, "selectNative", target.local, answer, ruleMatch);
   if (native?.native) {
     if (!native.ok) throw new Error(native.detail);
     return { matched: native.value, committed: native.value, verified: true };
@@ -304,47 +301,48 @@ async function choose(driver, target, frames, answer, adaptive = false) {
   await clickRef(driver, target, frames);
   if (!adaptive) await sleep(DROPDOWN_WAIT_MS);
   let match = adaptive
-    ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer), (r) => r?.ok || r?.options?.length)
-    : await driver.call(target.frame, "matchOption", target.local, answer);
+    ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, ruleMatch), (r) => r?.ok || r?.options?.length)
+    : await driver.call(target.frame, "matchOption", target.local, answer, ruleMatch);
   if (!match.ok) {
     // A typeahead: type the answer and wait for suggestions.
     const focus = await driver.call(target.frame, "focusForTyping", target.local);
     // A dial code ("+91") is not part of any country's name: typed into the search box it would
     // filter every country away (or leave an unfiltered list whose first entry is a different country).
-    const dialCode = /^\+\d{1,4}$/.test(String(answer).trim());
+    const dialCode = !modelDriven && /^\+\d{1,4}$/.test(String(answer).trim());
     if (focus?.ok && focus.mode === "keys" && !dialCode) {
       await driver.insertText(answer);
       if (!adaptive) await sleep(TYPEAHEAD_WAIT_MS);
       match = adaptive
-        ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer), (r) => r?.ok)
-        : await driver.call(target.frame, "matchOption", target.local, answer);
+        ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, ruleMatch), (r) => r?.ok)
+        : await driver.call(target.frame, "matchOption", target.local, answer, ruleMatch);
     }
   }
   if (!match.ok && !match.options?.length) {
     // The first try often races the menu opening: make sure it is open, then wait for options.
     if (!(await driver.call(target.frame, "pickerOpen", target.local).catch(() => false))) await clickRef(driver, target, frames);
-    match = await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer), (r) => r?.ok || r?.options?.length, 3000);
+    match = await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, ruleMatch), (r) => r?.ok || r?.options?.length, 3000);
   }
   if (!match.ok && (await driver.call(target.frame, "scrollOptions", target.local, true))) {
     // A virtualized list renders only the options in view: page through it.
     for (let i = 0; i < MAX_OPTION_PAGES; i++) {
       await sleep(OPTION_SCROLL_WAIT_MS);
-      match = await driver.call(target.frame, "matchOption", target.local, answer);
+      match = await driver.call(target.frame, "matchOption", target.local, answer, ruleMatch);
       if (match.ok || !(await driver.call(target.frame, "scrollOptions", target.local, false))) break;
     }
   }
   if (!match.ok) {
     // Role-less typeaheads (older react-select): the filtered list's first entry is highlighted,
     // so ArrowDown + Enter commits it; keep it only if the widget then shows the answer.
-    const keyed = await commitByKeys(driver, target, answer);
+    const keyed = modelDriven ? { committed: "", verified: false, undone: true } : await commitByKeys(driver, target, answer);
     if (keyed.verified) return { matched: answer, ...keyed };
     await closePicker(driver, target);
     const shown = match.options?.length ? ` Options shown: ${match.options.join(", ")}` : " No options appeared.";
     const left = keyed.undone === false && keyed.committed ? ` The field now shows "${keyed.committed}": fix it by hand.` : "";
     throw new Error(`No option matches "${answer}".${shown}${left}`.slice(0, 290));
   }
+  const before = modelDriven ? await driver.call(target.frame, "committedValue", target.local, false).catch(() => null) : null;
   const viaScript = await clickOption(driver, { ...target, local: match.ref, selectionOption: true }, frames);
-  const readback = await readCommitted(driver, target, [match.text, answer]);
+  const readback = await readCommitted(driver, target, [match.text, answer], false, modelDriven, before);
   // Some widgets (a phone's country list) stay open after a pick, and an open list of 200+ options
   // would fill every later page read: close it now that the choice is made.
   await closePicker(driver, target);
@@ -352,16 +350,23 @@ async function choose(driver, target, frames, answer, adaptive = false) {
 }
 
 /** Reads the widget's value after a pick, giving React a moment to re-render. */
-async function readCommitted(driver, target, wanted, widgetOnly = false) {
+async function readCommitted(driver, target, wanted, widgetOnly = false, exact = false, before = null) {
   let committed = null;
   let verified = false;
+  let changed = false;
   for (let i = 0; i < 4; i++) {
     await sleep(i === 0 ? 150 : 250);
     committed = await driver.call(target.frame, "committedValue", target.local, widgetOnly).catch(() => null);
-    verified = Boolean(await driver.call(target.frame, "showsChoice", committed, ...wanted));
+    verified = exact ? wanted.includes(committed) : Boolean(await driver.call(target.frame, "showsChoice", committed, ...wanted));
     if (verified) break;
+    // In model-driven mode, a widget may reformat a chosen option (e.g. "United States +1" -> "+1").
+    // If the displayed value actually changed to a non-empty string, report it neutrally and let the model judge.
+    if (exact && Boolean(String(committed ?? "").trim()) && String(committed) !== String(before ?? "")) {
+      changed = true;
+      break;
+    }
   }
-  return { committed: committed ?? "", verified };
+  return { committed: committed ?? "", verified, ...(changed ? { changed: true } : {}) };
 }
 
 async function commitByKeys(driver, target, answer) {
@@ -458,7 +463,7 @@ export async function questionChoices(driver, refs, frames, observation, questio
 }
 
 /** Carries out one vetted action; returns the result the platform sees next step. */
-export async function execute(driver, refs, frames, action, files) {
+export async function execute(driver, refs, frames, action, files, modelDriven = false) {
   const target = action.ref ? refs.get(action.ref) : null;
   if (action.ref && !target) throw new Error("That element is no longer on the page.");
   switch (action.type) {
@@ -487,49 +492,29 @@ export async function execute(driver, refs, frames, action, files) {
       await clickRef(driver, target, frames);
       return null;
     case "type": {
-      let text = action.text ?? "";
-      // A phone box with a country selector: pick the country from the "+91 …" prefix first,
-      // then type only the national number the widget expects.
-      const plan = /^\s*\+/.test(text) ? await driver.call(target.frame, "phoneTypePlan", target.local, text).catch(() => null) : null;
-      let country = null;
-      if (plan) {
-        let current = plan;
-        if (!current.ok && current.needCountry) {
-          country = await choose(driver, { ...target, local: current.countryRef }, frames, current.needCountry, Boolean(action.command_id));
-          current = await driver.call(target.frame, "phoneTypePlan", target.local, text);
-        }
-        if (!current?.ok) throw new Error(current?.reason ?? "Choose the phone country first.");
-        text = current.text;
-      }
+      const text = action.text ?? "";
       // A box with a maxlength silently cuts a longer answer: say so instead of typing half of it.
       const limit = await driver.call(target.frame, "textLimit", target.local).catch(() => 0);
       if (limit > 0 && String(text).length > limit) throw new Error(`This field accepts at most ${limit} characters and the answer has ${String(text).length}. Shorten it to fit.`);
-      await typeInto(driver, target, frames, text, Boolean(action.command_id));
-      if (!plan) {
-        // Read the field back so an input the page dropped or cleared is reported, not assumed.
-        // Only for assistant commands (command_id); a password is never echoed.
-        if (!action.command_id || target.inputType === "password" || !text) return null;
-        const shown = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
-        if (shown == null) return null;
-        const loose = ["date", "datetime-local", "month", "time", "week", "number", "range", "color"].includes(target.inputType);
-        return { matched: text, committed: shown, verified: loose ? String(shown).trim() !== "" : await driver.call(target.frame, "holdsTyped", shown, text) };
-      }
-      const committed = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
-      const digits = (value) => String(value ?? '').replace(/\D/g, '');
-      const currentPlan = !String(committed ?? '').trim().startsWith('+')
-        ? await driver.call(target.frame, 'phoneTypePlan', target.local, action.text).catch(() => null) : null;
-      const verified = Boolean(digits(committed) && (digits(committed) === digits(action.text) ||
-        (digits(committed) === digits(text) && currentPlan?.ok === true)));
-      return { matched: text, committed: committed ?? "", verified,
-        ...(country ? { country: country.committed } : {}) };
+      const before = action.command_id && modelDriven
+        ? await driver.call(target.frame, "committedValue", target.local).catch(() => null) : null;
+      const committed = await typeInto(driver, target, frames, text, Boolean(action.command_id), modelDriven);
+      if (committed === false) return { matched: text, verified: false };
+      if (!action.command_id || target.inputType === "password" || !text) return null;
+      const shown = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
+      if (shown == null) return null;
+      const exact = String(shown) === String(text);
+      const changed = modelDriven && !exact && Boolean(String(shown).trim()) && String(shown) !== String(before ?? "");
+      return { matched: text, committed: shown, verified: exact, ...(changed ? { changed: true } : {}) };
     }
+
     case "select": {
-      const first = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id));
-      if (first.verified) return first;
+      const first = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id), modelDriven);
+      if (first.verified || modelDriven) return first;
       // The first pick often lands late or races the menu opening: look once more, then try once
       // more. Choosing the same option again is harmless if the first had already taken.
       try {
-        const second = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id));
+        const second = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id), modelDriven);
         return second.verified || !first.committed ? second : first;
       } catch { return first; }
     }
@@ -704,6 +689,7 @@ export class Agent {
       blockers: false, // blocker handoffs are handled by this loop and the platform policy
       allowHref: (href, origin) => { if (/^https?:/.test(href)) this.trustedOrigins.add(origin); return true; },
       isPaused: () => this.paused,
+      modelDriven: () => this.last?.agent_engine === "ai_led",
       files: (kind) => this.files(kind),
       around: (frames, run) => executing(this.driver, frames, run),
     } });
@@ -884,8 +870,6 @@ export class Agent {
         }
         if (this.messages.length) {
           extra = { user_message: this.messages.splice(0).join("\n").slice(0, 4000), inspect_only: true };
-          // Explicit editing/continuation instructions may mutate; page questions remain read-only.
-          extra.inspect_only = !isEditingInstruction(extra.user_message);
         }
         const stalled = this.progressGuard.check(observation);
         if (stalled) {
@@ -984,7 +968,6 @@ export class Agent {
         focusQuery = res.focus_query || "";
         wantScreenshot = Boolean(res.want_screenshot);
         annotateScreenshot = Boolean(res.annotate_screenshot);
-        if (res.message?.startsWith("Using Rules-led: AI-led is unavailable")) this.fillingNotice = res.message.split(".")[0] + ".";
         // A live count from what the agent just saw, so the panel's bar moves while the agent works.
         try {
           const { fields } = scanFields(observation);
@@ -1018,13 +1001,13 @@ export class Agent {
             } else {
               // Same document, same control (not edited by the user, not replaced), not a password.
               await this.runner.guard(action);
-              outcome = await withDeadline(executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files)), STEP_DEADLINE_MS, `doing ${action.label || action.type}`);
+              outcome = await withDeadline(executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files, res.agent_engine === "ai_led")), STEP_DEADLINE_MS, `doing ${action.label || action.type}`);
             }
 
             if (outcome && typeof outcome === "object" && outcome.via === "activateOption") this.recovered("activate_option", action.label);
             const shown = action.type === "run_js" ? { value: outcome?.value } : this.verifiedCommands && outcome && typeof outcome === "object"
               ? ["fill_form", "options", "review"].includes(action.type) ? outcome : CommandRunner.shape(action, outcome) : null;
-            const failed = shown?.verified === false || (action.type === "fill_form" && shown && shown.done < shown.requested_count);
+            const failed = (shown?.verified === false && !shown?.changed) || (action.type === "fill_form" && shown && shown.done < shown.requested_count);
             results.push({ index, ok: !failed, command_id: action.command_id, effect: "Input dispatched; verify committed result in next observation.",
               ...(shown ? { result: boundedResult(shown) } : {}), ...(failed ? { detail: "The page did not show the requested value." } : {}) });
             if (failed) break; // later actions assume this one stuck

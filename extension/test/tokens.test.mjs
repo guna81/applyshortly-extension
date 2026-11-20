@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // ui.css (settings and assistant pages) and panel-view.js (the on-page shadow DOM) each carry the
 // colour tokens, because a closed shadow root can't read the stylesheet. They must not drift.
 const ui = readFileSync(new URL('../src/ui/ui.css', import.meta.url), 'utf8');
-const panel = readFileSync(new URL('../src/rule-based/panel-view.js', import.meta.url), 'utf8');
+const panel = readFileSync(new URL('../src/shared/ui/panel-view.js', import.meta.url), 'utf8');
 
 const SHARED = ['bg', 'fg', 'muted', 'line', 'soft', 'hover', 'accent', 'accent-soft', 'accent-fg',
   'good', 'good-soft', 'warn', 'warn-soft', 'bad', 'bad-soft'];

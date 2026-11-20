@@ -263,7 +263,10 @@ export class JobHuntBridge {
 
   async agentStep(body: any): Promise<any> {
     const version = globalThis.chrome?.runtime?.getManifest?.().version;
-    body = { ...body, runtime_version: version };
+    const observation = body?.observation && "diagnostics" in body.observation
+      ? (({ diagnostics: _diag, ...rest }) => rest)(body.observation)
+      : body?.observation;
+    body = { ...body, ...(observation !== undefined ? { observation } : {}), runtime_version: version };
     void flushDiagnostics(this);
     const send = (b: any) => this.request("/api/extension/agent/step", { method: "POST", body: JSON.stringify(b), timeout: AGENT_TIMEOUT_MS });
     try {

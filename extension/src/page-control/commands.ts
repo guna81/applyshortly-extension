@@ -39,6 +39,7 @@ export const namesOption = (options, said, el) => String(said ?? "").split(/,|;|
 
 /**
  * @typedef {object} CommandPolicy
+ * @property {() => boolean} [modelDriven] whether commands must leave follow-up actions to the form agent
  * @property {boolean} [blockers] refuse to change a page that shows a blocker (CAPTCHA, sign-in)
  * @property {boolean} [captchaFillable] a visible CAPTCHA alone does not stop filling the rest of the form
  *   (the person solves it; the controller still refuses to submit while it shows). Sign-in still stops everything.
@@ -238,7 +239,7 @@ export class CommandRunner {
     const outcome = await (this.policy.around ?? ((_frames, run) => run()))(frames, () => execute(this.driver, this.observed.refs, frames,
       { type: action.type, ref: action.ref, text: action.text, checked: action.checked === true || action.checked === "true",
         direction: action.direction, file: "resume", command_id: commandId },
-      async (kind) => (this.policy.files ? this.policy.files(kind) : null)));
+      async (kind) => (this.policy.files ? this.policy.files(kind) : null), this.policy.modelDriven?.() === true));
     if (FIELD_KINDS.includes(action.type)) {
       // Record what the widget actually shows, not what was asked for.
       this.policy.onCommitted?.(`${target?.name || action.ref}`, outcome?.committed || (action.text ?? String(action.checked)));
@@ -306,7 +307,7 @@ export class CommandRunner {
         // Only a read-back that shows the value counts. A write that reports nothing proved nothing,
         // so it is not a success: the one exception is clearing a field, which has no text to read back.
         const clearing = type === "type" && !String(field.text ?? "").trim();
-        const stuck = done?.verified === true || (done?.verified === undefined && clearing);
+        const stuck = done?.verified === true || done?.changed === true || (done?.verified === undefined && clearing);
         step.state = stuck ? "done" : "error";
         if (!stuck && step.text) step.text = `${step.text}: didn't stick`;
         const { committed, ...rest } = done ?? {};
@@ -329,8 +330,7 @@ export class CommandRunner {
   /**
    * A later field can undo an earlier one: a phone box's country list moved to its first entry by the
    * next dropdown, say. Each write was verified when it was made, so read the page once more at the end.
-   * A field that no longer shows what it did is written once more; one that still differs is reported
-   * as not stuck, with what it shows, so no controller treats it as done.
+   * Report drift to the agent. The shared command relay can retry a drifted field once.
    */
   async recheck(results, fields, resolve, commandId) {
     const drift = () => {
@@ -349,7 +349,7 @@ export class CommandRunner {
     let moved = drift();
     if (!moved.length) return;
     for (const { i } of moved) {
-      if (this.policy.isPaused?.()) break;
+      if (this.policy.modelDriven?.() || this.policy.isPaused?.()) break;
       const r = results[i]; const field = fields[i];
       try {
         await this.mutate({ type: r.type, ref: resolve(r.ref), text: field.text == null ? undefined : String(field.text), checked: String(field.checked ?? ""),

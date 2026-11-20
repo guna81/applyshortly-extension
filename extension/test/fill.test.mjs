@@ -1,4 +1,4 @@
-// Tests for src/rule-based/fill.js in jsdom. Run: node --test extension/test (run npm ci first).
+// Tests for src/page-control/dom.js in jsdom. Run: node --test extension/test (run npm ci first).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
@@ -7,14 +7,14 @@ import { ashbyYesNo, ashbyProviders, ashbyConsent } from "./ashby-fixture.mjs";
 
 // Values built inside the jsdom window have its prototypes; compare plain copies.
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/page-control/phone.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/page-control/dom.js", import.meta.url), "utf8");
 
 function page(html, url = "https://example.com/apply") {
   const dom = new JSDOM(`<!doctype html><body>${html}</body>`, { url, runScripts: "outside-only" });
   // jsdom has no CSS.escape; Chrome does.
   dom.window.CSS = { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
   dom.window.eval(FILL_SRC);
-  return { doc: dom.window.document, F: dom.window.JobHuntFill, win: dom.window };
+  return { doc: dom.window.document, F: { ...dom.window.JobHuntFill, profileAnswer: dom.window.JobHuntProfile.profileAnswer }, win: dom.window };
 }
 
 const PROFILE = {

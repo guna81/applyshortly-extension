@@ -121,10 +121,11 @@ test("a Yes/No option or a checkbox is answered with check: type, select or clic
 test("any click that is not a final submit, sign-in or consent passes: add another, open a dropdown, pick an option", () => {
   const ctx = setup();
   const obs = page([
-    el("a", "button", "Add another"), el("d", "combobox", "City"), el("o", "option", "Berlin"),
+    el("a", "button", "Add another"), el("d", "combobox", "City"), el("o", "option", "Berlin", { group: "City" }), el("orphan", "option", "Paris"),
     el("t", "textbox", "Name"), el("u", "textbox", "Email"), el("v", "textbox", "Phone"), el("w", "button", "I agree"),
   ]);
   for (const ref of ["a", "d", "o"]) assert.equal(vet(ctx, obs, { type: "click", ref }).ok, true, ref);
+  assert.match(vet(ctx, obs, { type: "click", ref: "orphan" }).error, /picker/i);
   assert.match(vet(ctx, obs, { type: "click", ref: "w" }).error, /direct approval/i);
 });
 
@@ -138,30 +139,11 @@ test("optional fields are left alone when the user turned that off, read fresh e
   assert.equal(guards.vet({ type: "type", ref: "e1", text: "https://x.test" }, obs, state).ok, true);
 });
 
-test("an open-ended answer needs the user's say when drafting is off", () => {
+test("textarea writes are not hard-blocked by DOM role when Let AI answer is off (model decides what is open-ended vs a profile fact)", () => {
   const ctx = setup({}, { allowDrafts: false });
-  const obs = page([el("e1", "textarea", "Why do you want this job?")]);
-  assert.match(vet(ctx, obs, { type: "type", ref: "e1", text: "Because I like it." }).error, /ask|draft/i);
-});
-
-// Changed 2026-11-18: "Let AI answer" is read fresh like "Fill optional fields", and a draft is no longer cut to two sentences.
-test("drafting follows the Let AI answer switch as it changes, at the length the question needs", () => {
-  let drafts = false;
-  const guards = createGuards({ profile: {}, job: {}, allowDrafts: () => drafts, fillOptional: () => true });
-  const state = newGuardState();
-  const obs = page([el("e1", "textarea", "Cover letter")]);
-  const letter = "Dear team, I build things. I ship them. I test them.\n\nI would like to join. Thank you.";
-  assert.match(guards.vet({ type: "type", ref: "e1", text: letter }, obs, state).error, /Let AI answer/);
-  drafts = true;
-  assert.equal(guards.vet({ type: "type", ref: "e1", text: letter }, obs, state).action.text, letter);
-});
-
-test("Draft it for me on one field allows that field only, while the switch is off", () => {
-  const { guards, state } = setup({}, { allowDrafts: false });
-  const obs = page([el("e1", "textarea", "Why us?"), el("e2", "textarea", "Describe a project")]);
-  state.draftFor = guards.identity(obs, obs.elements[0]);
-  assert.equal(guards.vet({ type: "type", ref: "e1", text: "Because of the product." }, obs, state).ok, true);
-  assert.match(guards.vet({ type: "type", ref: "e2", text: "A search engine." }, obs, state).error, /Let AI answer/);
+  const obs = page([el("e1", "textarea", "Github profile"), el("e2", "textarea", "Cover letter")]);
+  assert.equal(vet(ctx, obs, { type: "type", ref: "e1", text: "https://github.com/example" }).ok, true);
+  assert.equal(vet(ctx, obs, { type: "type", ref: "e2", text: "Dear team, I build things." }).ok, true);
 });
 
 test("a field the user said they will fill themselves is refused", () => {

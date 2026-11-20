@@ -159,7 +159,7 @@ test("free-text replies are corrected twice, then the model's own words carry on
 test("raw JSON or markup is never shown when the corrections run out", async () => {
   const { request } = scripted({ text: '{"msg":1}' }, { text: '{"msg":2}' }, { text: '{"msg":3}' });
   const plan = await make(request)(body(observation([el("e1", "textbox", "Last name")])));
-  assert.equal(plan.status, "ready_for_review");
+  assert.equal(plan.status, "ask_user");
   assert.equal(plan.message, "");
 });
 
@@ -253,7 +253,7 @@ test("a refused click (final submit) goes back to the model in the same step; fo
   const step = make(request);
   const plan = await step(body(observation([el("e1", "textbox", "Name"), el("e2", "button", "Submit application", { submit_like: true })])));
   assert.match(seen[1].look.results[0].content, /direct approval/i);
-  assert.equal(plan.status, "ready_for_review");
+  assert.equal(plan.status, "ask_user");
   assert.equal(seen.length, 4);
 });
 
@@ -404,15 +404,15 @@ test("every snapshot shows the user's three switches as they are now", async () 
   assert.match(seen[1].messages[1].content, /Fill optional fields: OFF.*Let AI answer: OFF.*Auto apply: ON/);
 });
 
-test("Let AI answer is read fresh: switched off mid-run, the next essay write is refused", async () => {
+test("Let AI answer is read fresh in the snapshot and does not hard-block factual textarea writes", async () => {
   let drafts = true;
-  const { request, seen } = scripted({ tool_calls: [call("type_text", { ref: "e1", text: "I like the product." })] },
-    { tool_calls: [call("ask_user", { question: "Why do you want this job?", ref: "e1", actions: ["draft", "skip"] })] });
+  const { request, seen } = scripted({ tool_calls: [call("type_text", { ref: "e1", text: "https://github.com/example" })] });
   const step = formAgent({}, profile, {}, request, undefined, true, undefined, { vision: false, get allowDrafts() { return drafts; } });
   drafts = false;
-  const plan = await step(body(observation([el("e1", "textarea", "Why do you want this job?", { required: false })])));
-  assert.match(seen[1].look.results[0].content, /Let AI answer/);
-  assert.deepEqual(plan.question.actions, ["draft", "skip"]);
+  const plan = await step(body(observation([el("e1", "textarea", "Github profile")])));
+  assert.match(seen[0].messages[1].content, /Let AI answer: OFF/);
+  assert.equal(plan.status, "continue");
+  assert.equal(plan.actions[0].type, "type");
 });
 
 test("Draft it for me lets the agent write that one field with the switch off", async () => {
@@ -457,7 +457,7 @@ test("an application that used its token limit is handed to the user with a clea
   const { request, seen } = scripted();
   const step = make(request, { state: { tokens: 1_000_000 } });
   const plan = await step(body(observation([el("e1", "textbox", "First name")])));
-  assert.equal(plan.status, "ready_for_review");
+  assert.equal(plan.status, "failed");
   assert.match(plan.message, /limit of about 1,000,000 input tokens/);
   assert.equal(seen.length, 0, "no model call is made past the limit");
 });
@@ -490,17 +490,6 @@ test("page messages that follow each other without a model answer in between do 
   const sent = seen[0].messages[1].content;
   assert.ok(!sent.includes("OLD-SNAPSHOT-MARKER"), "the old snapshot is shrunk to its stub");
   assert.match(sent, /First name/);
-});
-
-test("a typed draft request is read by the model as a request: it writes the draft, even with the switch off", async () => {
-  const { request, seen } = scripted({ tool_calls: [call("ask_user", { question: "Why do you want to work here?", ref: "e1" })] }, { tool_calls: [call("type_text", { ref: "e1", text: "A written draft." })] });
-  const step = make(request, { allowDrafts: false });
-  const obs = observation([el("e1", "textarea", "Why do you want to work here?")]);
-  assert.equal((await step(body(obs))).status, "ask_user");
-  const plan = await step(body(obs, { user_reply: "please draft one" }));
-  assert.equal(plan.actions[0]?.type, "type", "the model's write is allowed");
-  assert.equal(plan.actions[0].text, "A written draft.");
-  assert.match(seen[0].messages[0].content, /is a request, not the answer/, "the prompt tells the model what to do");
 });
 
 test("fill_form selects popup textboxes and exposes their dropdown capability", async () => {
@@ -657,4 +646,19 @@ test("required conditional follow-ups must be resolved before later questions", 
   await make(request)(body(observation([el("e1", "textbox", "If yes, details")])));
   assert.match(seen[0].messages[0].content, /resolve it NOW before any later question/);
   assert.match(seen[0].messages[0].content, /Never defer a required conditional field until done/);
+});
+
+test("model-driven formatted writes report ok without is_error while staying visible for the model to check", async () => {
+  const { request, seen } = scripted(
+    { tool_calls: [call("type_text", { ref: "e1", text: "5550100199" })] },
+    { tool_calls: [call("done", { summary: "Done." })] });
+  const step = make(request);
+  await step(body(observation([el("e1", "textbox", "Phone")])));
+  const obs = observation([el("e1", "textbox", "Phone", { value: "(555) 010-0199" })]);
+  await step(body(obs, { results: [{ index: 0, ok: true, result: { verified: false, changed: true } }] }));
+  const result = seen[1].look.results[0];
+  assert.equal(result.is_error, false);
+  assert.match(result.content, /page formatted value; check/);
+  assert.match(result.content, /\(555\) 010-0199/);
+  assert.match(seen[1].messages[1].content, /"ref":"e1"/);
 });

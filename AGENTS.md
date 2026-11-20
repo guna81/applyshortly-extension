@@ -1,6 +1,6 @@
 # Contributor guide for coding agents
 
-> **Names (2026-11-18).** The extension now calls its two engines the **Rule based form assistant** (rules, saved answers, AI only for leftovers; `src/rule-based/`) and the
+> **Names (2026-11-18).** The extension now calls its two engines the **Rule based form assistant** (rules and saved answers; no model calls; `src/rule-based/`) and the
 > **Agent based form assistant** (one ReAct agent; `src/agent-based/`; both engines run on `src/page-control/`). Their old names, "Rules-led" and "AI-led", are
 > **still used by the platform** (website settings, docs, the `agent_engine` / `extensionEngine` values `rules_led` and `ai_led`). Those values are kept on purpose so the
 > extension and the platform stay in sync. **The platform will be renamed soon**; until then read "AI-led" there as the agent based form assistant.
@@ -59,7 +59,7 @@ testbed does it for you). Report numbers as measured on those forms, not as gene
 
 The extension has exactly two form engines, in plain words:
 
-- **Rule based form assistant** (`src/rule-based/`): saved rules, keyword mappings and site adapters fill the form; AI only answers what is left. Cheap and fast.
+- **Rule based form assistant** (`src/rule-based/`): saved rules, keyword mappings and site adapters fill the form. Never call a model, including embeddings, drafts or navigation. Unknowns stay with the user.
 - **Agent based form assistant** (`src/agent-based/`): one ReAct agent (an LLM with a prompt, tools and its own message history that decides every step: reason, call a tool, read the result, repeat). Slower and costlier, adapts to any form. It runs the same way for the platform's AI and for every custom provider.
 
 Both sit on `src/page-control/` (observe the page, run guarded commands, drive the tab). Do not add another planner, mode, flag, setting,
@@ -169,3 +169,7 @@ screenshot switch is on (never stored by ApplyShortly; custom providers only whe
 `supportsVision` is set). The server Python planner has its own screenshots and native tools. Do not claim visual parity or
 identical behavior between the two. Whether the screenshots and tool calls help is not proven: the gateway does not yet report
 whether a provider used them (see `apply-assistant/docs/development/form-agent-testing/form-agent-planner-results.md`).
+
+## Enforced form-engine boundary
+
+Agent form reasoning belongs to the model: no keyword/regex answer matching, deterministic prefill or answer rewriting. Shared `page-control/` code observes and executes explicit commands; `shared/ui/` owns common panel presentation and routing. Safety guards may classify sensitive controls only to refuse unsafe operations, never to pick or substitute an answer. Rules never call model providers, directly or indirectly. Engine failures never switch engines. Keep engine-boundary tests alongside changes.

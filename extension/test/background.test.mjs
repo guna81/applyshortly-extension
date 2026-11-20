@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { endpoint, canDraft, customAssist, providerSupport } from "../src/shared/custom-ai.js";
 // Changed 2026-11-18: background.js now builds the form agent (src/agent-based/form-agent.js) and the tool catalog; the harness strips imports, so they are supplied here.
 import { formAgent } from "../src/agent-based/form-agent.js";
+import { ruleAgent } from "../src/rule-based/rule-agent.js";
 import { TOOL_CATALOG } from "../src/agent-based/tools.js";
 // Changed 2026-11-17: background.js now imports modelBody (src/shared/model-turn.js); the harness strips imports, so it is supplied here.
 import { modelBody } from "../src/shared/model-turn.js";
@@ -85,8 +86,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     commands: { onCommand: { addListener() {} } }, scripting: {},
     action: { setBadgeText: async (value) => { calls.push({ badge: value }); }, setBadgeBackgroundColor: async (value) => { calls.push({ badgeColor: value }); } },
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, formAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, formAgent, ruleAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, ruleAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -372,15 +373,12 @@ test('AI settings are available only to trusted UI and return metadata', async (
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
-test('the panel assistant forwards page fields only for the application in this tab', async () => {
+test('rule panel assistance is refused before platform AI is called', async () => {
   const h = harness();
   h.session['tab:10'] = { appId: 5, origin: 'https://example.com' };
   const body = { messages: [{ role: 'user', text: 'Yes' }], fields: [{ key: 'f0', label: 'Relocate?', kind: 'radio', options: ['Yes', 'No'] }], current: { f0: '' } };
-  assert.equal((await h.send({ type: 'assist', appId: 5, ...body }, h.content)).ok, true);
-  assert.deepEqual(plain(h.calls.find((c) => c.assist).assist), body);
-  assert.equal((await h.send({ type: 'assist', appId: 6, ...body }, h.content)).ok, false);
-  assert.equal((await h.send({ type: 'assist', appId: 5, ...body, fields: [] }, h.content)).ok, false);
-  assert.equal(h.calls.filter((c) => c.assist).length, 1);
+  assert.equal((await h.send({ type: 'assist', appId: 5, ...body }, h.content)).ok, false);
+  assert.equal(h.calls.filter((c) => c.assist || c.customRequest).length, 0);
 });
 
 test('website sign-in connects silently, and only the ApplyShortly origin may report it', async () => {
@@ -671,7 +669,7 @@ test('employer pages cannot connect, approve or control the external browser', a
 });
 
 
-test('custom provider sends draft context directly without a platform question lookup', async () => {
+test('rule suggestion refuses drafting even with a custom provider', async () => {
   const h = harness();
   const saved = await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret' });
   assert.equal(saved.ok, true);
@@ -679,13 +677,9 @@ test('custom provider sends draft context directly without a platform question l
   assert.equal(settings.data.hasKey, true);
   assert.equal('apiKey' in settings.data, false);
   const result = await h.send({ type: 'suggest', appId: null, question: 'Why do you want this role?', allowGenerate: true }, h.content);
-  assert.equal(result.data.answer, 'Fixture draft');
-  assert.equal(result.data.needs_review, true);
+  assert.equal(result.ok, false);
   assert.equal(h.calls.some((x) => x.suggest), false);
-  assert.equal(h.calls.filter((x) => x.customRequest).length, 1);
-  assert.equal((await h.send({ type: 'suggest', appId: null, question: 'What is your salary?', allowGenerate: true }, h.content)).data.answer, null);
-  assert.equal(h.calls.filter((x) => x.customRequest).length, 1);
-  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, false);
+  assert.equal(h.calls.filter((x) => x.customRequest).length, 0);
   assert.equal((await h.send({ type: 'customAISettings' }, h.content)).ok, false);
   await h.send({ type: 'disconnect' });
   assert.equal(h.local.customAI, undefined);
@@ -727,14 +721,22 @@ test('local sample forms stay untracked and remain available for filling', async
 });
 
 
-test('custom assistant chat goes directly to the selected provider without platform AI', async () => {
+test('rule panel assistance is refused for a custom provider too', async () => {
   const h = harness();
   await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'agy/test', apiKey: 'fixture-secret' });
-  const result = await h.send({ type: 'assist', messages: [{ role: 'user', text: 'What optional fields are empty?' }], fields: [{ key: 'f1', label: 'Source', kind: 'text', options: [], required: false }], current: { f1: '' } }, h.content);
-  assert.equal(result.ok, true);
-  assert.equal(result.data.reply, 'Optional source is blank.');
-  assert.equal(h.calls.filter((c) => c.customRequest).length, 1);
-  assert.equal(h.calls.some((c) => c.assist), false);
+  const result = await h.send({ type: 'assist', messages: [{ role: 'user', text: 'Help' }], fields: [{ key: 'f1', label: 'Source', kind: 'text', required: false }], current: { f1: '' } }, h.content);
+  assert.equal(result.ok, false);
+  assert.equal(h.calls.some((c) => c.assist || c.customRequest), false);
+});
+
+test('rule runs stay on the local rule agent with 0 model or server step calls even when a custom provider is configured', async () => {
+  const h = harness({ engine: "rules_led" });
+  await h.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture', apiKey: 'fixture' });
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  const res = await h.agentInstances[0].step({ observation: { url: "https://example.com/apply", elements: [] }, results: [] });
+  assert.equal(h.calls.some((call) => call.capabilities === true || call.agentModel || call.customRequest || call.agentStep), false);
+  assert.equal(res.agent_engine, "rules_led");
+  assert.equal(res.status, "ready_for_review");
 });
 
 test('custom Agent based form assistant planning uses the selected engine and never calls the platform agent', async () => {

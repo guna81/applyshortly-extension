@@ -87,44 +87,12 @@
     };
   }
 
-  /** Asks the server for an answer; an AI draft for an untracked page carries the page's job. */
-  const suggest = (question, appId, allowGenerate) =>
-    send({ type: "suggest", question, appId, allowGenerate, page: allowGenerate && appId == null ? pageJob() : undefined });
+  /** Looks up an existing saved answer. */
+  const suggest = (question, appId) =>
+    send({ type: "suggest", question, appId, allowGenerate: false });
 
-  /** Why the last AI draft failed (no credits, a rejected key, …), for the chat to say. @type {string | null} */
-  let draftError = null;
-
-  async function resolveAnswer(field, allowGenerate) {
-    if (field.consent) return null;
-    if (field.kind === "text" && field.el.matches('input[type=date], input.ashby-application-form-input-date')) {
-      const prefs = state.ctx.profile.preferences;
-      let value = prefs?.available_from;
-      if (!value && prefs?.notice_period_days === 0) {
-        const today = new Date();
-        value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-      }
-      return value ? { value, source: "profile", needsReview: false } : null;
-    }
-    const local = F.profileAnswer(field.label, state.ctx.profile, state.ctx.app);
-    if (local) return { value: local.value, source: "profile", needsReview: local.needsReview };
-    if (!field.label) return null;
-    // Long questions ("Current CTC? Mention fixed and variable components separately.") match the
-    // answer bank poorly as a whole, so retry with just the first sentence before drafting with AI.
-    const head = F.firstSentence(field.label);
-    const attempts = head !== field.label ? [[field.label, false], [head, false]] : [[field.label, false]];
-    if (allowGenerate && (field.kind !== "text" || P.draftable(field))) attempts.push([field.label, true]);
-    for (const [question, generate] of attempts) {
-      try {
-        const s: any = await suggest(question, state.appId, generate);
-        if (s.answer) return { value: s.answer, source: s.source, needsReview: s.needs_review };
-      } catch (err: any) {
-        console.warn("[JobHunt] suggest failed:", err?.message);
-        if (generate) draftError = err?.message;
-        return null;
-      }
-    }
-    return null;
-  }
+  const resolveAnswer = (field) =>
+    (globalThis as any).JobHuntRuleEngine.resolveAnswer(field, state, suggest);
 
   function isResumeInput(field, fileFields) {
     if (/cover/i.test(field.label)) return false;
@@ -176,13 +144,13 @@
       .replace(/`([^`\n]+)`/g, "$1").trim();
   }
 
-  async function fillAll({ allowGenerate }) {
+  async function fillAll() {
     const fields = F.collectFields(document);
     const fileFields = fields.filter((f) => f.kind === "file");
     const results = [];
 
     const answerable = fields.filter((f) => ["text", "select", "radio", "dropdown"].includes(f.kind) && F.isEmpty(f));
-    const answers = await Promise.all(answerable.map((f) => resolveAnswer(f, allowGenerate)));
+    const answers = await Promise.all(answerable.map(resolveAnswer));
     const answerFor = new Map(answerable.map((f, i) => [f, answers[i]]));
 
     for (const field of fields) {
@@ -226,7 +194,6 @@
       }
       if (!answerFor.has(field)) continue; // already had a value
       const row: any = await applyAnswer(field, answerFor.get(field));
-      if (row && !answerFor.get(field) && allowGenerate && P.draftable(field)) row.draftAttempted = true;
       if (row) results.push(row);
     }
     const checked = await validate(results, fields);
@@ -330,7 +297,7 @@
    * Fills the page from the profile and answer bank. `quiet` re-reads a page the agent already
    * filled, without reporting it again (the agent reported its own fill).
    */
-  async function run(appId: any, { allowGenerate, quiet = false }: any = {}) {
+  async function run(appId: any, { quiet = false }: any = {}) {
     try {
       if (!state || state.appId !== appId) {
         panel.busy("Loading your profile…");
@@ -340,6 +307,10 @@
         if (!quiet) await report("opened");
       }
       if (!quiet && state.ctx.agentAvailable) { panel.idle(); return true; }
+      if (!quiet && state.ctx.agentEngine === "ai_led") {
+        state = null;
+        throw new Error("The Agent based form assistant is unavailable. Check your connection or AI provider and retry.");
+      }
       if (quiet) {
         // Readback only: the controller owns writes, including during completion refresh.
         state.results = F.collectFields(document).map((field) => {
@@ -354,9 +325,8 @@
         panel.idle();
         return true;
       }
-      const generate = allowGenerate ?? state.ctx.aiDrafts;
-      panel.busy(generate ? "Drafting answers with AI… this can take a few seconds" : "Matching your answers to the form…");
-      state.results = merge(state.results, await fillAll({ allowGenerate: generate }));
+      panel.busy("Matching your answers to the form…");
+      state.results = merge(state.results, await fillAll());
       outline();
       if (!quiet) await reportFilled();
       panel.idle();
@@ -390,17 +360,7 @@
 
   /** "Draft it for me": the per-field AI draft (profile + job), started from the chat. */
   async function assistantDraft(row) {
-    draftError = null;
-    const answer = await resolveAnswer(row.field, true);
-    const next = answer ? await applyAnswer(row.field, answer) : null;
-    if (next?.status !== "filled") {
-      const why = draftError ? ` (${draftError.replace(/\.$/, "")})` : "";
-      return { text: `I couldn't draft this one${why}. Tell me what you'd like to say and I'll put it in.`, target: row };
-    }
-    state.results = merge(state.results, [next]);
-    outline();
-    void reportFilled();
-    return { text: "Here's a draft based on your profile and this job. Read it over in the form, or tell me what to change.", filled: [row.field.label || "answer"], next: true };
+    return { text: "AI drafting is available in the Agent based form assistant. Type your answer to continue.", target: row };
   }
 
   /** Quick replies the panel handles itself: nothing is sent to the assistant. */
@@ -493,35 +453,12 @@
       await agentControl("reply", message);
       return panel.idle();
     }
-    // "Draft it for me": draft from the profile and the job, then give the agent the draft.
-    chat.pending = true;
+    chat.lines.push({
+      role: "assistant", local: true,
+      text: q.choices?.length ? "Pick one of the options, or tell me which one fits." : "Tell me what to put in the form.",
+      choices: P.agentAsk(q)?.choices.filter((choice) => choice !== P.DRAFT_REPLY),
+    });
     panel.idle();
-    try {
-      // A legal-fact question (visa, work authorization) is never drafted from the generic AI path.
-      // The agent writes it from the profile and the user's own answers in this chat, and says so if a fact is missing.
-      if (!P.draftable({ kind: "text", label: q.text }) && P.groundedDraft(q.text)) {
-        chat.lines.push({ role: "assistant", local: true, text: "I'll write it from your profile and what you've told me here, and nothing else. Read it over in the form." });
-        await agentControl("message", `Draft it for me: answer the open question "${String(q.text).slice(0, 200)}" yourself: type one or two plain sentences into that field using only facts from my profile and my earlier answers in this chat (user_answered). Do not invent anything; if a fact is missing, ask me for it.`);
-        return;
-      }
-      let lost = false;
-      const s: any = P.draftable({ kind: "text", label: q.text })
-        ? await suggest(q.text, state?.appId ?? agent.appId ?? null, true).catch((err: any) => { lost = isInvalidated(err); return null; })
-        : null;
-      if (lost) {
-        chat.lines.push({ role: "assistant", local: true, text: RELOAD_TEXT });
-        return;
-      }
-      if (s?.answer) {
-        chat.lines.push({ role: "assistant", local: true, text: `Here's a draft, going into the form now: “${s.answer}” Tell me if you want it changed.` });
-        await agentControl("reply", s.answer);
-      } else {
-        chat.lines.push({ role: "assistant", local: true, text: q.choices?.length ? "Pick one of the options, or tell me which one fits." : "That's one only you can answer. Tell me what to put.", choices: P.agentAsk(q)?.choices.filter((c) => c !== P.DRAFT_REPLY) });
-      }
-    } finally {
-      chat.pending = false;
-      panel.idle();
-    }
   }
 
   let shownLog: string[] = []; // the agent's log lines already narrated in the chat
@@ -583,6 +520,12 @@
     }
     if (next.status === "waiting") {
       const ask = P.agentAsk(next.question, next.agent_engine);
+      // The agent may log the same blocker/question text as a step; show it once as the card below.
+      const tail = chat.lines.at(-1);
+      if (tail?.step && next.question?.text) {
+        const parts = (tail.parts ?? [tail.text]).filter((part) => part !== next.question.text);
+        if (parts.length) { tail.parts = parts; tail.text = parts.join("\n"); } else chat.lines.pop();
+      }
       // The same question twice in a row (nothing said by the user between) is one card.
       const lastSaid = [...chat.lines].reverse().find((l) => !l.step);
       const sameCard = (a, b) => Boolean(a && b) && (a.question?.label ?? a.text) === (b.question?.label ?? b.text);
@@ -631,7 +574,7 @@
     // Once the agent has finished ("ready"), the panel's own quick replies (tick it, show me, I've done it)
     // act on the page directly, as they do without an agent. Sent to the agent they would arrive as a
     // read-only chat question and nothing would be ticked.
-    const finishedChip = agent?.status === "ready" && P.LOCAL_REPLIES.includes(message);
+    const finishedChip = agent?.agent_engine !== "ai_led" && agent?.status === "ready" && P.LOCAL_REPLIES.includes(message);
     if (agent && !["failed", "stopped"].includes(agent.status) && !finishedChip) {
       // The chips on the agent's own question are the panel's: "Draft it for me" drafts the answer
       // and "I'll fill it on the page" skips it. Sent as replies they would be taken as the answer.
@@ -640,7 +583,7 @@
       }
       chat.lines.push({ role: "user", text: message });
       chat.draft = "";
-      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question" && P.isPlainAnswer(message);
+      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question";
       await agentControl(plainAnswer ? "reply" : "message", message);
       panel.idle();
       return;
@@ -675,35 +618,9 @@
       }
       return;
     }
-    const { fields, current, rows } = P.assistantFields(state.results);
-    if (!fields.length) {
-      panel.toast("There are no questions on this page the assistant can answer.", { persist: true });
-      return;
-    }
-    const turn = chat;
-    const hello = turn.lines.length ? null : greeting();
-    if (hello) turn.lines.push({ role: "assistant", greeting: true, ...hello });
-    turn.lines.push({ role: "user", text: message });
-    turn.draft = "";
-    turn.pending = true;
+    chat.lines.push({ role: "user", text: message });
+    chat.lines.push({ role: "assistant", local: true, text: "Type an answer for the current field, or use the Agent based form assistant for AI assistance." });
     panel.idle();
-    try {
-      const res: any = await send({ type: "assist", appId: state.appId, messages: P.chatHistory(turn.lines), fields, current });
-      if (turn !== chat) return; // another application started meanwhile
-      const filled = await applyAssistantUpdates(res.updates, rows);
-      // Once the questions it can answer are done, bring up the optional and manual steps.
-      const moveOn = !P.openQuestions(state.results).length && (res.done || !res.choices?.length);
-      const reply = { text: res.reply, filled, warnings: res.warnings ?? [], choices: res.done ? [] : res.choices ?? [], next: moveOn };
-      turn.lines.push({ role: "assistant", ...withNext(reply) });
-    } catch (err: any) {
-      turn.lines.pop();
-      if (turn.lines.length === 1 && turn.lines[0].greeting) turn.lines = [];
-      turn.draft = message;
-      panel.toast(`Assistant unavailable: ${err?.message}`, { persist: true });
-    } finally {
-      turn.pending = false;
-      panel.idle();
-    }
   }
 
   // ------------------------------------------------------------------ live re-check
@@ -958,7 +875,7 @@
     get submittedReported() { return submittedReported; },
     get pageCount() { return pageCount(); },
     AUTO_APPLY_DELAY_S,
-    agentControl, askAssistant, autoApply, markSubmitted, outlineTarget, run, send,
+    agentControl, askAssistant, autoApply, markSubmitted, outlineTarget, run: start, send,
   };
   const panel = globalThis.JobHuntPanelView.create(ctl);
 
@@ -1014,28 +931,12 @@
   }
 
   /** Drafts every open question with AI (the switch was just turned on), then says what it did. */
-  async function draftOpen() {
-    const before = new Set(state.results.filter((r) => r.status === "filled").map((r) => r.field.el));
-    if (!(await run(state.appId, { allowGenerate: true }))) return;
-    const drafted = state.results.filter((r) => r.status === "filled" && !before.has(r.field.el)).map((r) => r.field.label || "answer");
-    const next = P.nextPrompt(state.results);
-    const lead = drafted.length
-      ? `I drafted ${drafted.length === 1 ? "an answer" : `${drafted.length} answers`} with AI. Read ${drafted.length === 1 ? "it" : "them"} over in the form.`
-      : "I couldn't draft any of the open questions.";
-    chat.lines.push({ role: "assistant", local: true, filled: drafted, ...followedBy(lead, next) });
-    panel.idle();
-  }
-
   // The panel's two switches (also on the settings page) take effect at once, also on an open panel.
   // "Let AI answer": draft what the profile doesn't cover. "Auto apply": send once everything is answered.
   let autoApplyOn = false;
   try { void chrome.storage?.local?.get?.("autoApply")?.then?.((v) => { autoApplyOn = v?.autoApply === true; }); } catch { /* storage unavailable */ }
   chrome.storage?.onChanged?.addListener((changes, area) => {
     if (area !== "local") return;
-    if ("aiDrafts" in changes && state?.ctx) {
-      state.ctx.aiDrafts = changes.aiDrafts.newValue !== false;
-      if (state.ctx.aiDrafts && !agentLive() && !chat.pending && state.results.some((r) => ["unresolved", "optional"].includes(r.status) && P.draftable(r.field))) void draftOpen();
-    }
     if ("autoApply" in changes) {
       autoApplyOn = changes.autoApply.newValue === true;
       if (!autoApplyOn) return panel.cancelCountdown?.();
@@ -1066,8 +967,8 @@
     if (sender.id !== chrome.runtime.id) return;
     if (msg?.type === "agentUpdate") {
       const previous = agent;
-      agent = msg;
-      void agentChanged(previous, msg);
+      agent = { ...msg, agent_engine: msg.agent_engine ?? previous?.agent_engine };
+      void agentChanged(previous, agent);
       sendResponse({ ok: true });
       return;
     }

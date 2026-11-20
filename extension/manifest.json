@@ -11,7 +11,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/rule-based/profile-answer.js", "src/rule-based/fill.js", "src/rule-based/panel-model.js", "src/rule-based/panel-view.js", "src/rule-based/content.js"],
+      "js": ["src/page-control/phone.js", "src/rule-based/profile-answer.js", "src/rule-based/answers.js", "src/page-control/dom.js", "src/shared/ui/panel-model.js", "src/shared/ui/panel-view.js", "src/shared/ui/content.js"],
       "run_at": "document_idle"
     }
   ],

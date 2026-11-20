@@ -95,6 +95,8 @@ test('provider preset saves only on device with a default model and clears the k
     assert.deepEqual(Array.from(preset.options, (option) => option.value), ['openai', 'gemini', 'anthropic', 'custom']);
     preset.value = 'anthropic';
     preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(h.document.querySelector('#customBaseUrlWrapper').hidden, true);
+    assert.equal(h.document.querySelector('#customBaseUrl').required, false);
     h.document.querySelector('#customKey').value = 'fixture-personal-key';
     h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
     await h.flush();
@@ -116,6 +118,8 @@ test('custom preset enables tools and disables vision by default and can be save
     const preset = h.document.querySelector('#providerPreset');
     preset.value = 'custom';
     preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(h.document.querySelector('#customBaseUrlWrapper').hidden, false);
+    assert.equal(h.document.querySelector('#customBaseUrl').required, true);
     assert.equal(h.document.querySelector('#customSupportsTools').checked, true);
     assert.equal(h.document.querySelector('#customSupportsVision').checked, false);
     h.document.querySelector('#customBaseUrl').value = 'http://localhost:11434/v1';
@@ -127,6 +131,80 @@ test('custom preset enables tools and disables vision by default and can be save
     assert.equal(saved.model, 'llama3');
     assert.equal(saved.supportsTools, true);
     assert.equal(saved.supportsVision, false);
+  } finally { h.close(); }
+});
+
+test('api base url is hidden for openai, gemini, anthropic presets and only shown for custom provider', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const preset = h.document.querySelector('#providerPreset');
+    const urlWrapper = h.document.querySelector('#customBaseUrlWrapper');
+    const urlInput = h.document.querySelector('#customBaseUrl');
+
+    // Default preset is openai
+    assert.equal(urlWrapper.hidden, true);
+    assert.equal(urlInput.required, false);
+
+    // Switch to gemini
+    preset.value = 'gemini';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(urlWrapper.hidden, true);
+    assert.equal(urlInput.required, false);
+    assert.equal(urlInput.value, PROVIDER_PRESETS.gemini.baseUrl);
+
+    // Switch to anthropic
+    preset.value = 'anthropic';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(urlWrapper.hidden, true);
+    assert.equal(urlInput.required, false);
+    assert.equal(urlInput.value, PROVIDER_PRESETS.anthropic.baseUrl);
+
+    // Switch to custom provider
+    preset.value = 'custom';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(urlWrapper.hidden, false);
+    assert.equal(urlInput.required, true);
+    assert.equal(urlInput.value, '');
+  } finally { h.close(); }
+});
+
+test('test connection validates and tests form inputs before saving', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const preset = h.document.querySelector('#providerPreset');
+    preset.value = 'openai';
+    preset.dispatchEvent(new h.window.Event('change'));
+    h.document.querySelector('#customKey').value = 'sk-test-preview';
+    h.document.querySelector('#customTest').click();
+    await h.flush();
+    const testCall = h.calls.find((item) => item.type === 'testCustomAI');
+    assert.ok(testCall, 'testCustomAI was sent');
+    assert.equal(testCall.baseUrl, PROVIDER_PRESETS.openai.baseUrl);
+    assert.equal(testCall.apiKey, 'sk-test-preview');
+    assert.match(h.document.querySelector('#customStatus').textContent, /Connection successful/);
+    assert.equal(h.document.querySelector('#customStatus').className, 'good');
+  } finally { h.close(); }
+});
+
+test('existing saved key is indicated and clear key stages removal for save', async () => {
+  const h = await setup({ signedIn: true, customEnabled: true });
+  try {
+    const hint = h.document.querySelector('#customKeyHint');
+    assert.equal(hint.hidden, true); // fixture setup had no apiKey
+    // Simulate setting key
+    h.document.querySelector('#customKey').value = 'new-key';
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    await h.flush();
+    assert.equal(h.calls.find((item) => item.type === 'saveCustomAI').apiKey, 'new-key');
+    assert.equal(h.calls.find((item) => item.type === 'saveCustomAI').clearKey, false);
+
+    // Now clear key button
+    h.document.querySelector('#clearSavedCustomKey').click();
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    await h.flush();
+    const lastSave = h.calls.filter((item) => item.type === 'saveCustomAI').pop();
+    assert.equal(lastSave.clearKey, true);
+    assert.equal(lastSave.apiKey, '');
   } finally { h.close(); }
 });
 

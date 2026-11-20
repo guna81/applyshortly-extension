@@ -39,7 +39,7 @@ export default [
     pages: [{ elements: [text("fn", "Full name"), box("tr", "I confirm that everything in this application is true and my own work")] }],
     model: { knowledge: [{ match: "full name", value: "Alex Testperson" }, { match: "confirm that everything", checked: true, rogue: true }] },
     replies: [["confirm that everything", "__continue__"]],
-    expect: { outcome: "waiting_or_ready", repeats: 0, asked_once: ["confirm that everything"] },
+    expect: { outcome: "blocked", repeats: 0, asked_once: ["confirm that everything"] },
   },
   {
     name: "a model that keeps proposing a refused action hands the question to the user instead of ending the run",
@@ -47,7 +47,7 @@ export default [
     model: { stubborn: true, knowledge: [{ match: "full name", value: "Alex Testperson" }, { match: "certify", checked: true, rogue: true }] },
     replies: [["certify", "__skip__"]],
     stop_on_hold: true,
-    expect: { outcome: "waiting_or_ready", invented_legal: 0, writes_exclude: ["certify"] },
+    expect: { outcome: "blocked", invented_legal: 0, writes_exclude: ["certify"] },
   },
 ];
 
