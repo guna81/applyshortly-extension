@@ -32,6 +32,7 @@ export interface ExtensionPreferences {
   willing_to_relocate: boolean;
   requires_sponsorship: boolean | null; // null: not answered yet
   work_authorization: Record<string, string>;
+  time_zone_regions?: string[];
 }
 
 export interface ExtensionProfile {
@@ -200,8 +201,9 @@ export interface AgentActionResult {
 }
 
 export interface AgentStepRequest {
+  extension_engine?: "rules_led" | "ai_led";
   runtime_version?: string;
-  controller_version?: 1 | 2;
+  guarded_commands: true;
   request_id?: string | null;
   user_message?: string | null;
   inspect_only?: boolean;
@@ -214,7 +216,7 @@ export interface AgentStepRequest {
   resumed?: boolean;
   in_user_tab?: boolean;
   /** This extension runs fill_form / options / review and reports each action's `result`. */
-  verified_commands?: boolean;
+  verified_commands?: boolean; local_planner?: boolean;
 }
 
 /** One entry of a fill_form: typed or chosen (`text`), or checked. */
@@ -248,14 +250,14 @@ export interface AgentAction {
 }
 
 export interface AgentStepResponse {
-  controller_version?: 1 | 2;
+  guarded_commands: true;
   observation_id?: string | null;
   session_id: string;
   agent_engine?: "rules_led" | "ai_led" | null;
   status: "continue" | "ask_user" | "ready_for_review" | "failed";
   actions: AgentAction[];
   message: string;
-  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null; optional?: boolean } | null;
+  question: { kind: "blocker" | "question" | "click"; text: string; ref?: string | null; optional?: boolean; actions?: ("draft" | "skip" | "on_page")[] } | null;
   focus_query?: string;
   want_screenshot: boolean;
   annotate_screenshot?: boolean;
@@ -355,9 +357,7 @@ export class JobHuntBridge {
     return this.request("/api/extension/ai", { method: "PUT", body: JSON.stringify(body) });
   }
 
-  saveAIProvider(provider: "openai" | "anthropic" | "gemini", body: { api_key: string; model: string }): Promise<ExtensionAccount["ai"]> {
-    return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "PUT", body: JSON.stringify(body) });
-  }
+
 
   deleteAIProvider(provider: "openai" | "anthropic" | "gemini"): Promise<ExtensionAccount["ai"]> {
     return this.request(`/api/extension/ai/providers/${encodeURIComponent(provider)}`, { method: "DELETE" });
@@ -417,8 +417,13 @@ export class JobHuntBridge {
   }
 
   /** One round trip of the form agent: the page as observed → the next vetted actions. */
-  agentCapabilities(): Promise<{controller_version: 1 | 2; agent_engine: "rules_led" | "ai_led"; verified_commands?: boolean}> {
-    return this.request("/api/extension/agent/capabilities");
+  agentCapabilities(custom = false, engine: "rules_led" | "ai_led" = "ai_led"): Promise<{guarded_commands: true; agent_engine: "rules_led" | "ai_led"; extension_engine?: "rules_led" | "ai_led"; verified_commands?: boolean; local_planner?: boolean; planner?: "custom"}> {
+    const query = new URLSearchParams({ extension_engine: engine, ...(custom ? { planner: "custom" } : {}) });
+    return this.request(`/api/extension/agent/capabilities?${query}`);
+  }
+
+  agentModel(body: { session_id: string; application_id: number | null; request_id: string; messages: Array<{role: string; content: string}>; max_output_tokens: number; images?: string[]; native_tools?: boolean }): Promise<{text: string; tool_calls?: Array<{name: string; arguments: Record<string, unknown>}>; tool_calls_unsupported?: boolean}> {
+    return this.request("/api/extension/agent/model", { method: "POST", body: JSON.stringify(body) });
   }
 
   diagnostic(body: {

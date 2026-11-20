@@ -1,14 +1,17 @@
+import { PROVIDER_PRESETS, providerSupport } from "../src/shared/custom-ai.js";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
-async function setup({ signedIn = false, billingEnabled = true, autoConnect = false } = {}) {
-  const dom = new JSDOM(readFileSync(new URL('../src/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
+async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false } = {}) {
+  const dom = new JSDOM(readFileSync(new URL('../src/ui/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
   const calls = [];
   let connected = signedIn;
   let storageListener;
   let ai = { mode: 'platform', provider: null, configured: [] };
+  const stored = {};
+  let custom = { enabled: customEnabled, baseUrl: 'http://localhost:8765/v1', model: 'fixture-model' };
   const { window } = dom;
   window.JobHuntPanel = { friendlyError: () => ({ title: 'Connection failed', detail: 'Retry' }) };
   window.chrome = {
@@ -21,8 +24,10 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
           case 'connectionSettings': data = { configured: connected }; break;
           case 'test': data = connected ? { connected, configured: true, connectionType: 'automatic', name: 'Fixture', email: 'fixture@example.com', plan: 'pro', credits: 42, billingEnabled, ai } : { configured: false }; break;
           case 'browserSignIn': connected = autoConnect || message.interactive; data = { state: connected ? 'connected' : 'signin_required' }; break;
-          case 'saveAIProvider': ai.configured = [{ provider: message.provider, model: message.model }]; data = ai; break;
+          case 'saveCustomAI': custom = { enabled: true, baseUrl: message.baseUrl, model: message.model, supportsTools: message.supportsTools, supportsVision: message.supportsVision }; data = true; break;
           case 'selectAI': ai = { ...ai, mode: message.mode, provider: message.provider ?? null }; data = ai; break;
+          case 'customAISettings': data = custom; break;
+          case 'disableCustomAI': custom = { ...custom, enabled: false }; data = true; break;
           case 'deleteAIProvider': ai.configured = []; data = ai; break;
           case 'disconnect': connected = false; data = true; break;
           default: data = true;
@@ -31,13 +36,31 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
       },
     },
     commands: { getAll: async () => [] },
-    storage: { session: { get: async () => ({}) }, local: { set: async () => {} }, onChanged: { addListener: (fn) => { storageListener = fn; } } },
+    storage: { session: { get: async () => ({}) }, local: { set: async (values) => Object.assign(stored, values) }, onChanged: { addListener: (fn) => { storageListener = fn; } } },
   };
-  window.eval(readFileSync(new URL('../src/options.js', import.meta.url), 'utf8'));
+  window.PROVIDER_PRESETS = PROVIDER_PRESETS;
+  window.providerSupport = providerSupport;
+  window.chrome.permissions = { request: async () => true };
+  window.eval(readFileSync(new URL('../src/ui/options.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, ''));
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
   await flush();
-  return { window, document: window.document, calls, flush, setConnected: (value) => { connected = value; }, storageChanged: (changes) => storageListener(changes, 'local'), close: () => window.close() };
+  return { window, document: window.document, calls, stored, flush, setConnected: (value) => { connected = value; }, storageChanged: (changes) => storageListener(changes, 'local'), close: () => window.close() };
 }
+
+test('active custom endpoint is selected until the user switches to credits', async () => {
+  const h = await setup({ signedIn: true, customEnabled: true });
+  try {
+    const funding = h.document.querySelector('#aiFunding');
+    assert.equal(funding.value, 'custom');
+    assert.match(funding.selectedOptions[0].textContent, /Custom AI provider/);
+    funding.value = 'platform';
+    funding.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(funding.value, 'platform');
+    assert.ok(h.calls.some((item) => item.type === 'disableCustomAI'));
+    assert.ok(h.calls.some((item) => item.type === 'selectAI' && item.mode === 'platform'));
+  } finally { h.close(); }
+});
 
 test('setup hides URL configuration and silently connects an existing web session', async () => {
   const h = await setup({ autoConnect: true });
@@ -47,8 +70,8 @@ test('setup hides URL configuration and silently connects an existing web sessio
     assert.equal(h.calls.find((item) => item.type === 'browserSignIn').interactive, false);
     assert.match(h.document.querySelector('#connTitle').textContent, /Connected/);
     assert.match(h.document.querySelector('#accountSummary').textContent, /Pro plan · 42 credits/);
-    assert.equal(h.document.querySelector('#providerKey').type, 'password');
-    assert.equal(h.document.querySelector('#advancedAI').open, false);
+    assert.equal(h.document.querySelector('#customKey').type, 'password');
+    assert.equal(h.document.querySelector('#customDetails').open, false);
   } finally { h.close(); }
 });
 
@@ -65,27 +88,123 @@ test('signed-out setup shows a sign-in button; it opens interactive sign-in only
   } finally { h.close(); }
 });
 
-test('provider dropdown saves required key and model, selects it, and clears the input', async () => {
+test('provider preset saves only on device with a default model and clears the key', async () => {
   const h = await setup({ signedIn: true });
   try {
-    assert.deepEqual(Array.from(h.document.querySelector('#provider').options, (option) => option.value), ['openai', 'anthropic', 'gemini']);
-    const form = h.document.querySelector('#providerForm');
-    h.document.querySelector('#provider').value = 'anthropic';
-    h.document.querySelector('#providerKey').value = 'fixture-personal-key';
-    form.dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    const preset = h.document.querySelector('#providerPreset');
+    assert.deepEqual(Array.from(preset.options, (option) => option.value), ['openai', 'gemini', 'anthropic', 'custom']);
+    preset.value = 'anthropic';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(h.document.querySelector('#customBaseUrlWrapper').hidden, true);
+    assert.equal(h.document.querySelector('#customBaseUrl').required, false);
+    h.document.querySelector('#customKey').value = 'fixture-personal-key';
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
     await h.flush();
+    const saved = h.calls.find((item) => item.type === 'saveCustomAI');
+    assert.equal(saved.baseUrl, PROVIDER_PRESETS.anthropic.baseUrl);
+    assert.equal(saved.model, PROVIDER_PRESETS.anthropic.model);
+    assert.equal(saved.supportsTools, true);
+    assert.equal(saved.supportsVision, true);
+    assert.equal(h.document.querySelector('#customKey').value, '');
     assert.equal(h.calls.some((item) => item.type === 'saveAIProvider'), false);
-    h.document.querySelector('#providerModel').value = 'fixture-model';
-    form.dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    assert.equal(h.document.querySelector('#providerForm'), null);
+    assert.equal(h.document.querySelector('#aiFunding').value, 'custom');
+  } finally { h.close(); }
+});
+
+test('custom preset enables tools and disables vision by default and can be saved', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const preset = h.document.querySelector('#providerPreset');
+    preset.value = 'custom';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(h.document.querySelector('#customBaseUrlWrapper').hidden, false);
+    assert.equal(h.document.querySelector('#customBaseUrl').required, true);
+    assert.equal(h.document.querySelector('#customSupportsTools').checked, true);
+    assert.equal(h.document.querySelector('#customSupportsVision').checked, false);
+    h.document.querySelector('#customBaseUrl').value = 'http://localhost:11434/v1';
+    h.document.querySelector('#customModel').value = 'llama3';
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
     await h.flush();
-    assert.deepEqual(JSON.parse(JSON.stringify(h.calls.find((item) => item.type === 'saveAIProvider'))), { type: 'saveAIProvider', provider: 'anthropic', apiKey: 'fixture-personal-key', model: 'fixture-model' });
-    assert.equal(h.document.querySelector('#providerKey').value, '');
-    assert.equal(h.document.body.textContent.includes('fixture-personal-key'), false);
-    assert.equal(h.document.querySelector('#aiFunding').value, 'anthropic');
-    h.document.querySelector('#savedProviders button').click();
+    const saved = h.calls.find((item) => item.type === 'saveCustomAI');
+    assert.equal(saved.baseUrl, 'http://localhost:11434/v1');
+    assert.equal(saved.model, 'llama3');
+    assert.equal(saved.supportsTools, true);
+    assert.equal(saved.supportsVision, false);
+  } finally { h.close(); }
+});
+
+test('api base url is hidden for openai, gemini, anthropic presets and only shown for custom provider', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const preset = h.document.querySelector('#providerPreset');
+    const urlWrapper = h.document.querySelector('#customBaseUrlWrapper');
+    const urlInput = h.document.querySelector('#customBaseUrl');
+
+    // Default preset is openai
+    assert.equal(urlWrapper.hidden, true);
+    assert.equal(urlInput.required, false);
+
+    // Switch to gemini
+    preset.value = 'gemini';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(urlWrapper.hidden, true);
+    assert.equal(urlInput.required, false);
+    assert.equal(urlInput.value, PROVIDER_PRESETS.gemini.baseUrl);
+
+    // Switch to anthropic
+    preset.value = 'anthropic';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(urlWrapper.hidden, true);
+    assert.equal(urlInput.required, false);
+    assert.equal(urlInput.value, PROVIDER_PRESETS.anthropic.baseUrl);
+
+    // Switch to custom provider
+    preset.value = 'custom';
+    preset.dispatchEvent(new h.window.Event('change'));
+    assert.equal(urlWrapper.hidden, false);
+    assert.equal(urlInput.required, true);
+    assert.equal(urlInput.value, '');
+  } finally { h.close(); }
+});
+
+test('test connection validates and tests form inputs before saving', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const preset = h.document.querySelector('#providerPreset');
+    preset.value = 'openai';
+    preset.dispatchEvent(new h.window.Event('change'));
+    h.document.querySelector('#customKey').value = 'sk-test-preview';
+    h.document.querySelector('#customTest').click();
     await h.flush();
-    assert.equal(h.document.querySelector('#aiFunding').value, 'anthropic');
-    assert.match(h.document.querySelector('#aiFunding').selectedOptions[0].textContent, /missing/);
+    const testCall = h.calls.find((item) => item.type === 'testCustomAI');
+    assert.ok(testCall, 'testCustomAI was sent');
+    assert.equal(testCall.baseUrl, PROVIDER_PRESETS.openai.baseUrl);
+    assert.equal(testCall.apiKey, 'sk-test-preview');
+    assert.match(h.document.querySelector('#customStatus').textContent, /Connection successful/);
+    assert.equal(h.document.querySelector('#customStatus').className, 'good');
+  } finally { h.close(); }
+});
+
+test('existing saved key is indicated and clear key stages removal for save', async () => {
+  const h = await setup({ signedIn: true, customEnabled: true });
+  try {
+    const hint = h.document.querySelector('#customKeyHint');
+    assert.equal(hint.hidden, true); // fixture setup had no apiKey
+    // Simulate setting key
+    h.document.querySelector('#customKey').value = 'new-key';
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    await h.flush();
+    assert.equal(h.calls.find((item) => item.type === 'saveCustomAI').apiKey, 'new-key');
+    assert.equal(h.calls.find((item) => item.type === 'saveCustomAI').clearKey, false);
+
+    // Now clear key button
+    h.document.querySelector('#clearSavedCustomKey').click();
+    h.document.querySelector('#customAIForm').dispatchEvent(new h.window.Event('submit', { bubbles: true, cancelable: true }));
+    await h.flush();
+    const lastSave = h.calls.filter((item) => item.type === 'saveCustomAI').pop();
+    assert.equal(lastSave.clearKey, true);
+    assert.equal(lastSave.apiKey, '');
   } finally { h.close(); }
 });
 
@@ -138,4 +257,31 @@ test('a connection made in the background shows without reloading', async () => 
     assert.match(h.document.querySelector('#connTitle').textContent, /Connected/);
     assert.equal(h.document.querySelector('#logout').hidden, false);
   } finally { h.close(); }
+});
+
+test('extension has its own engine selector, defaulting to Agent based form assistant', async () => {
+  const h = await setup();
+  try {
+    const select = h.document.querySelector('#extensionEngine');
+    assert.equal(select.value, 'ai_led');
+    select.value = 'rules_led';
+    select.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.match(h.document.querySelector('#prefMsg').textContent, /Saved/);
+    assert.equal(h.stored.extensionEngine, 'rules_led');
+  } finally { h.close(); }
+});
+
+test('the appearance choice is saved for every extension page', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const select = h.document.querySelector('#theme');
+    assert.deepEqual([...select.options].map((o) => o.value), ['system', 'light', 'dark']);
+    select.value = 'dark';
+    select.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(h.stored.theme, 'dark');
+  } finally {
+    h.close();
+  }
 });

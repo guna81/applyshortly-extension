@@ -1,4 +1,4 @@
-// Tests for src/fill.js in jsdom. Run: node --test extension/test (run npm ci first).
+// Tests for src/page-control/dom.js in jsdom. Run: node --test extension/test (run npm ci first).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
@@ -7,14 +7,14 @@ import { ashbyYesNo, ashbyProviders, ashbyConsent } from "./ashby-fixture.mjs";
 
 // Values built inside the jsdom window have its prototypes; compare plain copies.
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/page-control/phone.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/page-control/dom.js", import.meta.url), "utf8");
 
 function page(html, url = "https://example.com/apply") {
   const dom = new JSDOM(`<!doctype html><body>${html}</body>`, { url, runScripts: "outside-only" });
   // jsdom has no CSS.escape; Chrome does.
   dom.window.CSS = { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
   dom.window.eval(FILL_SRC);
-  return { doc: dom.window.document, F: dom.window.JobHuntFill, win: dom.window };
+  return { doc: dom.window.document, F: { ...dom.window.JobHuntFill, profileAnswer: dom.window.JobHuntProfile.profileAnswer }, win: dom.window };
 }
 
 const PROFILE = {
@@ -995,4 +995,20 @@ test("a legal fieldset retains independent required acknowledgements", () => {
   const fields = F.collectFields(doc, { checkLayout: false });
   assert.equal(fields.length, 2);
   assert.ok(fields.every((f) => f.required && !f.options));
+});
+
+test("a text box parked far off-screen (honeypot) is not a field", () => {
+  const { doc, F } = page(`<form><label for="w">Leave this field empty</label><input id="w" type="text" tabindex="-1" name="website">
+    <label for="n">Full name</label><input id="n" type="text" name="name"></form>`);
+  doc.getElementById("w").getBoundingClientRect = () => ({ left: -9999, right: -9812, top: 667, bottom: 691, width: 187, height: 24 });
+  assert.deepEqual(plain(F.collectFields(doc, { checkLayout: false }).map((f) => f.label)), ["Full name"]);
+});
+
+test("chooseOption maps a length of time to the option that is the same number of days", () => {
+  const { F } = page("");
+  const opts = [{ text: "Available immediately" }, { text: "1 week" }, { text: "2 weeks" }, { text: "1 month" }, { text: "3 months or more" }];
+  assert.equal(F.chooseOption(opts, "30 days")?.text, "1 month");
+  assert.equal(F.chooseOption(opts, "14 days")?.text, "2 weeks");
+  assert.equal(F.chooseOption(opts, "45 days"), null);
+  assert.equal(F.chooseOption(opts, "30 days", { strict: true }), null);
 });

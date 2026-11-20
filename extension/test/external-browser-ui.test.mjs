@@ -6,7 +6,7 @@ import { JSDOM } from 'jsdom';
 const source = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf8');
 
 async function controlPage(initial = {}) {
-  const dom = new JSDOM(source('external-browser.html'), { url: 'https://extension.example/', runScripts: 'outside-only' });
+  const dom = new JSDOM(source('ui/external-browser.html'), { url: 'https://extension.example/', runScripts: 'outside-only' });
   const win = dom.window;
   const sent = [];
   let state = { connected: false, wanted: false, batches: [], activity: [], ...initial };
@@ -23,8 +23,9 @@ async function controlPage(initial = {}) {
     } },
     permissions: { contains: async () => false, request: async () => allowed },
   };
-  const helpers = source('external-browser-state.js').replaceAll('export function', 'function') + source('external-activity.js').replaceAll('export function', 'function');
-  const ui = source('external-browser-ui.js').replace(/^import .*;$/gm, '');
+  const stripExports = (code) => code.replaceAll('export function', 'function').replace(/export\s*\{[\s\S]*?\};?/g, '');
+  const helpers = stripExports(source('shared/external-browser-state.js')) + stripExports(source('shared/external-activity.js'));
+  const ui = stripExports(source('ui/external-browser-ui.js').replace(/^import .*;$/gm, ''));
   await win.eval(`(async () => { ${helpers}\n${ui}\nwindow.refreshUx = refresh; })()`);
   return { win, sent, set: (patch) => { state = { ...state, ...patch }; }, allow: (value) => { allowed = value; }, refresh: () => win.refreshUx() };
 }
@@ -89,7 +90,7 @@ test('answer review, uncertain submission and a finished queue have distinct out
 });
 
 test('hosted connector uses the product host while development remains local', async () => {
-  const { connectorUrl } = await import('../src/external-browser-state.js');
+  const { connectorUrl } = await import('../src/shared/external-browser-state.js');
   assert.equal(connectorUrl('https://applyshortly.com'), 'https://app.applyshortly.com/api/mcp');
   assert.equal(connectorUrl('https://www.applyshortly.com/'), 'https://app.applyshortly.com/api/mcp');
   assert.equal(connectorUrl('http://localhost:3000'), 'http://localhost:3000/api/mcp');

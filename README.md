@@ -49,8 +49,8 @@ Profile and saved-answer fills are 100% free forever with no credit card require
 
 1. [Install Apply Shortly Form Agent](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) from the Chrome Web Store.
 2. Sign in to [ApplyShortly](https://applyshortly.com), save your profile, résumé and application answers, then check your connection in extension settings.
-3. Open a job application and choose **Fill this form**, or press **Alt+Shift+F**.
-4. Answer remaining questions, review the form and attachments, then submit yourself or choose **Submit for me (Auto apply)**.
+3. Open a job application and click the toolbar icon: the chat opens and starts filling by itself (or press **Alt+Shift+F**).
+4. Answer remaining questions, review the form and attachments, then submit yourself or turn on the **Auto apply** switch.
 
 Then: **save your profile → open an application → autofill → review → submit.**
 
@@ -61,7 +61,14 @@ The store version connects to `https://applyshortly.com` and updates automatical
 1. **Connect your account:** the extension retrieves your saved ApplyShortly profile and answers.
 2. **Fill the application:** it discovers the form fields and inserts matching details. The form agent helps with multi-step pages and embedded forms.
 3. **Complete missing answers:** answer screening questions in the chat panel or request an optional AI draft.
+   With the Agent based form assistant, open-ended answers follow the **Let AI answer** switch:
+   on, the agent writes them (as long as the question needs) from your profile and the job; off,
+   it asks you, and **Draft it for me** has it write just that one answer. Visa and work-authorization narratives quote recorded profile facts without
+   assuming authorization in another country; missing legal facts remain yours to answer.
 4. **Review and submit:** check answers, attachments and consent. Submit on the employer's site, or explicitly choose Auto apply with its checks and cancellable countdown.
+   Skipped fields stay listed for your review. After **Continue**, the agent hands the form
+   back without asking about them again; they can still be incomplete, and submission keeps
+   its required-field checks. Unused optional upload helpers do not count as remaining tasks.
 5. **Track the outcome:** an attempt needs verification until an employer receipt or your confirmation establishes that it was submitted.
 
 For account setup, AI settings, screenshots and troubleshooting, see the [extension guide](extension/README.md).
@@ -77,7 +84,9 @@ For account setup, AI settings, screenshots and troubleshooting, see the [extens
 
 Your profile, saved answers and tracked applications live in your connected ApplyShortly account. The extension keeps its connection credential, preferences and short-lived panel state in extension storage. Credentials and platform requests are handled by the background worker.
 
-Optional AI features process relevant application context through the server and configured provider. Personal AI keys are stored encrypted on the ApplyShortly server; using your own key still requires a server.
+The current source build also supports answer drafts, assistant chat and AI-led form planning through a user-configured OpenAI-compatible endpoint, including a local server. The extension sends relevant profile, job, conversation and observed form details directly to that endpoint; the key stays in trusted extension storage on the device. Select the extension form filling method in extension settings; platform sessions use a separate setting on the website. AI-led is the default for both. Custom AI-led planning requires a compatible server and a model that returns the requested JSON; screenshots are not sent to the custom provider.
+
+For the existing ApplyShortly-managed providers, AI requests pass through the server and personal keys are stored encrypted there. An ApplyShortly server and account remain required in both modes. The custom endpoint feature requires a build containing these changes; its availability in the Chrome Web Store depends on a future release.
 
 ## Build from source
 
@@ -112,7 +121,7 @@ For automatic browser sign-in, the server operator must register the installed e
 
 Review filled answers, AI drafts and attachments before submission. The form agent never clicks final Submit itself. Auto apply requires your explicit choice, including clicking Apply for a job in ApplyShortly through a one-time link, and uses a cancellable countdown. Sign-in, CAPTCHAs, uploads, consent and unsupported controls may require your input.
 
-Form questions and answers are processed for filling and assistant features. The form agent can send visible page context and transient screenshots to the configured AI provider. Filled information is visible to the employer website before submission; submitting sends the application and attachments to that employer or its application service.
+Form questions and answers are processed for filling and assistant features. The current shared AI-led form agent sends structured visible page context to its AI provider, without screenshots. Earlier Platform AI versions could send transient screenshots; the server-browser agent still uses them. Filled information is visible to the employer website before submission; submitting sends the application and attachments to that employer or its application service.
 
 Custom builds support compatible self-hosted servers. This public repository contains the extension and API bridge; the platform backend is maintained separately. See the [privacy disclosure](docs/security/extension-privacy-policy.md), [hosted privacy policy](https://applyshortly.com/privacy) and [Chrome permissions guide](extension/README.md#why-it-asks-for-these-permissions).
 
@@ -151,7 +160,7 @@ npm run test:packaging   # deterministic builds and configuration exclusion
 npm run build:source     # standalone source archive
 ```
 
-Runtime code is plain JavaScript and has no compilation step. `extension/src/bridge.js` and `extension-bridge/client.ts` implement the same API contract; update both together. The [bridge guide](extension-bridge/README.md) describes authentication and API behavior.
+> **TypeScript Migration (2026-11-19).** Extension runtime code in `extension/src/` has been migrated to TypeScript (`.ts`). Development type checking is enforced with `npm run typecheck`, and packaging builds (`python3 scripts/build_extension.py`) transpile TypeScript in memory with esbuild. Both `extension/src/shared/bridge.ts` and `extension-bridge/client.ts` implement the same API contract; update both together. The [bridge guide](extension-bridge/README.md) describes authentication and API behavior.
 
 The API snapshot is generated by the platform. To update it from a trusted platform OpenAPI export:
 

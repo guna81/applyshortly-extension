@@ -5,11 +5,13 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+NODE = shutil.which("node") or "node"  # found once, so a test that clears the environment still builds
 
 
 def platform_url(value):
@@ -75,13 +77,35 @@ def build(destination, base_url=None, source=False):
     base_url = configured_origin(base_url)
     ext = ROOT / "extension"
     files = {"manifest.json": (ext / "manifest.json").read_bytes()}
-    for folder, suffixes in [("src", {".js", ".html", ".css"}), ("icons", {".svg", ".png"})]:
-        # src/ has subfolders (src/agent/); nothing reached through a symlink is packaged.
+    for folder, suffixes in [("src", {".js", ".html", ".css", ".json"}), ("icons", {".svg", ".png"})]:
+        # src/ has subfolders (src/agent-based/); nothing reached through a symlink is packaged.
         for item in sorted((ext / folder).rglob("*")):
             inside = [ext / parent for parent in item.relative_to(ext).parents if parent != Path(".")]
             linked = any(path.is_symlink() for path in [item, *inside])
             if item.is_file() and not linked and item.suffix in suffixes:
                 files[item.relative_to(ext).as_posix()] = item.read_bytes()
+    # Transpile any TypeScript source files in extension/src to JavaScript.
+    ts_sources = list((ext / "src").rglob("*.ts"))
+    if ts_sources:
+        compile_script = ROOT / "scripts/compile_extension.mjs"
+        if compile_script.is_file():
+            compile_proc = subprocess.run(
+                [NODE, str(compile_script), "--json"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            )
+            import base64
+            compiled = json.loads(compile_proc.stdout)
+            for rel_path, b64 in compiled.items():
+                files[rel_path] = base64.b64decode(b64)
+    # The extension loads plain files and cannot resolve node_modules: LangGraph JS (npm) is bundled into one module here.
+    if not (ROOT / "node_modules/@langchain/langgraph").is_dir():
+        raise SystemExit("Run `npm ci` first: the agent's LangGraph dependency is bundled during the build.")
+    files["src/agent-based/langgraph.js"] = subprocess.run(
+        [NODE, str(ROOT / "scripts/bundle_langgraph.mjs")], cwd=ROOT, check=True, capture_output=True
+    ).stdout
+    files["THIRD_PARTY_NOTICES.md"] = (ext / "THIRD_PARTY_NOTICES.md").read_bytes()  # the vendored LangGraph build's license notice
     files["platform.json"] = (json.dumps({"baseUrl": base_url}, sort_keys=True) + "\n").encode()
     manifest = json.loads(files["manifest.json"])
     origin_permission = base_url + "/*"
@@ -108,14 +132,24 @@ def build(destination, base_url=None, source=False):
             source_files[f"extension/{name}"] = (ext / name).read_bytes()
         for item in (ext / "test").glob("*.mjs"):
             source_files[f"extension/test/{item.name}"] = item.read_bytes()
+        for item in (ext / "src").rglob("*.ts"):
+            if item.is_file() and not item.is_symlink():
+                source_files[item.relative_to(ROOT).as_posix()] = item.read_bytes()
         for item in (ROOT / "extension-bridge").rglob("*"):
             if item.is_file() and not item.is_symlink() and item.suffix in {".ts", ".json", ".md"}:
                 source_files[item.relative_to(ROOT).as_posix()] = item.read_bytes()
+        source_files["scripts/compile_extension.mjs"] = (ROOT / "scripts/compile_extension.mjs").read_bytes()
+        if (ext / "src/agent-based/langgraph.ts").is_file():
+            source_files.pop("extension/src/agent-based/langgraph.js", None)
+            source_files["extension/src/agent-based/langgraph.ts"] = (ext / "src/agent-based/langgraph.ts").read_bytes()
+        elif (ext / "src/agent-based/langgraph.js").is_file():
+            source_files["extension/src/agent-based/langgraph.js"] = (ext / "src/agent-based/langgraph.js").read_bytes()  # the shim; the build bundles it
+        source_files["scripts/bundle_langgraph.mjs"] = (ROOT / "scripts/bundle_langgraph.mjs").read_bytes()
         source_files["scripts/build_extension.py"] = Path(__file__).read_bytes()
         source_files["scripts/test_build_extension.py"] = (
             ROOT / "scripts/test_build_extension.py"
         ).read_bytes()
-        for name in ["Makefile", "package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py"]:
+        for name in ["Makefile", "package.json", "package-lock.json", "README.md", "LICENSE", "BRANDING.md", ".gitignore", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", ".github/workflows/ci.yml", "scripts/extension_openapi.py", "scripts/agent_rules.py", "tsconfig.extension.json"]:
             source_files[name] = (ROOT / name).read_bytes()
         for item in (ROOT / "docs").rglob("*.md"):
             if item.is_file() and not item.is_symlink():

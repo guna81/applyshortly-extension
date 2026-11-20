@@ -1,9 +1,9 @@
-// Tests for src/agent/commands.js: the guarded, verified commands every controller shares.
+// Tests for src/page-control/commands.js: the guarded, verified commands every controller shares.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PAGE, isPageRule } from "./page-rules.mjs";
-import { CommandRunner, driftOf, readinessOf, scanFields } from "../src/agent/commands.js";
-import { Agent } from "../src/agent/loop.js";
+import { CommandRunner, driftOf, readinessOf, scanFields } from "../src/page-control/commands.js";
+import { Agent } from "../src/page-control/loop.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
 
@@ -258,7 +258,7 @@ test("review names an attached file even though its file input is gone", async (
   assert.equal((await plain.review()).attached_files, undefined);
 });
 
-// The platform's AI-led engine gets the same verified results through the Agent loop.
+// The platform's Agent based form assistant engine gets the same verified results through the Agent loop.
 const frameObs = (elements) => ({ url: "https://careers.example.com/apply", title: "Apply", dialog: null, blockers: [], errors: [], text: "", elements, more_below: false, document_id: "doc", observation_id: "o1", viewport_width: 1000, viewport_height: 800 });
 
 async function runAgent({ verifiedCommands, actions }) {
@@ -270,20 +270,20 @@ async function runAgent({ verifiedCommands, actions }) {
   };
   const requests = [];
   let calls = 0;
-  const agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, notify: () => {}, report: async () => {}, controllerVersion: 2, verifiedCommands,
+  const agent = new Agent({ tabId: 1, appId: null, driver, files: async () => null, notify: () => {}, report: async () => {}, agentAvailable: true, verifiedCommands,
     step: async (req) => {
       requests.push(req);
       if (++calls === 1) {
         const ids = Object.fromEntries(req.observation.elements.map((e) => [e.name, e.ref]));
-        return { controller_version: 2, session_id: "s", status: "continue", actions: actions(ids, req.observation.observation_id) };
+        return { guarded_commands: true, session_id: "s", status: "continue", actions: actions(ids, req.observation.observation_id) };
       }
-      return { controller_version: 2, session_id: "s", status: "failed", actions: [] };
+      return { guarded_commands: true, session_id: "s", status: "failed", actions: [] };
     } });
   await agent.run();
   return { requests, driver };
 }
 
-test("the AI-led engine sends verified_commands and gets a result for a batched fill_form", async () => {
+test("the Agent based form assistant engine sends verified_commands and gets a result for a batched fill_form", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: true,
     actions: (ids, obs) => [{ type: "fill_form", command_id: "s:1:0", observation_id: obs, label: "Filling your saved answers",
       fields: [{ ref: ids.First, text: "Guna" }, { ref: ids.Last, text: "P" }] }] });
@@ -295,7 +295,7 @@ test("the AI-led engine sends verified_commands and gets a result for a batched 
   assert.equal(result.result.done, 2);
 });
 
-test("the AI-led engine types a fill_form exactly as the platform serialises it (checked: null on text entries)", async () => {
+test("the Agent based form assistant engine types a fill_form exactly as the platform serialises it (checked: null on text entries)", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: true,
     actions: (ids, obs) => [{ type: "fill_form", command_id: "s:1:0", observation_id: obs, label: "Filled 2 saved answers", ref: null, text: null, checked: null,
       fields: [{ ref: ids.First, text: "Guna", checked: null }, { ref: ids.Last, text: "P", checked: null }] }] });
@@ -314,7 +314,7 @@ test("an unverified write in a batch fails the result so the model sees it did n
   assert.equal(result.result.done, 1);
 });
 
-test("without the capability the AI-led engine neither asks for verified commands nor sends results", async () => {
+test("without the capability the Agent based form assistant engine neither asks for verified commands nor sends results", async () => {
   const { requests, driver } = await runAgent({ verifiedCommands: false,
     actions: (ids, obs) => [{ type: "type", ref: ids.First, text: "Guna", command_id: "s:1:0", observation_id: obs, label: "Filled First" }] });
   assert.equal("verified_commands" in requests[0], false);
@@ -372,4 +372,19 @@ test("readinessOf: a one-frame page reports nothing as framed and bounds the mis
   const readiness = readinessOf({ elements }, refs);
   assert.equal(readiness.framed, 0);
   assert.equal(readiness.missing.length, 30);
+});
+
+test("scanFields: button-choice pairs, switches and sliders are fields the review can find unanswered", () => {
+  const { fields, missing } = scanFields({ elements: [
+    { ref: "1", role: "button", name: "Yes", group: "Need sponsorship?", required: true, pressed: false },
+    { ref: "2", role: "button", name: "No", group: "Need sponsorship?", required: true, pressed: false },
+    { ref: "3", role: "button", name: "Yes", group: "Previously employed?", required: true, pressed: true },
+    { ref: "4", role: "button", name: "No", group: "Previously employed?", required: true, pressed: false },
+    { ref: "5", role: "switch", name: "Open to relocation", required: true, checked: false },
+    { ref: "6", role: "slider", name: "Years", required: true, value: "4" },
+    { ref: "7", role: "button", name: "Back" },
+  ] });
+  assert.deepEqual(fields.map((f) => f.name), ["Need sponsorship?", "Previously employed?", "Open to relocation", "Years"]);
+  assert.deepEqual(missing.map((m) => m.name), ["Need sponsorship?", "Open to relocation"]);
+  assert.equal(fields[1].value, "Yes");
 });

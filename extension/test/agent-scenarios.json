@@ -1,0 +1,452 @@
+[
+  {
+    "name": "I accept the Terms and Privacy Policy enabled",
+    "auto_consent": true,
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "privacy",
+          "role": "checkbox",
+          "name": "I accept the Terms and Privacy Policy",
+          "required": true,
+          "checked": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "privacy",
+          "question": "I accept the Terms and Privacy Policy",
+          "checked": true
+        },
+        "expected": "check"
+      }
+    ]
+  },
+  {
+    "name": "I accept the Terms and Privacy Policy disabled",
+    "auto_consent": false,
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "privacy",
+          "role": "checkbox",
+          "name": "I accept the Terms and Privacy Policy",
+          "required": true,
+          "checked": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "privacy",
+          "question": "I accept the Terms and Privacy Policy",
+          "checked": true
+        },
+        "expected": "ask"
+      }
+    ]
+  },
+  {
+    "name": "I confirm my age is over 25 and accept the terms enabled",
+    "auto_consent": true,
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "privacy",
+          "role": "checkbox",
+          "name": "I confirm my age is over 25 and accept the terms",
+          "required": true,
+          "checked": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "privacy",
+          "question": "I confirm my age is over 25 and accept the terms",
+          "checked": true
+        },
+        "expected": "ask"
+      }
+    ]
+  },
+  {
+    "name": "I certify this information is accurate and accept the terms enabled",
+    "auto_consent": true,
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "privacy",
+          "role": "checkbox",
+          "name": "I certify this information is accurate and accept the terms",
+          "required": true,
+          "checked": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "privacy",
+          "question": "I certify this information is accurate and accept the terms",
+          "checked": true
+        },
+        "expected": "ask"
+      }
+    ]
+  },
+  {
+    "name": "skip repeated twice after refs change",
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "project",
+          "role": "textarea",
+          "name": "Describe your project",
+          "required": true
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "project",
+          "question": "Describe your project"
+        },
+        "expected": "ask"
+      },
+      {
+        "skip_question": true,
+        "ref": "project-new",
+        "reply": {
+          "tool": "ask_user",
+          "ref": "project-new",
+          "question": "Describe your project"
+        },
+        "expected": "no_reask"
+      },
+      {
+        "ref": "project-third",
+        "reply": {
+          "tool": "type",
+          "ref": "project-third",
+          "text": "Invented project"
+        },
+        "expected": "no_write"
+      }
+    ]
+  },
+  {
+    "name": "typed link read",
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "project",
+          "role": "textarea",
+          "name": "Describe your project",
+          "required": true
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "user_message": "Read https://portfolio.example/project",
+        "replies": [
+          {
+            "tool": "web_fetch",
+            "url": "https://portfolio.example/project"
+          },
+          {
+            "tool": "ask_user",
+            "ref": "project",
+            "question": "Describe your project"
+          }
+        ],
+        "expected": "ask",
+        "fetches": 1
+      }
+    ]
+  },
+  {
+    "name": "untyped link refused",
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "project",
+          "role": "textarea",
+          "name": "Describe your project",
+          "required": true
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "user_message": "Describe my project",
+        "replies": [
+          {
+            "tool": "web_fetch",
+            "url": "https://portfolio.example/project"
+          },
+          {
+            "tool": "ask_user",
+            "ref": "project",
+            "question": "Describe your project"
+          }
+        ],
+        "expected": "ask",
+        "fetches": 0
+      }
+    ]
+  },
+  {
+    "name": "skip question across changed refs then reject a field write",
+    "observation": {
+      "observation_id": "replay-1",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "project",
+          "role": "textarea",
+          "name": "Describe your project",
+          "required": true
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "project",
+          "question": "Describe your project"
+        },
+        "expected": "ask"
+      },
+      {
+        "skip_question": true,
+        "ref": "project-new",
+        "reply": {
+          "tool": "ask_user",
+          "ref": "project-new",
+          "question": "Describe your project"
+        },
+        "expected": "no_reask"
+      },
+      {
+        "ref": "project-third",
+        "reply": {
+          "tool": "type",
+          "ref": "project-third",
+          "text": "Invented project"
+        },
+        "expected": "no_write"
+      }
+    ]
+  },
+  {
+    "name": "add skill choice in application form",
+    "observation": {
+      "observation_id": "skill-replay",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "skill-choice",
+          "role": "button",
+          "name": "Add skill : Python",
+          "submit_like": false
+        },
+        {
+          "ref": "field-0",
+          "role": "textbox",
+          "name": "Skill Set",
+          "value": ""
+        },
+        {
+          "ref": "field-1",
+          "role": "textbox",
+          "name": "Current Employer",
+          "value": ""
+        },
+        {
+          "ref": "field-2",
+          "role": "textbox",
+          "name": "Current Job Title",
+          "value": ""
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "click",
+          "ref": "skill-choice"
+        },
+        "expected": "click"
+      }
+    ]
+  },
+  {
+    "name": "Challenge-only CAPTCHA blocks both planners before a write",
+    "observation": {
+      "observation_id": "blocked-1",
+      "url": "https://careers.example.test/apply",
+      "blockers": [
+        "captcha"
+      ],
+      "elements": [
+        {
+          "ref": "name",
+          "role": "textbox",
+          "name": "CAPTCHA verification code",
+          "value": "",
+          "required": true
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "type",
+          "ref": "name",
+          "text": "Candidate"
+        },
+        "expected": "no_reask"
+      }
+    ]
+  },
+  {
+    "name": "Manual transcript does not block later approved privacy acknowledgement",
+    "auto_consent": true,
+    "observation": {
+      "observation_id": "sanitized-upload-order",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "transcript",
+          "role": "file",
+          "name": "Transcript",
+          "required": true,
+          "value": ""
+        },
+        {
+          "ref": "privacy",
+          "role": "checkbox",
+          "name": "I accept the Terms and Privacy Policy",
+          "required": true,
+          "checked": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "replies": [
+          { "tool": "check", "ref": "privacy", "checked": true },
+          { "tool": "ask_user", "ref": "transcript", "question": "Attach transcript manually" }
+        ],
+        "expected": "check"
+      }
+    ]
+  },
+  {
+    "name": "yes/no buttons answered with a click",
+    "observation": {
+      "observation_id": "yesno-replay",
+      "url": "https://jobs.example.test/apply",
+      "elements": [
+        {
+          "ref": "yes",
+          "role": "button",
+          "name": "Yes",
+          "group": "Are you comfortable working in a hybrid setup?",
+          "required": true,
+          "pressed": false
+        },
+        {
+          "ref": "no",
+          "role": "button",
+          "name": "No",
+          "group": "Are you comfortable working in a hybrid setup?",
+          "required": true,
+          "pressed": false
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": { "tool": "ask_user", "ref": "no", "question": "Are you comfortable working in a hybrid setup?" },
+        "expected": "ask"
+      },
+      {
+        "user_reply": "No",
+        "reply": {
+          "tool": "click",
+          "ref": "no"
+        },
+        "expected": "check",
+        "expected_ref": "no",
+        "readback": true
+      }
+    ]
+  },
+  {
+    "name": "open narrative is offered as one question before a requested draft",
+    "observation": {
+      "observation_id": "narrative-offer",
+      "url": "https://careers.example.test/apply",
+      "elements": [
+        {
+          "ref": "narrative",
+          "role": "textarea",
+          "name": "Why are you interested in this opportunity?",
+          "required": true,
+          "value": ""
+        }
+      ],
+      "tabs": []
+    },
+    "turns": [
+      {
+        "reply": {
+          "tool": "ask_user",
+          "ref": "narrative",
+          "question": "Why are you interested in this opportunity?"
+        },
+        "expected": "ask"
+      }
+    ]
+  }
+]

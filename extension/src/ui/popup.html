@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Apply Shortly Form Agent</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <header class="bar-head">
+    <img class="mark" src="../../icons/logo.svg" width="32" height="32" alt="" aria-hidden="true">
+    <div class="grow">
+      <b>Apply Shortly Form Agent</b>
+      <small id="conn" class="conn"><span class="status-dot" id="dot"></span><span id="connText">Checking connection…</span></small>
+    </div>
+    <button id="settings" class="icon" type="button" title="Settings" aria-label="Settings">⚙</button>
+  </header>
+
+  <div id="setup" class="setup" hidden></div>
+
+  <main id="view" aria-live="polite">
+    <div class="loading"><span class="spin"></span>Checking this page…</div>
+  </main>
+
+  <section id="assist" class="assist card" aria-live="polite" hidden></section>
+
+  <section id="prefs" class="prefs" hidden>
+    <div class="prefs-title">Preferences</div>
+    <label class="switch-row">
+      <span class="lbl"><b>Auto apply</b><small>Submits after a countdown you can cancel</small></span>
+      <input id="autoApply" type="checkbox" class="switch">
+    </label>
+    <label class="switch-row">
+      <span class="lbl"><b>Let AI answer</b><small>Drafts open-ended answers, uses credits</small></span>
+      <input id="aiDrafts" type="checkbox" class="switch">
+    </label>
+    <label class="switch-row">
+      <span class="lbl"><b>Fill optional fields</b><small>Also fills fields that aren’t required</small></span>
+      <input id="fillOptional" type="checkbox" class="switch">
+    </label>
+  </section>
+
+  <footer id="foot" class="foot muted" hidden></footer>
+
+  <script src="../shared/ui/panel-model.js"></script>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

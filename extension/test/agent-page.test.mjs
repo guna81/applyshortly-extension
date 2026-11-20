@@ -1,4 +1,4 @@
-// Tests for src/agent/page.js (the agent's in-frame half) in jsdom.
+// Tests for src/page-control/page.js (the agent's in-frame half) in jsdom.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
@@ -6,8 +6,8 @@ import { test } from "node:test";
 import { ashbyYesNo } from "./ashby-fixture.mjs";
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
-const FILL_SRC = readFileSync(new URL("../src/fill.js", import.meta.url), "utf8");
-const PAGE_SRC = readFileSync(new URL("../src/agent/page.js", import.meta.url), "utf8");
+const FILL_SRC = readFileSync(new URL("../src/page-control/phone.js", import.meta.url), "utf8") + readFileSync(new URL("../src/rule-based/profile-answer.js", import.meta.url), "utf8") + readFileSync(new URL("../src/page-control/dom.js", import.meta.url), "utf8");
+const PAGE_SRC = readFileSync(new URL("../src/page-control/page.js", import.meta.url), "utf8");
 
 function page(html, url = "https://careers.example.com/apply") {
   const dom = new JSDOM(`<!doctype html><title>Apply</title><body>${html}</body>`, { url, runScripts: "outside-only" });
@@ -34,6 +34,31 @@ function page(html, url = "https://careers.example.com/apply") {
 
 const byName = (obs, name) => obs.elements.find((e) => e.name === name);
 
+test("an attached resume with an empty replacement input is already answered", () => {
+  const { observe, doc } = page(`<form>
+    <div id="upload"><label for="resume">Resume Replace file</label>
+      <div><span>Candidate_Resume.pdf</span><button type="button">Preview</button></div>
+      <div><input id="resume" type="file" required><label for="resume">Replace file</label></div>
+    </div>
+    <div><label for="cover">Cover letter</label><input id="cover" type="file"></div>
+    <input aria-label="Current salary">
+  </form>`);
+  let files = observe().elements.filter((el) => el.role === "file");
+  assert.equal(files[0].value, "Candidate_Resume.pdf");
+  assert.equal(files[0].required, true);
+  assert.equal(files[1].value, "");
+  doc.querySelector('#upload span').hidden = true;
+  files = observe().elements.filter((el) => el.role === "file");
+  assert.equal(files[0].value, "");
+});
+
+test("a resume filename elsewhere in the form does not answer an empty upload", () => {
+  const { observe } = page(`<form><p>Previous_Resume.pdf</p>
+    <div><label for="resume">Replace file</label><input id="resume" type="file"></div>
+  </form>`);
+  assert.equal(observe().elements.find((el) => el.role === "file").value, "");
+});
+
 test("AX fallback preserves native input types for excluded search and password controls", () => {
   const { doc, A } = page('<input type="search" aria-label="Search"><input type="password" aria-label="Password">');
   for (const input of doc.querySelectorAll("input")) {
@@ -42,6 +67,15 @@ test("AX fallback preserves native input types for excluded search and password 
     assert.equal(result.role, "textbox");
     assert.equal(result.input_type, input.type);
   }
+});
+
+test("AX fallback shows a search-style combobox's pick and gives no checked state to a non-checkable control", () => {
+  const { doc, A } = page('<div class="select"><label for="loc">Location</label><div class="select__control"><div class="select__single-value">Austin, Texas</div><input id="loc" role="combobox" aria-haspopup="listbox" value=""></div></div>');
+  const input = doc.querySelector("#loc");
+  input.getClientRects = () => [{ width: 100, height: 20 }];
+  const result = A.describeAccessible(input, "combobox", "Location", []);
+  assert.equal(result.value, "Austin, Texas");
+  assert.equal("checked" in result, false);
 });
 
 test("observe: fields, radio options, buttons and the site's errors", () => {
@@ -154,19 +188,15 @@ test("actions: clickable refuses the final submit; native selects, dates and upl
   assert.equal(A.clickable(ref("Weiter"), false), null);
   assert.equal(A.clickable("999"), "That element is gone from the page.");
 
-  assert.deepEqual(plain(A.selectNative(ref("Country"), "japan")), { ok: true, native: true, value: "Japan" });
+  assert.deepEqual(plain(A.selectNative(ref("Country"), "Japan")), { ok: true, native: true, value: "Japan" });
   assert.equal(doc.getElementById("c").value, "jp");
   assert.equal(A.selectNative(ref("Country"), "Mars").ok, false);
   assert.equal(A.selectNative(ref("Name"), "x").native, false);
 
   assert.equal(A.focusForTyping(ref("Start date")).mode, "direct");
-  assert.equal(A.setDirect(ref("Start date"), "05/01/2026").ok, true);
+  assert.equal(A.setDirect(ref("Start date"), "2026-01-05").ok, true);
   assert.equal(doc.getElementById("d").value, "2026-01-05");
-  assert.equal(A.normaliseDate("month", "2026-03-09"), "2026-03");
   // A month alone is the first of the month for a date box (profiles store jobs as "2020-12").
-  assert.equal(A.normaliseDate("date", "2020-12"), "2020-12-01");
-  assert.equal(A.normaliseDate("month", "2020-12"), "2020-12");
-  assert.equal(A.normaliseDate("date", "2023-01-15"), "2023-01-15");
   assert.equal(A.focusForTyping(ref("Name")).mode, "keys");
 
   const b64 = Buffer.from("%PDF-1.4").toString("base64");
@@ -192,12 +222,33 @@ test("actions: options of an open dropdown are matched to the answer", () => {
     <ul id="lb" role="listbox"><li role="option">Bengaluru, Karnataka, India</li><li role="option">Bengkulu, Indonesia</li></ul>`);
   const obs = observe();
   const combo = obs.elements.find((e) => e.role === "textbox" || e.role === "combobox");
-  const match = plain(A.matchOption(combo.ref, "Bengaluru", false));
+  const option = obs.elements.find((e) => e.role === "option" && e.name === "Bengaluru, Karnataka, India");
+  assert.equal(option?.group, combo.name);
+  assert.equal(A.matchOption(combo.ref, "Bengaluru", false).ok, false);
+  const match = plain(A.matchOption(combo.ref, "Bengaluru, Karnataka, India", false));
   assert.equal(match.ok, true);
   assert.equal(match.text, "Bengaluru, Karnataka, India");
   const none = plain(A.matchOption(combo.ref, "Tokyo", false));
   assert.equal(none.ok, false);
   assert.deepEqual(none.options, ["Bengaluru, Karnataka, India", "Bengkulu, Indonesia"]);
+});
+
+test("activateOption clicks the option element itself, and refuses an option that is a link or a submit control", () => {
+  const { A, observe, doc } = page(`
+    <label id="l">How did you hear</label>
+    <input role="combobox" aria-labelledby="l" aria-controls="lb">
+    <ul id="lb" role="listbox"><li role="option" id="o1">Indeed</li><li role="option" id="o2">Other</li><li role="option" id="o3"><a href="/elsewhere">Careers page</a></li></ul>
+    <button type="submit" role="option" id="o4">Submit application</button>`);
+  const combo = observe().elements.find((e) => e.role === "textbox" || e.role === "combobox");
+  const picked = [];
+  for (const id of ["o1", "o2"]) doc.getElementById(id).addEventListener("click", () => picked.push(id));
+  const option = plain(A.matchOption(combo.ref, "Other", false));
+  assert.equal(option.ok, true);
+  assert.equal(plain(A.activateOption(option.ref)).ok, true);
+  assert.deepEqual(picked, ["o2"]); // only that option got the click, and in the order a pointer sends it
+  const submit = observe().elements.find((e) => e.name === "Submit application");
+  if (submit) assert.equal(plain(A.activateOption(submit.ref)).ok, false);
+  assert.equal(plain(A.activateOption("nope")).ok, false);
 });
 
 test("matchOption finds an option past the first hundred of a long list (Greenhouse's country picker)", () => {
@@ -210,7 +261,7 @@ test("matchOption finds an option past the first hundred of a long list (Greenho
     <div id="lb" role="listbox">${options.map((t, i) => `<div role="option" id="o${i}">${t}</div>`).join("")}</div>
     <ul role="listbox">${options.map((t) => `<li role="option">${t.replace(" +", "+")}</li>`).join("")}</ul>`);
   const combo = observe().elements.find((e) => e.role === "textbox" || e.role === "combobox");
-  for (const answer of ["India +91", "India (+91)", "India"]) {
+  for (const answer of ["India +91"]) {
     const match = plain(A.matchOption(combo.ref, answer, false));
     assert.equal(match.ok, true, answer);
     assert.equal(match.text, "India +91", answer);
@@ -261,7 +312,8 @@ test("matchOption finds a plain list that appeared after noteShown, when nothing
   assert.ok(combo);
   assert.equal(A.noteShown(false), true);
   doc.querySelector(".menu").hidden = false; // what the click opens
-  const match = plain(A.matchOption(combo.ref, "Mr", false));
+  assert.equal(A.matchOption(combo.ref, "Mr", false).ok, false);
+  const match = plain(A.matchOption(combo.ref, "Mr.", false));
   assert.equal(match.ok, true);
   assert.equal(match.text, "Mr.");
   assert.equal(doc.querySelector(`[data-applyshortly-ref="${match.ref}"]`).textContent, "Mr.");
@@ -348,6 +400,45 @@ test("Ashby yes/no observations retain the question, requirement and selected No
   doc.querySelector('[data-option="no"]').setAttribute("aria-pressed", "true");
   radios = observe().elements.filter((e) => e.role === "radio");
   assert.equal(radios.find((e) => e.name === "No").checked, true);
+});
+
+test("a Yes/No pill group on an unknown site is seen as one question with pressed state", () => {
+  const { doc, observe } = page(`<form><div class="q"><p class="question-title">Do you need visa sponsorship? *</p>
+    <div class="pills"><button type="button" aria-pressed="false">Yes</button><button type="button" aria-pressed="false">No</button></div></div></form>`);
+  let pills = observe().elements.filter((e) => e.role === "button" && ["Yes", "No"].includes(e.name));
+  assert.equal(pills.length, 2);
+  assert.ok(pills.every((e) => e.group === "Do you need visa sponsorship?" && e.required === true && e.pressed === false));
+  doc.querySelectorAll("button")[1].setAttribute("aria-pressed", "true");
+  pills = observe().elements.filter((e) => e.role === "button");
+  assert.equal(pills.find((e) => e.name === "No").pressed, true);
+  assert.equal(pills.find((e) => e.name === "Yes").pressed, false);
+});
+
+test("a lone toggle button is not turned into a question group", () => {
+  const { observe } = page(`<div><p>Notifications</p><button type="button" aria-pressed="false">Mute</button></div>`);
+  const mute = byName(observe(), "Mute");
+  assert.equal(mute.pressed, false);
+  assert.equal(mute.group, undefined);
+});
+
+test("switches, sliders and steppers are observed with their state", () => {
+  const { observe } = page(`<div role="switch" aria-checked="true" aria-label="Open to relocation" tabindex="0"></div>
+    <div role="slider" aria-label="Years of experience" aria-valuenow="4" tabindex="0"></div>
+    <div role="spinbutton" aria-label="Notice weeks" aria-valuenow="2" tabindex="0"></div>`);
+  const obs = observe();
+  const relocation = byName(obs, "Open to relocation");
+  assert.equal(relocation.role, "switch");
+  assert.equal(relocation.checked, true);
+  assert.equal(byName(obs, "Years of experience").value, "4");
+  assert.equal(byName(obs, "Notice weeks").role, "spinbutton");
+});
+
+test("a toggle button's pressed state is what the state reader reports", () => {
+  const { A, doc, observe } = page(`<div><p>Relocate?</p><button type="button" aria-pressed="false">Yes</button><button type="button" aria-pressed="false">No</button></div>`);
+  const yes = byName(observe(), "Yes");
+  assert.equal(plain(A.state(yes.ref)).checked, false);
+  doc.querySelector("button").setAttribute("aria-pressed", "true");
+  assert.equal(plain(A.state(yes.ref)).checked, true);
 });
 
 test("screenshot ref labels use merged refs, do not intercept input, and are removed", () => {
@@ -572,4 +663,73 @@ test("showsChoice matches the option or the answer, ignoring case and punctuatio
   assert.equal(A.showsChoice("Bengaluru, India", "bengaluru"), true);
   assert.equal(A.showsChoice("", "Yes"), false);
   assert.equal(A.showsChoice("No", "Yes"), false);
+});
+
+test("clickable refuses a final control next to a single field or inside a form, but not a lone link", () => {
+  const { A, observe } = page(`
+    <form><label for="e">Email</label><input id="e" type="email"><button type="button">Send application</button></form>`);
+  const obs = observe();
+  assert.equal(A.clickable(byName(obs, "Send application").ref, false), "Submitting is left to you.");
+  const lone = page(`<main><h1>Job</h1><button type="button">Next</button></main>`);
+  const o2 = lone.observe();
+  assert.equal(lone.A.clickable(byName(o2, "Next").ref, false), null);
+});
+
+test('a multi-value combobox reports selected chips, not its empty search input', () => {
+  const { A, observe } = page(`<form><label for="source">Source</label>
+    <div class="select-container"><div class="select__value-container">
+      <div class="select__multi-value"><div class="select__multi-value__label">Professional network</div><button type="button" aria-label="Remove Professional network">×</button></div>
+      <div><input id="source" role="combobox" aria-haspopup="listbox" aria-expanded="false" value=""></div>
+    </div><input type="hidden" name="source" value="network"></div></form>`);
+  const source = byName(observe({ extended: true }), 'Source');
+  assert.equal(source.value, 'Professional network');
+  assert.equal(A.committedValue(source.ref, true), 'Professional network');
+});
+
+
+test("agent execution lets clicks through its panel and restores its original pointer events", () => {
+  const { A, doc, win } = page('<jobhunt-autofill-panel style="display:block!important"></jobhunt-autofill-panel>');
+  const panel = doc.querySelector("jobhunt-autofill-panel");
+  panel.attachShadow({ mode: "open" }).innerHTML = '<button style="pointer-events:auto">Chat</button>';
+  A.executionState(true);
+  assert.equal(panel.style.getPropertyValue("pointer-events"), "none");
+  assert.equal(panel.style.getPropertyValue("display"), "block");
+  assert.equal(panel.hasAttribute("data-applyshortly-executing"), true);
+  A.executionState(true);
+  A.executionState(false);
+  assert.equal(panel.style.getPropertyValue("pointer-events"), "");
+  assert.equal(panel.style.getPropertyValue("display"), "block");
+  assert.equal(panel.hasAttribute("data-applyshortly-executing"), false);
+  win.close();
+});
+
+
+test("a required custom radio group inherits the requirement of its options without AX duplicates", () => {
+  const { A, doc, observe, win } = page('<span id="question">Have you built an API?</span><fieldset role="radiogroup" aria-labelledby="question"><div role="radio" aria-checked="false" aria-required="true"><label><input type="radio" name="q" required>Yes</label></div><div role="radio" aria-checked="false" aria-required="true"><label><input type="radio" name="q" required>No</label></div></fieldset>');
+  const radios = observe().elements.filter((e) => e.role === "radio");
+  assert.ok(radios.length >= 2);
+  assert.ok(radios.every((e) => e.required));
+  const wrapper = doc.querySelector('[role="radio"]');
+  wrapper.getClientRects = () => [{ width: 100, height: 20 }];
+  assert.equal(A.describeAccessible(wrapper, "radio", "Yes", radios.map((r) => r.ref)), null);
+  win.close();
+});
+
+
+test("matchOption deduplicates options when aria-controls and aria-owns reference the same listbox", () => {
+  const { A, observe, win } = page(`
+    <label for="notice">Notice period</label>
+    <input id="notice" role="combobox" aria-controls="notice_list" aria-owns="notice_list" aria-expanded="true" />
+    <ul id="notice_list" role="listbox">
+      <li role="option">Available immediately</li>
+      <li role="option">1 month</li>
+      <li role="option">2 months</li>
+    </ul>
+  `);
+  const combo = observe().elements.find((e) => e.name === "Notice period");
+  assert.ok(combo);
+  const matched = A.matchOption(combo.ref, "1 month", false, false);
+  assert.equal(matched.ok, true);
+  assert.equal(matched.text, "1 month");
+  win.close();
 });

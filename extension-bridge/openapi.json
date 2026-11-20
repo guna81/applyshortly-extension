@@ -294,13 +294,42 @@
             "title": "Agent Engine",
             "type": "string"
           },
-          "controller_version": {
-            "enum": [
-              1,
-              2
+          "extension_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rules_led",
+                  "ai_led"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Controller Version",
-            "type": "integer"
+            "title": "Extension Engine"
+          },
+          "guarded_commands": {
+            "const": true,
+            "title": "Guarded Commands",
+            "type": "boolean"
+          },
+          "local_planner": {
+            "default": false,
+            "title": "Local Planner",
+            "type": "boolean"
+          },
+          "planner": {
+            "anyOf": [
+              {
+                "const": "custom",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planner"
           },
           "verified_commands": {
             "default": false,
@@ -309,7 +338,7 @@
           }
         },
         "required": [
-          "controller_version",
+          "guarded_commands",
           "agent_engine"
         ],
         "title": "AgentCapabilities",
@@ -362,6 +391,17 @@
               }
             ],
             "title": "Error"
+          },
+          "expanded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expanded"
           },
           "frame": {
             "default": "",
@@ -465,6 +505,17 @@
             "title": "Popup",
             "type": "boolean"
           },
+          "pressed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pressed"
+          },
           "ref": {
             "maxLength": 64,
             "minLength": 1,
@@ -486,6 +537,17 @@
             "maxLength": 300,
             "title": "Section",
             "type": "string"
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected"
           },
           "submit_like": {
             "default": false,
@@ -596,6 +658,259 @@
           "source"
         ],
         "title": "AgentFilled",
+        "type": "object"
+      },
+      "AgentHistoryCall": {
+        "additionalProperties": false,
+        "description": "A tool call the model made on an earlier turn, replayed so it sees its own history.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signature"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "AgentHistoryCall",
+        "type": "object"
+      },
+      "AgentHistoryMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHistoryCall"
+            },
+            "maxItems": 8,
+            "title": "Calls",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AgentToolResult"
+            },
+            "maxItems": 8,
+            "title": "Results",
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "assistant",
+              "user"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 30000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "AgentHistoryMessage",
+        "type": "object"
+      },
+      "AgentModelMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 150000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "system",
+              "user"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "AgentModelMessage",
+        "type": "object"
+      },
+      "AgentModelRequest": {
+        "additionalProperties": false,
+        "description": "Bounded model turn from the extension-owned AI-led planner. No credentials accepted.",
+        "properties": {
+          "allow_js": {
+            "default": false,
+            "title": "Allow Js",
+            "type": "boolean"
+          },
+          "application_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHistoryMessage"
+            },
+            "maxItems": 80,
+            "title": "History",
+            "type": "array"
+          },
+          "images": {
+            "items": {
+              "maxLength": 4000000,
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Images",
+            "type": "array"
+          },
+          "max_output_tokens": {
+            "default": 1400,
+            "maximum": 4096.0,
+            "minimum": 256.0,
+            "title": "Max Output Tokens",
+            "type": "integer"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/AgentModelMessage"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Messages",
+            "type": "array"
+          },
+          "native_tools": {
+            "default": false,
+            "title": "Native Tools",
+            "type": "boolean"
+          },
+          "request_id": {
+            "pattern": "^[a-zA-Z0-9_-]{16,64}$",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AgentToolResult"
+            },
+            "maxItems": 8,
+            "title": "Results",
+            "type": "array"
+          },
+          "session_id": {
+            "pattern": "^[a-zA-Z0-9_-]{16,64}$",
+            "title": "Session Id",
+            "type": "string"
+          },
+          "tool_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 40,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Names"
+          }
+        },
+        "required": [
+          "session_id",
+          "request_id",
+          "messages"
+        ],
+        "title": "AgentModelRequest",
+        "type": "object"
+      },
+      "AgentModelResponse": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/AgentModelToolCall"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          },
+          "tool_calls_unsupported": {
+            "default": false,
+            "title": "Tool Calls Unsupported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "AgentModelResponse",
+        "type": "object"
+      },
+      "AgentModelToolCall": {
+        "description": "One native tool call from the provider. The extension validates and vets it.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 100,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AgentModelToolCall",
         "type": "object"
       },
       "AgentObservation": {
@@ -759,6 +1074,18 @@
       },
       "AgentQuestion": {
         "properties": {
+          "actions": {
+            "items": {
+              "enum": [
+                "draft",
+                "skip",
+                "on_page"
+              ],
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
           "kind": {
             "enum": [
               "blocker",
@@ -810,14 +1137,25 @@
             ],
             "title": "Application Id"
           },
-          "controller_version": {
-            "default": 1,
-            "enum": [
-              1,
-              2
+          "extension_engine": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rules_led",
+                  "ai_led"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Controller Version",
-            "type": "integer"
+            "title": "Extension Engine"
+          },
+          "guarded_commands": {
+            "const": true,
+            "title": "Guarded Commands",
+            "type": "boolean"
           },
           "in_user_tab": {
             "default": true,
@@ -917,6 +1255,7 @@
           }
         },
         "required": [
+          "guarded_commands",
           "observation"
         ],
         "title": "AgentStepRequest",
@@ -951,15 +1290,6 @@
             "title": "Annotate Screenshot",
             "type": "boolean"
           },
-          "controller_version": {
-            "default": 1,
-            "enum": [
-              1,
-              2
-            ],
-            "title": "Controller Version",
-            "type": "integer"
-          },
           "failure_code": {
             "anyOf": [
               {
@@ -983,6 +1313,12 @@
             "maxLength": 2000,
             "title": "Focus Query",
             "type": "string"
+          },
+          "guarded_commands": {
+            "const": true,
+            "default": true,
+            "title": "Guarded Commands",
+            "type": "boolean"
           },
           "message": {
             "default": "",
@@ -1072,6 +1408,34 @@
           "url"
         ],
         "title": "AgentTab",
+        "type": "object"
+      },
+      "AgentToolResult": {
+        "additionalProperties": false,
+        "description": "What the extension saw after running one tool call.",
+        "properties": {
+          "content": {
+            "maxLength": 30000,
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "is_error": {
+            "default": false,
+            "title": "Is Error",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "title": "AgentToolResult",
         "type": "object"
       },
       "AnswerSuggestionOut": {
@@ -1988,6 +2352,11 @@
       },
       "ExtensionPreferences": {
         "properties": {
+          "auto_consent": {
+            "default": false,
+            "title": "Auto Consent",
+            "type": "boolean"
+          },
           "available_from": {
             "anyOf": [
               {
@@ -2055,6 +2424,13 @@
             ],
             "title": "Requires Sponsorship"
           },
+          "time_zone_regions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Time Zone Regions",
+            "type": "array"
+          },
           "willing_to_relocate": {
             "title": "Willing To Relocate",
             "type": "boolean"
@@ -2088,6 +2464,18 @@
             },
             "title": "Answers",
             "type": "array"
+          },
+          "date_of_birth": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Of Birth"
           },
           "education": {
             "items": {
@@ -2126,6 +2514,17 @@
               }
             ],
             "title": "Full Name"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
           },
           "links": {
             "items": {
@@ -2212,6 +2611,8 @@
           "email",
           "phone",
           "location",
+          "gender",
+          "date_of_birth",
           "links",
           "summary",
           "total_experience_years",
@@ -2302,32 +2703,6 @@
           "text"
         ],
         "title": "NoteBody",
-        "type": "object"
-      },
-      "ProviderKeyIn": {
-        "additionalProperties": false,
-        "properties": {
-          "api_key": {
-            "format": "password",
-            "maxLength": 4096,
-            "minLength": 10,
-            "title": "Api Key",
-            "type": "string",
-            "writeOnly": true
-          },
-          "model": {
-            "maxLength": 100,
-            "minLength": 1,
-            "pattern": "^[a-zA-Z0-9._:/-]+$",
-            "title": "Model",
-            "type": "string"
-          }
-        },
-        "required": [
-          "api_key",
-          "model"
-        ],
-        "title": "ProviderKeyIn",
         "type": "object"
       },
       "ProviderKeyStatus": {
@@ -2494,6 +2869,40 @@
         "operationId": "extensionAgentCapabilities",
         "parameters": [
           {
+            "in": "query",
+            "name": "planner",
+            "required": false,
+            "schema": {
+              "default": "platform",
+              "enum": [
+                "platform",
+                "custom"
+              ],
+              "title": "Planner",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extension_engine",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "rules_led",
+                    "ai_led"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extension Engine"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -2596,6 +3005,66 @@
           }
         },
         "summary": "Ingest",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/agent/model": {
+      "post": {
+        "description": "Platform model adapter. The extension owns all planning and page commands.",
+        "operationId": "extensionAgentModel",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentModelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model",
         "tags": [
           "extension"
         ]
@@ -2825,77 +3294,6 @@
           }
         },
         "summary": "Ai Delete Provider",
-        "tags": [
-          "extension"
-        ]
-      },
-      "put": {
-        "operationId": "extensionAISaveProvider",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "provider",
-            "required": true,
-            "schema": {
-              "enum": [
-                "gemini",
-                "anthropic",
-                "openai"
-              ],
-              "title": "Provider",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProviderKeyIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExtensionAIOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ai Save Provider",
         "tags": [
           "extension"
         ]

@@ -2,7 +2,7 @@
 
 Install Node.js 22+ and Python 3.10+, then run `npm ci`. Before submitting a change, run `npm run check` and `npm run build`. Add focused regression tests when changing behavior.
 
-Keep `extension/src/bridge.js` consistent with `extension-bridge/client.ts`. Coordinate API changes with the platform and regenerate `extension-bridge/openapi.json` from its exported spec rather than editing the snapshot.
+Keep `extension/src/shared/bridge.ts` consistent with `extension-bridge/client.ts`. Runtime code in `extension/src/` is written in TypeScript (migrated 2026-11-19) with strict type checking via `npm run typecheck`. Coordinate API changes with the platform and regenerate `extension-bridge/openapi.json` from its exported spec rather than editing the snapshot.
 
 The extension fills forms for review and clicks Submit only after explicit Auto apply and a cancellable countdown. Preserve review steps, account isolation, credential handling in the background worker, and confirmation requirements for submitted events. Do not add LinkedIn automation or Google scraping. Use fake credentials and local form fixtures in tests.
 

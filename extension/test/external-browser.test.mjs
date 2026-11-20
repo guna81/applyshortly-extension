@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PAGE, isPageRule } from './page-rules.mjs';
-import { externalBrowser, waitForApplicationTab } from '../src/external-browser.js';
+import { externalBrowser, waitForApplicationTab } from '../src/shared/external-browser.js';
 
 test('opening waits for Chrome to commit the URL and complete navigation', async () => {
   const states = [{ url: '', status: 'loading' }, { url: 'https://fixture.example/apply', status: 'loading' }, { url: 'https://fixture.example/apply', status: 'complete' }];
@@ -62,7 +62,7 @@ test('relay authenticates in its first frame without credential URLs or AI calls
 });
 
 test('submission validates checked consent while retaining required field and native guards', async () => {
-  const { validateApplicationForm } = await import('../src/external-browser.js');
+  const { validateApplicationForm } = await import('../src/shared/external-browser.js');
   const originalFill = globalThis.JobHuntFill;
   const originalDocument = globalThis.document;
   const checkbox = { kind: 'checkbox', label: 'Consent', required: true, el: { checked: false } };
@@ -519,6 +519,7 @@ test('fill_form chooses from a dropdown instead of typing into it, and reports a
         case 'selectNative': return { native: false };
         case 'noteShown': return true;
         case 'matchOption': return { ok: true, ref: 'o1', text: 'India' };
+        case 'hitTest': return true;
         case 'committedValue': return args[0] === '1' ? 'India' : '';
         case 'focusForTyping': return { ok: true, mode: 'direct' };
         case 'setDirect': return { ok: true };

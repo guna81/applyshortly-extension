@@ -28,6 +28,8 @@ class BuildTest(unittest.TestCase):
                 self.assertFalse(any(name.startswith(("frontend/", "backend/", ".git/")) for name in names))
                 self.assertFalse(any(Path(name).name == ".env" for name in names))
                 archive.extractall(root / "source")
+            # Changed 2026-11-18: the build bundles LangGraph from node_modules (CI runs `npm ci` first).
+            (root / "source/node_modules").symlink_to(build_extension.ROOT / "node_modules")
             subprocess.run(
                 ["make", "extension-source", "platform_url=https://platform.example"],
                 cwd=root / "source", check=True, capture_output=True,
@@ -41,6 +43,11 @@ class BuildTest(unittest.TestCase):
             fixture = root / "repo"
             fixture.mkdir()
             shutil.copytree(build_extension.ROOT / "extension", fixture / "extension")
+            (fixture / "scripts").mkdir()
+            shutil.copy(build_extension.ROOT / "scripts/bundle_langgraph.mjs", fixture / "scripts")
+            if (build_extension.ROOT / "scripts/compile_extension.mjs").is_file():
+                shutil.copy(build_extension.ROOT / "scripts/compile_extension.mjs", fixture / "scripts")
+            (fixture / "node_modules").symlink_to(build_extension.ROOT / "node_modules")
             (fixture / "extension/config.local.json").write_text('{"token":"fixture-secret"}')
             with patch.object(build_extension, "ROOT", fixture):
                 package = build_extension.build(root / "out")
@@ -51,15 +58,18 @@ class BuildTest(unittest.TestCase):
                     manifest = json.loads(archive.read("manifest.json"))
                     references = [
                         manifest["background"]["service_worker"],
-                        manifest["action"]["default_popup"],
                         manifest["options_ui"]["page"],
                         *manifest["icons"].values(),
                     ]
+                    references = [r for r in references if r]
                     references.extend(
                         name for script in manifest["content_scripts"] for name in script["js"]
                     )
                     # Modules the service worker imports, and the agent's in-page script.
-                    references.extend(["src/agent/loop.js", "src/agent/cdp.js", "src/agent/page.js"])
+                    references.extend(["src/page-control/loop.js", "src/page-control/cdp.js", "src/page-control/page.js"])
+                    # Changed 2026-11-18: the agent runs on LangGraph JS from npm; the build bundles it into src/agent-based/langgraph.js
+                    # (the extension loads plain files, it cannot resolve node_modules) and ships its license notice.
+                    references.extend(["src/agent-based/langgraph.js", "THIRD_PARTY_NOTICES.md"])
                     for name in references:
                         self.assertIn(name, archive.namelist())
                     self.assertNotIn("config.local.json", archive.namelist())
@@ -69,6 +79,19 @@ class BuildTest(unittest.TestCase):
                             for name in archive.namelist()
                         )
                     )
+
+    def test_langgraph_is_bundled_into_one_self_contained_module(self):
+        # Added 2026-11-18: Chrome loads plain files, so the package must not import "@langchain/..." by name.
+        import re
+
+        with tempfile.TemporaryDirectory() as temp:
+            package = build_extension.build(Path(temp) / "out", "https://platform.example")
+            with zipfile.ZipFile(package) as archive:
+                code = archive.read("src/agent-based/langgraph.js").decode()
+        self.assertLess(len(code), 2 * 1024 * 1024)
+        self.assertGreater(len(code), 100_000, "the shim was shipped instead of the bundle")
+        self.assertIsNone(re.search(r"""from\s*["'](?:@|node:)""", code), "bare or Node-only import left in the bundle")
+        self.assertIsNone(re.search(r"\beval\s*\(|new Function\s*\(", code), "MV3 forbids eval")
 
     def test_platform_origin(self):
         for value in [
@@ -90,6 +113,11 @@ class BuildTest(unittest.TestCase):
             fixture = root / "repo"
             fixture.mkdir()
             shutil.copytree(build_extension.ROOT / "extension", fixture / "extension")
+            (fixture / "scripts").mkdir()
+            shutil.copy(build_extension.ROOT / "scripts/bundle_langgraph.mjs", fixture / "scripts")
+            if (build_extension.ROOT / "scripts/compile_extension.mjs").is_file():
+                shutil.copy(build_extension.ROOT / "scripts/compile_extension.mjs", fixture / "scripts")
+            (fixture / "node_modules").symlink_to(build_extension.ROOT / "node_modules")
             (fixture / ".env").write_text(
                 'FRONTEND_URL="https://deployment.example" # public address\n'
                 'OPENAI_API_KEY=fixture-private-secret\n'

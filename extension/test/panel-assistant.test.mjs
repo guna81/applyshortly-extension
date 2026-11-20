@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import { ashbyYesNo, ashbyProviders, ashbyConsent, ashbyReceipt } from "./ashby-fixture.mjs";
 
 const src = (name) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
@@ -49,9 +49,16 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
     sent.push(plain(msg));
     try { return { ok: true, data: await handlers[msg.type](msg) }; } catch (err) { return { ok: false, error: err.message, status: err.status, code: err.code }; }
   };
-  let onStorage;
+  const storageListeners = [];
+  const saved = {};
   win.chrome = {
-    storage: { onChanged: { addListener: (fn) => { onStorage = fn; } } },
+    storage: {
+      onChanged: { addListener: (fn) => { storageListeners.push(fn); } },
+      local: {
+        get: async (keys) => Object.fromEntries([].concat(keys).filter((k) => k in saved).map((k) => [k, saved[k]])),
+        set: async (values) => { Object.assign(saved, values); },
+      },
+    },
     runtime: {
       id: "fixture",
       lastError: undefined,
@@ -59,11 +66,11 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
       onMessage: { addListener: (fn) => { onMessage = fn; } },
     },
   };
-  for (const name of ["fill.js", "panel-model.js", "panel-view.js", "content.js"]) win.eval(src(name));
+  for (const name of ["page-control/phone.js", "rule-based/profile-answer.js", "rule-based/answers.js", "page-control/dom.js", "shared/ui/panel-model.js", "shared/ui/panel-view.js", "shared/ui/content.js"]) win.eval(src(name));
   const shadow = () => win.document.querySelector("jobhunt-autofill-panel")?.shadowRoot;
   const start = (extra = {}) => onMessage({ type: "run", appId: 5, ...extra }, { id: "fixture" }, () => {});
   const message = (msg) => onMessage(msg, { id: "fixture" }, () => {});
-  return { win, sent, start, shadow, message, handlers, storage: (changes) => onStorage?.(changes, "local") };
+  return { win, sent, start, shadow, message, handlers, saved, storage: (changes) => storageListeners.forEach((fn) => fn(changes, "local")) };
 }
 
 async function until(check, label) {
@@ -95,6 +102,29 @@ test("consecutive answers let batched form state commit between fields", async (
   page.win.close();
 });
 
+test("attaches the profile resume to Greenhouse's grouped upload, not its cover-letter input", async () => {
+  const form = `<form>
+    <div role="group" aria-labelledby="upload-label-resume" aria-required="true">
+      <div id="upload-label-resume">Resume/CV</div><label for="resume">Attach</label><input id="resume" type="file">
+    </div>
+    <div role="group" aria-labelledby="upload-label-cover" aria-required="false">
+      <div id="upload-label-cover">Cover Letter</div><label for="cover">Attach</label><input id="cover" type="file">
+    </div></form>`;
+  const page = panelPage(() => ({}), { form });
+  page.win.DataTransfer = class { constructor() { this.list = []; this.items = { add: (file) => this.list.push(file) }; } get files() { return this.list; } };
+  Object.defineProperty(page.win.HTMLInputElement.prototype, "files", { configurable: true, get() { return this.chosen ?? []; }, set(value) { this.chosen = value; } });
+  page.handlers.resume = () => ({ name: "resume.pdf", type: "application/pdf", base64: "JVBERi0=" });
+  page.start();
+  await until(() => page.win.document.querySelector("#resume").files.length, "resume attachment");
+  assert.equal(page.win.document.querySelector("#resume").files[0].name, "resume.pdf");
+  assert.equal(page.win.document.querySelector("#cover").files.length, 0);
+  const fields = page.win.JobHuntFill.collectFields(page.win.document, { checkLayout: false }).filter((field) => field.kind === "file");
+  assert.deepEqual(plain(fields.map(({ label, required }) => ({ label, required }))), [
+    { label: "Resume/CV", required: true }, { label: "Cover Letter", required: false },
+  ]);
+  page.win.close();
+});
+
 test("the assistant asks the open question, offers its options, and fills the answer without AI", async () => {
   const page = panelPage(() => ({ reply: "Updated your name.", updates: {}, warnings: [], done: true, choices: [] }));
   page.start();
@@ -123,11 +153,9 @@ test("the assistant asks the open question, offers its options, and fills the an
   input.value = "Use my middle name too";
   input.dispatchEvent(new page.win.Event("input"));
   input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
-  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
-  const call = page.sent.find((m) => m.type === "assist");
-  assert.equal(call.appId, 5);
-  assert.equal(call.messages.at(-1).text, "Use my middle name too");
-  assert.ok(call.fields.every((f) => ["text", "select", "radio", "dropdown"].includes(f.kind)));
+  await until(() => /Agent based form assistant for AI assistance/.test(page.shadow().textContent), "manual handoff");
+  assert.equal(page.sent.some((m) => m.type === "assist"), false);
+
 });
 
 test("a typed answer to a free-text question is written in without AI", async () => {
@@ -145,96 +173,127 @@ test("a typed answer to a free-text question is written in without AI", async ()
   assert.equal(page.sent.some((m) => m.type === "assist"), false);
 });
 
-test("a failed turn keeps the typed message and says why", async () => {
-  const page = panelPage(() => { throw new Error("Not enough credits"); });
+test("a rule-mode message that needs interpretation offers handoff without spending AI credits", async () => {
+  const page = panelPage(() => { throw new Error("assistant must not be called"); });
   page.start();
   const input = await until(() => page.shadow()?.querySelector(".composer-input"), "composer");
   input.value = "I can relocate";
   input.dispatchEvent(new page.win.Event("input"));
   input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
-  await until(() => page.shadow().querySelector(".toast"), "toast");
-  assert.match(page.shadow().querySelector(".toast").textContent, /Not enough credits/);
-  assert.equal(page.shadow().querySelector(".composer-input").value, "I can relocate");
-  assert.equal(page.shadow().querySelectorAll(".bubble.user").length, 0);
+  await until(() => /Agent based form assistant for AI assistance/.test(page.shadow().textContent), "handoff");
+  assert.equal(page.sent.some((m) => m.type === "assist" || m.allowGenerate), false);
+  page.win.close();
 });
 
-test("an optional question nobody could answer is offered for drafting, not counted as a to-do", async () => {
+test('rule mode never drafts: an optional question nobody could answer is offered for drafting, not counted as a to-do', async () => {
   const form = `<label for="name">Full name</label><input id="name" required>
     <label for="fit">Why are you a good fit?</label><textarea id="fit"></textarea>`;
-  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
-    form,
-    suggest: (msg) => (msg.allowGenerate ? { answer: "I build ML systems end to end.", source: "generated", needs_review: true } : { answer: null }),
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
   });
   page.start();
-  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
-  assert.match(page.shadow().querySelector(".hero strong").textContent, /^All set/); // optional is not a to-do
-  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /“Why are you a good fit” is optional/);
-
-  const draft = [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "Draft it for me");
-  draft.click();
-  await until(() => page.win.document.querySelector("#fit").value, "draft written");
-  assert.equal(page.win.document.querySelector("#fit").value, "I build ML systems end to end.");
-  assert.ok(page.sent.some((m) => m.type === "suggest" && m.allowGenerate === true));
-  assert.equal(page.sent.some((m) => m.type === "assist"), false);
-  await until(() => !page.shadow().querySelector(".thinking"), "reply");
-  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /Here's a draft/);
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
 });
 
-test("on an untracked page, Draft it for me sends the page's job, and a failed draft says why", async () => {
+test('rule mode never drafts: optional screening answers are drafted automatically as plain text, and missing facts are requested', async () => {
+  const form = `<label for="integration">Describe an integration you built, including systems and challenges.</label><textarea id="integration"></textarea>
+    <label for="issue">Describe a production issue you resolved.</label><textarea id="issue"></textarea>`;
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
+  });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
+});
+
+test('rule mode never drafts: Airtable editable textboxes are discovered, drafted, and checked after writing', async () => {
+  const form = `<div data-testid="stackedLabel"><div id="q2">Describe a customer project you delivered.</div>
+    <div data-testid="cell-editor"><div class="contentEditableTextboxContainer">
+      <div role="textbox" contenteditable="plaintext-only" aria-multiline="true" aria-labelledby="q2"></div>
+      <input class="editableFix" tabindex="-1">
+    </div></div></div>
+    <div id="q3">Describe a production issue you resolved.</div><div role="textbox" contenteditable="plaintext-only" aria-labelledby="q3"></div>`;
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
+  });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
+});
+
+test("a contenteditable answer cleared by the site remains unanswered", async () => {
+  const form = `<div id="q">Describe a project you delivered.</div><div role="textbox" contenteditable="plaintext-only" aria-labelledby="q" aria-required="true"></div>`;
+  const page = panelPage(() => ({}), {
+    form,
+    context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => msg.allowGenerate ? { answer: "Built a project.", source: "generated", needs_review: true } : { answer: null },
+  });
+  const editor = page.win.document.querySelector('[role="textbox"]');
+  editor.addEventListener("input", () => { editor.textContent = ""; });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "unanswered question");
+  assert.equal(editor.textContent, "");
+  assert.doesNotMatch(page.shadow().querySelector(".hero strong").textContent, /All set/);
+  page.win.close();
+});
+
+test("a required résumé drop zone is not reported as complete", async () => {
+  const form = `<div><div>Resume (PDF only) *</div><div><button type="button">Drop files here or click to browse</button></div></div>`;
+  const page = panelPage(() => ({}), { form });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "upload request");
+  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /upload button/i);
+  assert.doesNotMatch(page.shadow().querySelector(".hero strong").textContent, /All set/);
+  page.win.close();
+});
+
+test("rule mode never drafts: on an untracked page, Draft it for me sends the page's job, and a failed draft says why", async () => {
   const form = `<title>Software Engineer @ Outmarket AI</title><h1>Software Engineer</h1>
     <p>Outmarket builds AI agents for B2B marketing teams.</p>
     <label for="why">What interests you about Outmarket?</label><textarea id="why" required></textarea>`;
-  let fail = true;
-  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
-    form,
-    app: null,
-    suggest: (msg) => {
-      if (!msg.allowGenerate) return { answer: null };
-      if (fail) throw new Error("Not enough AI credits.");
-      return { answer: "Your agents for marketing teams match my work.", source: "generated", needs_review: true };
-    },
-  });
-  page.start({ appId: null });
-  await until(() => page.shadow()?.querySelector(".quick button"), "the question");
-  const draft = () => [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "Draft it for me");
-  draft().click();
-  await until(() => !page.shadow().querySelector(".thinking") && /couldn't draft/.test([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent), "failure");
-  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /I couldn't draft this one \(Not enough AI credits\)\./);
-
-  fail = false;
-  const input = page.shadow().querySelector(".composer-input");
-  input.value = "draft it for me";
-  input.dispatchEvent(new page.win.Event("input"));
-  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
-  await until(() => page.win.document.querySelector("#why").value, "draft written");
-  const call = page.sent.filter((m) => m.type === "suggest" && m.allowGenerate).at(-1);
-  assert.equal(call.page.title, "Software Engineer @ Outmarket AI");
-  assert.match(call.page.description, /AI agents for B2B marketing teams/);
-  // Free lookups (profile, answer bank) never send the page text.
-  assert.equal(page.sent.some((m) => m.type === "suggest" && !m.allowGenerate && m.page), false);
-});
-
-test("a required open question shows Draft it for me, and a typed draft request drafts it", async () => {
-  const form = `<label for="name">Full name</label><input id="name" required>
-    <label for="fit">Why do you think you are suitable for this position? Brief in less than 100 words</label><textarea id="fit" required></textarea>`;
-  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
-    form,
-    suggest: (msg) => (msg.allowGenerate ? { answer: "I build ML systems end to end.", source: "generated", needs_review: true } : { answer: null }),
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
   });
   page.start();
-  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "greeting");
-  assert.equal(page.shadow().querySelector(".question .note").textContent, "Type your answer, or I can draft one.");
-  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Draft it for me"]);
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
+});
 
-  const input = page.shadow().querySelector(".composer-input");
-  input.value = "draft it for me";
-  input.dispatchEvent(new page.win.Event("input"));
-  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
-  await until(() => page.win.document.querySelector("#fit").value, "draft written");
-  assert.equal(page.win.document.querySelector("#fit").value, "I build ML systems end to end.");
-  assert.equal(page.sent.some((m) => m.type === "assist"), false);
-  await until(() => !page.shadow().querySelector(".thinking"), "reply");
-  assert.match([...page.shadow().querySelectorAll(".bubble")].at(-1).textContent, /Here's a draft/);
+test('rule mode never drafts: a required open question shows Draft it for me, and a typed draft request drafts it', async () => {
+  const form = `<label for="name">Full name</label><input id="name" required>
+    <label for="fit">Why do you think you are suitable for this position? Brief in less than 100 words</label><textarea id="fit" required></textarea>`;
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
+  });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
 });
 
 test("a consent checkbox is brought up in the chat and ticked only on the user's tap", async () => {
@@ -273,7 +332,7 @@ test("Contact Form 7 required skills block submission until an option is selecte
   quick().find((b) => b.textContent === "I've done it").click();
   await until(() => /Select at least one option/.test(page.shadow().textContent), "missing selection message");
   assert.ok([...page.win.document.querySelectorAll('input[type="checkbox"]')].every((el) => !el.checked));
-  const submit = () => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === "Submit for me");
+  const submit = () => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent.trim() === "Submit");
   assert.equal(submit().disabled, true);
   const sql = page.win.document.querySelector('input[value="SQL"]');
   sql.click();
@@ -320,7 +379,7 @@ test("a typeahead that clears an unselected value no longer counts as answered",
   input.value = "";
   input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
   await until(() => /needs your answer/.test(page.shadow()?.textContent ?? ""), "cleared typeahead question");
-  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me").disabled, true);
+  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit").disabled, true);
   page.win.close();
 });
 
@@ -330,7 +389,7 @@ function watchSubmits(page) {
   return submits;
 }
 
-test("Fill and submit submits a complete form after the countdown and reports the attempt once", async () => {
+test("Auto apply submits a complete form after the countdown and reports the attempt once", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -348,7 +407,7 @@ test("Fill and submit submits a complete form after the countdown and reports th
   assert.equal(submits.length, 1, "a repeat request cannot submit the same page twice");
 });
 
-test("Fill and submit tells the background it clicked Submit, so Autopilot's window can close", async () => {
+test("Auto apply tells the background it clicked Submit, so Autopilot's window can close", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -365,7 +424,7 @@ const CHECK_FORM = `
   </form>`;
 const noticeSuggest = (needsReview) => (msg) => (/notice/i.test(msg.question) ? { answer: "30 days", source: "answer_bank", needs_review: needsReview } : { answer: null });
 
-test("Autopilot's window leaves an answer that needs a check for the user, but a person's own Fill and submit sends it", async () => {
+test("Autopilot's window leaves an answer that needs a check for the user, but a person's own Auto apply sends it", async () => {
   const unattended = panelPage(() => ({}), { form: CHECK_FORM, suggest: noticeSuggest(true) });
   const quiet = watchSubmits(unattended);
   unattended.start({ autoSubmit: true, unattended: true });
@@ -390,7 +449,7 @@ test("Autopilot's window submits when every answer is certain", async () => {
   assert.equal(page.sent.filter((m) => m.type === "autoApplied").length, 1);
 });
 
-test("Fill and submit never submits on a sign-in page and leaves the window for the user", async () => {
+test("Auto apply never submits on a sign-in page and leaves the window for the user", async () => {
   const form = `<form><label for="name">Full name</label><input id="name" required>
     <label for="pw">Password</label><input id="pw" type="password">
     <button type="submit">Submit application</button></form>`;
@@ -404,7 +463,7 @@ test("Fill and submit never submits on a sign-in page and leaves the window for 
   assert.equal(page.sent.some((m) => m.type === "report" && m.event.event === "submission_attempted"), false);
 });
 
-test("Fill and submit can be cancelled, and never submits with a required field empty", async () => {
+test("Auto apply can be cancelled, and never submits with a required field empty", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -423,10 +482,79 @@ test("Fill and submit can be cancelled, and never submits with a required field 
   assert.equal(none.length, 0);
 });
 
+test("a message about why nothing was submitted stays until dismissed; a confirmation fades", async () => {
+  const incomplete = panelPage(() => ({}), { form: AUTO_FORM.replace('<label for="name">Full name</label>', '<label for="name">Favourite colour</label>') });
+  incomplete.start({ autoSubmit: true });
+  await until(() => incomplete.shadow()?.querySelector(".toast"), "blocked toast");
+  assert.equal(incomplete.shadow().querySelector(".toast").getAttribute("role"), "alert");
+  await tick(5300); // longer than the 5s a confirmation lasts
+  const toast = incomplete.shadow().querySelector(".toast");
+  assert.ok(toast, "the blocked message is still there");
+  [...toast.querySelectorAll("button")].find((b) => b.textContent === "Dismiss").click();
+  assert.equal(incomplete.shadow().querySelector(".toast"), null);
+
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start({ autoSubmit: true });
+  const cancel = await until(() => page.shadow()?.querySelector("[data-cancel]"), "cancel");
+  cancel.click();
+  await until(() => page.shadow()?.querySelector(".toast"), "cancelled toast");
+  assert.equal(page.shadow().querySelector(".toast").getAttribute("role"), "status");
+  await tick(5300);
+  assert.equal(page.shadow().querySelector(".toast"), null, "the confirmation faded");
+});
+
+test("the countdown ticks in place: Cancel keeps focus and is announced once", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start({ autoSubmit: true });
+  const cancel = await until(() => page.shadow()?.querySelector("[data-cancel]"), "cancel");
+  assert.equal(page.shadow().activeElement, cancel, "Cancel is focused so Enter stops it");
+  assert.equal(page.shadow().querySelectorAll('[role="alert"]').length, 1);
+  const label = page.shadow().querySelector(".cd");
+  assert.equal(label.getAttribute("aria-hidden"), "true");
+  const first = label.textContent;
+  await tick(1200);
+  assert.notEqual(page.shadow().querySelector(".cd").textContent, first, "the number moved");
+  assert.equal(page.shadow().querySelector("[data-cancel]"), cancel, "the same button, not a re-render");
+  assert.equal(page.shadow().activeElement, cancel);
+  cancel.click();
+  await tick(200);
+});
+
+test("the panel can shrink and remembers it, and has no left/right dock button", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  const act = (name) => page.shadow().querySelector(`[data-act="${name}"]`);
+  assert.equal(act("dock"), null);
+  act("compact").click();
+  assert.ok(page.shadow().querySelector(".p").classList.contains("compact"));
+  assert.equal(act("compact").getAttribute("aria-pressed"), "true");
+  await tick(50);
+  assert.equal(page.saved.panelCompact, true);
+
+  // A new page starts with what the user chose, docked right even if "left" was stored earlier.
+  const next = panelPage(() => ({}), { form: AUTO_FORM });
+  Object.assign(next.saved, page.saved, { panelDock: "left" });
+  next.start();
+  await until(() => next.shadow()?.querySelector(".p"), "panel");
+  assert.ok(!next.shadow().querySelector(".p").classList.contains("left"));
+  assert.ok(next.shadow().querySelector(".p").classList.contains("compact"));
+});
+
+test("the panel says in words why Submit isn't ready, and follows the theme setting", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM.replace('<label for="name">Full name</label>', '<label for="name">Favourite colour</label>') });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  assert.match(page.shadow().querySelector(".submit-hint").textContent, /1 required field still needs you/);
+  assert.equal(page.shadow().querySelector(".wrap").getAttribute("data-theme"), null);
+  page.storage({ theme: { newValue: "dark" } });
+  assert.equal(page.shadow().querySelector(".wrap").getAttribute("data-theme"), "dark");
+});
+
 test("the Submit button is enabled only when it would submit, and says why not", async () => {
   const submitButton = async (page) => {
     page.start();
-    return until(() => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Submit for me"), "Submit");
+    return until(() => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Submit"), "Submit");
   };
   const ready = await submitButton(panelPage(() => ({}), { form: AUTO_FORM, app: { title: "Engineer", status: "ready_for_review" } }));
   assert.equal(ready.disabled, false);
@@ -447,17 +575,41 @@ test("Submit sits at the bottom of the panel, disabled until every answer is in"
   await until(() => page.shadow()?.querySelector(".composer"), "panel");
   const buttons = () => [...page.shadow().querySelectorAll("button")];
   assert.ok(!buttons().some((b) => /Fill and submit/.test(b.textContent)));
-  const submit = buttons().find((b) => b.textContent === "Submit for me");
+  const submit = buttons().find((b) => b.textContent === "Submit");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /1 required field still needs you/);
-  // The last thing in the panel, below the message box.
-  const panel = page.shadow().querySelector(".composer").parentElement;
-  assert.ok(panel.lastElementChild.contains(submit));
+  // At the bottom, below the message box. The switches live in the toolbar popup, not here.
+  assert.equal(page.shadow().querySelector(".pref-row"), null);
 
   // Answering the last question enables it.
   page.win.document.getElementById("name").value = "blue";
   page.win.document.getElementById("name").dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  await until(() => !buttons().find((b) => b.textContent === "Submit for me").disabled, "Submit enabled");
+  await until(() => !buttons().find((b) => b.textContent === "Submit").disabled, "Submit enabled");
+});
+
+test("the panel has no preference switches; they live in the toolbar popup", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.saved.aiDrafts = true;
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  assert.equal(page.shadow().querySelector(".pref-row"), null);
+  assert.equal(page.shadow().querySelector(".pref"), null);
+});
+
+test("the panel is the only surface: it shows the progress count, chat and footer without a side panel", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  assert.match(page.shadow().querySelector(".hero .meta").textContent, /\/\d+ steps|form has loaded/);
+  assert.equal(page.shadow().querySelector(".h button[aria-label='Settings']"), null);
+  page.win.close();
+  // A running agent that has not read any field yet shows an animated bar, not a "0/?" count.
+  const loading = panelPage(() => ({}), { form: "<p>Loading…</p>" });
+  loading.start();
+  await until(() => loading.shadow()?.querySelector(".composer"), "panel");
+  loading.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [] });
+  await until(() => loading.shadow().querySelector(".bar.indeterminate"), "indeterminate bar");
+  loading.win.close();
 });
 
 test("the website's sign-in mark is relayed once per change, and other pages send nothing", async () => {
@@ -535,7 +687,7 @@ test("dropdowns are filled, values the site rejects are retried or flagged, and 
   assert.match(text, /1 thing left for you/);
   assert.doesNotMatch(text, /All set/);
 
-  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me");
+  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /1 required field still needs you/);
 });
@@ -571,18 +723,16 @@ test("an unanswered custom dropdown's options are read once, offered as quick re
   assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Male", "Female"]);
 
   const input = page.shadow().querySelector(".composer-input");
-  input.value = "I'm a woman";
+  input.value = "Female";
   input.dispatchEvent(new page.win.Event("input"));
   input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
-  await until(() => page.sent.some((m) => m.type === "assist") && !page.shadow().querySelector(".thinking"), "assistant reply");
-  const call = page.sent.find((m) => m.type === "assist");
-  assert.deepEqual(call.fields.find((f) => f.kind === "dropdown").options, ["Male", "Female"]);
+  assert.equal(page.sent.some((m) => m.type === "assist"), false);
   await until(() => select.textContent === "Female" || null, "dropdown picked");
   assert.ok(opens >= 2, "opened once to read, once to pick");
 });
 
 
-test("a prefilled application is recognized and Fill and submit reaches its cancellable countdown", async () => {
+test("a prefilled application is recognized and Auto apply reaches its cancellable countdown", async () => {
   const form = `<form>
     <label for="name">First name</label><input id="name" required value="Grace">
     <label for="city">Current location</label><input id="city" required value="Bengaluru">
@@ -611,11 +761,11 @@ test("a prefilled application is recognized and Fill and submit reaches its canc
   city.value = '';
   city.dispatchEvent(new page.win.Event('input', { bubbles: true }));
   await until(() => /1 thing left/.test(page.shadow().textContent), 'cleared answer');
-  assert.equal([...page.shadow().querySelectorAll('button')].find((b) => b.textContent === 'Submit for me').disabled, true);
+  assert.equal([...page.shadow().querySelectorAll('button')].find((b) => b.textContent === 'Submit').disabled, true);
   page.win.close();
 });
 
-test("prefilled answers rejected by the site still block Fill and submit", async () => {
+test("prefilled answers rejected by the site still block Auto apply", async () => {
   const page = panelPage(() => ({}), { form: AUTO_FORM.replace('id="name" required', 'id="name" required value="Rejected" aria-invalid="true"') });
   const submits = watchSubmits(page);
   page.start({ autoSubmit: true });
@@ -638,7 +788,7 @@ test("rerunning a filled form preserves answer provenance and review requirement
   page.win.close();
 });
 
-test("Fill and submit rechecks newly required fields and changed submit buttons after the countdown", async () => {
+test("Auto apply rechecks newly required fields and changed submit buttons after the countdown", async () => {
   const changes = [
     (doc) => doc.querySelector("form").insertAdjacentHTML("beforeend", '<label>New required answer<input required></label>'),
     (doc) => doc.querySelector('button[type="submit"]').setAttribute("aria-disabled", "true"),
@@ -658,13 +808,13 @@ test("Fill and submit rechecks newly required fields and changed submit buttons 
   }));
 });
 
-test("'I already submitted it' asks once more, then reports the submission", async () => {
+test("'Already submitted' asks once more, then reports the submission", async () => {
   const page = panelPage(() => ({}));
   page.start();
   const button = (label) => [...(page.shadow()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === label);
-  (await until(() => button("I already submitted it"), "the button")).click();
+  (await until(() => button("Already submitted"), "the button")).click();
   button("Not yet").click();
-  button("I already submitted it").click();
+  button("Already submitted").click();
   button("Yes, I submitted it").click();
   await until(() => page.sent.filter((m) => m.type === "report" && m.event.event === "submitted"), "submitted report");
   await until(() => page.shadow().querySelector(".msg.good"), "saved message");
@@ -738,22 +888,19 @@ test("Rippling SMS consent is named and left to the user even when the answer ba
   page.win.close();
 });
 
-test("an AI draft that only contains an option's words leaves the choice to the user", async () => {
-  const page = panelPage(() => ({ reply: "", updates: {}, warnings: [], done: false, choices: [] }), {
-    form: CHOICE_FORM,
-    context: aiContext,
-    suggest: (msg) => (msg.allowGenerate ? { answer: SENTENCES[msg.question], source: "generated", needs_review: true } : { answer: null }),
+test("rule mode never drafts: an AI draft that only contains an option's words leaves the choice to the user", async () => {
+  const form = `<form><label for="q">Why this role?</label><textarea id="q" required></textarea></form>`;
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
   });
   page.start();
-  await until(() => page.sent.filter((m) => m.type === "report" && m.event.event === "filled"), "filled report");
-  assert.ok(page.sent.some((m) => m.type === "suggest" && m.allowGenerate === true), "drafts were requested");
-  const doc = page.win.document;
-  assert.equal(doc.querySelector("#auth").value, "");
-  assert.equal([...doc.querySelectorAll('input[name="deg"]')].some((r) => r.checked), false);
-  const report = page.sent.filter((m) => m.type === "report" && m.event.event === "filled").at(-1);
-  assert.deepEqual(plain(report.event.filled_fields), []);
-  assert.deepEqual(report.event.unresolved_fields.map((f) => f.label).sort(), ["Highest degree", "Work authorization"]);
-  assert.match(page.shadow().querySelector(".bubble.assistant").textContent, /2 questions need your answer/);
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
+  page.storage({ aiDrafts: { oldValue: false, newValue: true } });
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
 });
 
 test("an answer-bank answer still picks the one option it contains", async () => {
@@ -800,7 +947,7 @@ const STEP_FORM = `<form>
   <button type="button">Next</button>
 </form>`;
 
-test("explicit Fill and submit continues after the form agent is ready, through the usual countdown", async () => {
+test("explicit Auto apply continues after the form agent is ready, through the usual countdown", async () => {
   const page = panelPage(() => ({}), { form: STEP_FORM.replace('<button', '<label>Department<input required></label><button') });
   page.start({ autoSubmit: true });
   await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
@@ -818,21 +965,21 @@ test("explicit Fill and submit continues after the form agent is ready, through 
   assert.equal(submits.length, 1);
 });
 
-test("agent readiness without Fill and submit approval leaves the completed form for review", async () => {
+test("agent readiness without Auto apply approval leaves the completed form for review", async () => {
   const page = panelPage(() => ({}), { form: STEP_FORM });
   page.start();
   await until(() => page.sent.find((m) => m.type === "agentStart"), "agent handoff");
   assert.notEqual(page.sent.find((m) => m.type === "agentStart").autoSubmit, true);
   page.win.document.querySelector("form").innerHTML = '<label>Full name<input required value="Ada Lovelace"></label><button type="submit">Submit application</button>';
   const submits = watchSubmits(page);
-  page.message({ type: "agentUpdate", status: "ready", appId: 5 });
+  page.message({ type: "agentUpdate", status: "ready", appId: 5, message: "I've been through the form." });
   await until(() => /I've been through/.test(page.shadow()?.textContent ?? ""), "review prompt");
   assert.doesNotMatch(page.shadow().textContent, /Submitting in/);
   assert.equal(submits.length, 0);
   page.win.close();
 });
 
-test("Fill and submit after the agent still blocks missing answers and supports cancellation", async () => {
+test("Auto apply after the agent still blocks missing answers and supports cancellation", async () => {
   for (const incomplete of [false, true]) {
     const page = panelPage(() => ({}), { form: STEP_FORM });
     page.start({ autoSubmit: true });
@@ -869,35 +1016,39 @@ test("the chat is the agent: it clicks through a multi-step form itself and asks
   assert.ok(!buttons().includes("Fill with the agent"));
 
   page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: ["Started. Watching the page…", "Clicked Next"] });
-  await until(() => [...shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === "Filling method: AI-led"), "session engine badge");
-  await until(() => (shadow().querySelector(".thinking")?.textContent === "Clicked Next" ? [1] : null), "the latest step");
+  await until(() => (/Clicked Next/.test(shadow().textContent) ? [1] : null), "the latest step in the chat");
   assert.match(shadow().querySelector(".hero strong").textContent, /Working through the form/);
-  assert.equal(shadow().querySelector(".composer-input").disabled, true);
+  assert.equal(shadow().querySelector(".composer-input").disabled, false);
   assert.deepEqual([...shadow().querySelectorAll(".f button")].map((b) => b.textContent), ["Pause", "Stop and take over"]);
 
   page.message({ type: "agentUpdate", status: "waiting", appId: 5, log: ["Clicked Next"], question: { kind: "question", text: "Notice period?", choices: ["30 days", "60 days"] } });
   await until(() => [...shadow().querySelectorAll(".question .label")].filter((q) => q.textContent === "Notice period?"), "the question as a chat card");
   assert.equal(shadow().querySelector(".ask"), null); // no separate question box
-  assert.deepEqual([...shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["30 days", "60 days", "I'll fill it on the page"]);
+  assert.deepEqual([...shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["30 days", "60 days"]);
   [...shadow().querySelectorAll(".quick button")][0].click();
   await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply" && m.text === "30 days"), "the reply");
 
   page.message({ type: "agentUpdate", status: "running", appId: 5, log: ["Filled Notice period"] });
-  page.message({ type: "agentUpdate", status: "waiting", appId: 5, log: [], question: { kind: "question", text: "Why do you want to work at Actowiz?" } });
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: "Why do you want to work at Actowiz?" } });
   await until(() => [...shadow().querySelectorAll(".question .label")].filter((q) => /Why do you want to work at Actowiz/.test(q.textContent)), "the open question");
   const input = shadow().querySelector(".composer-input");
   assert.equal(input.disabled, false);
   input.value = "draft it for me";
   input.dispatchEvent(new page.win.Event("input"));
   input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter" }));
-  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.text === "I build LLM systems."), "the draft goes to the agent");
-  assert.ok(!page.sent.some((m) => m.type === "agentControl" && /draft it/i.test(m.text ?? "")));
-  assert.ok(bubbles().some((t) => /Here's a draft/.test(t)));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && /draft it for me/i.test(m.text ?? "")), "the request goes to the agent");
+  assert.ok(page.sent.some((m) => m.type === "agentControl" && /draft it/i.test(m.text ?? "")));
+  assert.equal(page.sent.some((m) => m.allowGenerate), false);
 
-  page.message({ type: "agentUpdate", status: "ready", appId: 5, log: ["Filled Why"], filled: [{ label: "Why", value: "I build LLM systems.", needs_review: true }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", appId: 5, message: "I've been through the form.", log: ["Filled Why"], filled: [{ label: "Why", value: "I build LLM systems.", needs_review: true }], unresolved: [] });
   await until(() => bubbles().filter((t) => /I've been through the form/.test(t)), "the wrap-up line");
-  assert.ok([...shadow().querySelectorAll("details summary")].some((node) => node.textContent === "What I did on the page"));
-  assert.ok(buttons().includes("Submit for me"));
+  // Every step is told in the chat, which is the history; there is no folded log or double-check box.
+  assert.ok(bubbles().some((t) => /Filled Notice period/.test(t)));
+  assert.ok(![...shadow().querySelectorAll("details summary")].some((node) => /What I did/.test(node.textContent)));
+  assert.equal(shadow().querySelector(".recheck"), null);
+  // The step line already names the field; the review flag does not say it a second time.
+  assert.equal(bubbles().filter((t) => /^Filled (“Why” with|Why$)/.test(t)).length, 1);
+  assert.ok(buttons().includes("Submit"));
   assert.ok(!buttons().includes("Fill with the agent"));
   assert.equal(page.sent.filter((m) => m.type === "agentStart").length, 1);
 });
@@ -931,22 +1082,20 @@ test("if the agent can't start, the chat says so and keeps helping", async () =>
   assert.equal(page.shadow().querySelector(".composer-input").disabled, false);
 });
 
-test("turning on AI answers in the popup drafts the open questions on a panel that's already open", async () => {
+test("rule mode never drafts: turning on AI answers in the popup drafts the open questions on a panel that's already open", async () => {
   const form = `<form><label for="name">Full name</label><input id="name" required>
     <label for="why">What interests you about Outmarket?</label><textarea id="why" required></textarea></form>`;
-  const page = panelPage(() => { throw new Error("assistant API not expected"); }, {
-    form,
-    suggest: (msg) => (msg.allowGenerate ? { answer: "Your agent tooling.", source: "generated", needs_review: true } : { answer: null }),
+  const page = panelPage(() => { throw new Error("rule mode must not call AI assistance"); }, {
+    form, context: () => ({ profile: {}, app: { id: 5 }, aiDrafts: true }),
+    suggest: (msg) => { assert.equal(msg.allowGenerate, false); return { answer: null }; },
   });
   page.start();
-  const greeting = await until(() => page.shadow()?.querySelector(".question .label"), "greeting");
-  assert.match(greeting.textContent, /What interests you about Outmarket/);
-  assert.equal(page.sent.some((m) => m.type === "suggest" && m.allowGenerate), false); // switched off when the page was filled
-
+  await until(() => page.shadow()?.querySelector(".bubble.assistant"), "rule results");
   page.storage({ aiDrafts: { oldValue: false, newValue: true } });
-  await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /I drafted an answer with AI/.test(b.textContent)), "the drafted line");
-  assert.equal(page.win.document.querySelector("#why").value, "Your agent tooling.");
-  assert.equal(page.sent.some((m) => m.type === "assist"), false);
+  await tick(20);
+  assert.equal(page.sent.some((msg) => msg.type === "assist" || msg.allowGenerate), false);
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Draft it for me"), false);
+  page.win.close();
 });
 
 test("a hidden field the uploader fills is waited for, then named in words instead of making the browser point at it", async () => {
@@ -969,7 +1118,7 @@ test("a hidden field the uploader fills is waited for, then named in words inste
     throw new Error(`Timed out waiting for ${label}`);
   };
 
-  // The upload finishes a moment later: Fill and submit waits for it and submits.
+  // The upload finishes a moment later: Auto apply waits for it and submits.
   const slow = withUploads(panelPage(() => ({}), { form }));
   slow.win.document.getElementById("fileName").getClientRects = () => [];
   const sent = watchSubmits(slow);
@@ -1086,7 +1235,7 @@ test("Ashby required questions block auto apply and Yes/No can be answered in ex
   await until(() => /Select the options that apply/.test(page.shadow().textContent), "provider group");
   assert.equal(submits.length, 0);
   assert.equal(page.win.document.querySelector("#consent").checked, false);
-  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me").disabled, true);
+  assert.equal([...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit").disabled, true);
   page.win.close();
 });
 
@@ -1109,28 +1258,6 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   page.win.close();
 });
 
-for (const [engine, driver] of [["ai_led", "Run by: ApplyShortly"], ["rules_led", "Run by: ApplyShortly"]]) {
-  test(`agent panel says who runs it for the ${engine} engine`, async () => {
-    const page = panelPage(() => ({}), { form: STEP_FORM });
-    page.start();
-    await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
-    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: engine, log: [] });
-    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent run by"]')].filter((el) => el.textContent === driver), "driver label");
-    page.win.close();
-  });
-}
-
-for (const [engine, label] of [["rules_led", "Rules-led"], [undefined, "Not reported yet"]]) {
-  test(`agent panel shows ${label} from session metadata`, async () => {
-    const page = panelPage(() => ({}), { form: STEP_FORM });
-    page.start();
-    await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
-    page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: engine, log: [] });
-    await until(() => [...page.shadow().querySelectorAll('[aria-label="Form agent engine"]')].filter((el) => el.textContent === `Filling method: ${label}`), "engine label");
-    page.win.close();
-  });
-}
-
 test("the connected assistant's steps open in this same panel, with Pause for me and Continue", async () => {
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
   page.handlers.assistantControl = () => true;
@@ -1142,7 +1269,6 @@ test("the connected assistant's steps open in this same panel, with Pause for me
   ] });
   await until(() => /Your assistant is filling this form/.test(page.shadow()?.textContent ?? ""), "assistant headline");
   const text = page.shadow().textContent;
-  assert.match(page.shadow().querySelector('[aria-label="Form agent run by"]').textContent, /^Run by: Your assistant/);
   assert.match(text, /Typing into “First Name” \(1 of 15\)/);
   assert.match(text, /Choosing an option in “City” \(2 of 15\)/);
   assert.equal(page.shadow().querySelector(".composer-input"), null, "no chat box while the assistant drives");
@@ -1203,20 +1329,20 @@ test("browser manual handoff sends page questions back to the browser controller
   input.value = "Can you see the City field?";
   input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
   input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply"), "page question delivered to browser");
-  assert.equal(page.sent.find((m) => m.type === "agentControl" && m.action === "reply").text, "Can you see the City field?");
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "page question delivered to browser");
+  assert.equal(page.sent.find((m) => m.type === "agentControl" && m.action === "message").text, "Can you see the City field?");
 });
 
-test("v2 starts the controller before filling and accepts page questions while running", async () => {
+test("controller starts the controller before filling and accepts page questions while running", async () => {
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
-    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
     suggest: () => { throw new Error("deterministic filler must not run"); },
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   assert.equal(page.win.document.getElementById("name").value, "");
-  page.message({ type: "agentUpdate", status: "running", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [] });
+  page.message({ type: "agentUpdate", status: "running", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [] });
   const input = page.shadow().querySelector(".composer-input");
   assert.equal(input.disabled, false);
   input.value = "Can you see City?";
@@ -1224,49 +1350,71 @@ test("v2 starts the controller before filling and accepts page questions while r
   await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "message"), "question queued in controller");
   assert.equal(page.sent.filter((m) => m.type === "assist").length, 0);
   page.win.document.getElementById("name").value = "Verified name";
-  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", message: "I've been through the form.", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Verified name", source: "profile", needs_review: false }], unresolved: [] });
   await until(() => [...page.shadow().querySelectorAll(".bubble")].filter((b) => /been through/.test(b.textContent)), "readback refresh");
   assert.equal(page.win.document.getElementById("name").value, "Verified name");
   assert.equal(page.sent.filter((m) => m.type === "suggest").length, 0);
 });
 
-test("v2: Draft it for me on the agent's question drafts the answer instead of sending the chip text", async () => {
+test("controller: the agent's own Draft it for me button goes to the agent, and the panel writes no draft or note", async () => {
   const asked = "5. Where do you see yourself in the next 5 years, in terms of your career goal?";
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form: '<form><label>Full name<input id="name" required></label><button type="submit">Submit application</button></form>',
-    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
-    suggest: (msg) => (msg.allowGenerate ? { answer: "I want to lead an AI platform team.", source: "generated", needs_review: true } : { answer: null }),
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    suggest: () => { throw new Error("the panel must not draft"); },
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
-  page.message({ type: "agentUpdate", status: "waiting", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal" } });
+  page.message({ type: "agentUpdate", status: "waiting", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: asked, ref: "goal", actions: ["draft"] } });
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
-  await until(() => quick().filter((b) => b.textContent === "Draft it for me"), "the draft chip on a single question");
+  await until(() => quick().filter((b) => b.textContent === "Draft it for me"), "the draft button the agent chose");
+  assert.deepEqual(quick().map((b) => b.textContent), ["Draft it for me"]);
   quick().find((b) => b.textContent === "Draft it for me").click();
-  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply" && m.text === "I want to lead an AI platform team."), "the draft goes to the agent");
-  assert.ok(!page.sent.some((m) => m.type === "agentControl" && /draft it/i.test(m.text ?? "")));
+  await until(() => page.sent.filter((m) => m.type === "agentControl" && m.action === "reply" && m.text === "Draft it for me"), "the request goes to the agent");
+  assert.ok(!/Here's a draft|I'll write it/.test(page.shadow().textContent));
   page.win.close();
 });
 
-test("v2: after the agent finishes, 'I agree, tick it' ticks the box on the page instead of going to the agent", async () => {
+test("controller: the agent's fill summary and next question are separate messages", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form: '<form><label>Full name<input required></label><label>Cover letter<textarea></textarea></label></form>',
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "native controller start");
+  const summary = "I've added your name from your profile.";
+  const question = "Would you like to add a cover letter?";
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [summary], filled: [] });
+  await until(() => page.shadow().textContent.includes(summary), "agent summary");
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [summary], filled: [{ label: "Full name", value: "Profile name" }], question: { kind: "question", text: question, ref: "cover", actions: ["skip"] } });
+  await until(() => page.shadow().textContent.includes(question), "agent question");
+  const summaryBubble = [...page.shadow().querySelectorAll(".bubble.assistant")].find((b) => b.textContent.includes(summary));
+  const questionCard = page.shadow().querySelector(".question");
+  assert.ok(summaryBubble && !summaryBubble.textContent.includes(question));
+  assert.ok(questionCard.textContent.includes(question) && !questionCard.textContent.includes(summary));
+  assert.deepEqual([...page.shadow().querySelectorAll(".quick button")].map((b) => b.textContent), ["Leave it blank"]);
+  page.win.close();
+});
+
+test("controller: after the agent finishes, consent requests still go to the model", async () => {
   const form = `<label for="name">Full name</label><input id="name" required>
     <label><input type="checkbox" id="consent" required> I agree to the privacy policy</label>
     <button type="submit">Submit application</button>`;
   const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
     form,
-    context: () => ({ controllerVersion: 2, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: { full_name: "Profile name" }, app: { id: 5 }, aiDrafts: true }),
   });
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   page.win.document.getElementById("name").value = "Profile name";
-  page.message({ type: "agentUpdate", status: "ready", controller_version: 2, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
+  page.message({ type: "agentUpdate", status: "ready", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
   const quick = () => [...page.shadow().querySelectorAll(".quick button")];
   await until(() => quick().find((b) => b.textContent === "I agree, tick it"), "the tick chip");
   const consent = page.win.document.getElementById("consent");
   assert.equal(consent.checked, false);
   quick().find((b) => b.textContent === "I agree, tick it").click();
-  await until(() => consent.checked, "ticked on the page");
-  assert.equal(page.sent.some((m) => m.type === "agentControl"), false);
+  await until(() => page.sent.some((m) => m.type === "agentControl"), "forwarded to the agent");
+  assert.equal(consent.checked, false);
   page.win.close();
 });
 
@@ -1308,7 +1456,6 @@ test("external assistant panel names the controller and never treats an uncertai
   try {
     page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "needs_verification", steps: [] });
     await until(() => /Submission needs verification/.test(page.shadow()?.textContent ?? ""), "uncertain outcome");
-    assert.match(page.shadow().querySelector('[aria-label="Form agent run by"]').textContent, /Run by: Claude/);
     assert.match(page.shadow().textContent, /Do not submit again/);
     assert(!page.shadow().textContent.includes("then submit it yourself"));
     page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "submitted", steps: [] });
@@ -1323,10 +1470,6 @@ test("the panel explains a provider fallback while keeping method details second
     await until(() => page.sent.filter((m) => m.type === "agentStart"), "agent start");
     page.message({ type: "agentUpdate", status: "running", appId: 5, agent_engine: "rules_led", filling_notice: "Using Rules-led: AI-led is unavailable because the current AI provider does not support browser tools.", log: [] });
     await until(() => /Using Rules-led: AI-led is unavailable/.test(page.shadow().textContent), "fallback explanation");
-    const details = [...page.shadow().querySelectorAll("details")].find((node) => node.querySelector("summary")?.textContent === "Filling details");
-    assert.equal(details.open, false);
-    assert.match(details.textContent, /Filling method: Rules-led/);
-    assert.equal(page.shadow().querySelector('[aria-label="Form agent run by"]').textContent, "Run by: ApplyShortly");
   } finally { page.win.close(); }
 });
 
@@ -1367,11 +1510,11 @@ test("stopped agent never reports all set or offers submission when fields are f
   const page = panelPage(() => { throw new Error("completion refresh must only read"); }, {
     form: '<form><label>Full name<input required value="Ada"></label><button type="submit">Submit application</button></form>',
   });
-  page.message({ type: "agentUpdate", status: "stopped", appId: 5, controller_version: 2 });
+  page.message({ type: "agentUpdate", status: "stopped", appId: 5, guarded_commands: true });
   await until(() => /Stopped: review the form/.test(page.shadow()?.textContent ?? ""), "stopped headline");
   assert.doesNotMatch(page.shadow().textContent, /All set/);
   assert.equal(page.sent.some((m) => m.type === "suggest" || m.type === "assist"), false);
-  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit for me");
+  const submit = [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === "Submit");
   assert.equal(submit.disabled, true);
   assert.match(submit.title, /stopped before completing/);
   page.win.close();
@@ -1381,10 +1524,10 @@ test("stopping a driver with no context controller version never fills remaining
   const page = panelPage(() => { throw new Error("must not draft on stop"); }, {
     form: '<form><label>Full name<input required></label><button type="submit">Submit application</button></form>',
   });
-  page.message({ type: "agentUpdate", status: "stopped", appId: 5, controller_version: 2 });
+  page.message({ type: "agentUpdate", status: "stopped", appId: 5, guarded_commands: true });
   await until(() => /Stopped: review the form/.test(page.shadow()?.textContent ?? ""), "stopped readback");
   assert.equal(page.win.document.querySelector("input").value, "");
-  assert.match(page.shadow().textContent, /0 of 1 answered/);
+  assert.match(page.shadow().textContent, /0\/1 steps/);
   assert.equal(page.sent.some((m) => ["suggest", "assist", "report"].includes(m.type)), false);
   page.win.close();
 });
@@ -1408,3 +1551,76 @@ for (const presentBeforeAttempt of [false, true]) {
     page.win.close();
   });
 }
+
+
+test("an unavailable agent leaves the form untouched instead of running rules", async () => {
+  const page = panelPage(() => ({ answer: "Saved answer" }), {
+    form: '<label>Name<input id="name" required></label>',
+    context: () => ({ agentAvailable: false, agentEngine: "ai_led", profile: { full_name: "Ada Lovelace" }, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.shadow()?.textContent.includes("Agent based form assistant is unavailable"), "provider handoff");
+  assert.equal(page.win.document.querySelector("#name").value, "");
+  assert.equal(page.sent.some((m) => m.type === "suggest" || m.type === "agentStart"), false);
+  page.win.close();
+});
+
+test("agent-based fills do not create a static checklist in chat", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM });
+  page.start();
+  await until(() => page.shadow()?.querySelector(".composer"), "panel");
+  const update = { type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [] };
+  page.message(update);
+  page.message({ ...update, log: ["I've added the details I found in your profile."], filled: [{ label: "First name", value: "Alex" }] });
+  await until(() => page.shadow().textContent.includes("I've added the details I found in your profile."), "agent's own summary");
+  assert.equal(page.shadow().querySelector(".said .filled"), null);
+  page.win.close();
+});
+
+after(() => {
+  setTimeout(() => process.exit(0), 100);
+});
+
+test("agent status explains the initial wait and long choices preserve the full answer", async () => {
+  const page = panelPage(() => null, {
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [] });
+  await until(() => page.shadow().querySelector(".thinking")?.textContent.includes("first fill"), "first-fill explanation");
+  const choices = Array.from({ length: 12 }, (_, i) => `${i}: ${"A detailed choice with complete wording. ".repeat(4)}`.trim());
+  const oldMessage = "I filled the supported details.";
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [oldMessage], question: { kind: "question", text: "Select an answer", ref: "choice", choices } });
+  await until(() => page.shadow().querySelector(".quick.options-list"), "bounded option list");
+  assert.equal(page.shadow().querySelector(".thinking"), null);
+  const buttons = [...page.shadow().querySelectorAll(".quick.options-list button")];
+  assert.deepEqual(buttons.map((b) => b.textContent), choices);
+  buttons[7].click();
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.text === choices[7]), "full selected answer delivered");
+  page.message({ type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5, log: [oldMessage] });
+  await until(() => page.shadow().querySelector(".thinking")?.textContent.includes("Applying your answer"), "working indicator");
+  assert.equal(page.shadow().querySelectorAll(".thinking").length, 1);
+  assert.ok(!page.shadow().querySelector(".thinking").textContent.includes(oldMessage));
+  page.win.close();
+});
+
+test("agent ready header survives an empty legacy scan and long chat stays bounded", async () => {
+  const page = panelPage(() => null, { context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }) });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, field_total: 30, field_answered: 30, log: ["Review your answers before submitting."] });
+  await until(() => /Ready for your review/.test(page.shadow().querySelector(".hero strong")?.textContent), "ready header");
+  assert.doesNotMatch(page.shadow().querySelector(".hero").textContent, /No fields found|form has loaded/);
+  assert.ok(page.shadow().querySelector(".composer"));
+  page.win.close();
+});
+
+test("a ready agent without a legacy form context keeps the composer and on-page footer", async () => {
+  const page = panelPage(() => null, { context: () => { throw new Error("Legacy scan context unavailable"); } });
+  page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, field_total: 30, field_answered: 26, log: ["Review your answers before submitting."] });
+  await until(() => page.shadow()?.querySelector(".composer"), "composer without legacy context");
+  assert.match(page.shadow().querySelector(".f").textContent, /submit using the form/);
+  assert.match(page.shadow().querySelector(".hero strong").textContent, /Ready for your review/);
+  page.win.close();
+});

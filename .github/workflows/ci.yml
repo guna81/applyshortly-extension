@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm ci
-      - run: for file in extension/src/*.js; do node --check "$file"; done
+      - run: for file in $(find extension/src -name "*.js"); do node --check "$file"; done
       - run: npm run check
       - run: npm run build
       - run: npm run build:source

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { queueDiagnostic, flushDiagnostics, clearDiagnosticQueue } from '../src/diagnostics.js';
+import { queueDiagnostic, flushDiagnostics, clearDiagnosticQueue } from '../src/shared/diagnostics.js';
 
 function storage() {
   const data = {};

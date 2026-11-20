@@ -37,8 +37,13 @@ The extension requests profile data and sends the information above to its confi
 ApplyShortly server to provide autofill, account connection, application tracking and requested
 assistant features. Optional AI drafting and assistant requests send relevant messages, profile
 or job information, questions, options and answers through that server to the selected provider.
-Supported personal-key providers are OpenAI, Anthropic and Google Gemini. Their processing and
-retention terms apply; a personal provider key does not bypass the ApplyShortly server.
+The selected provider’s processing and retention terms apply. Custom/local provider keys are configured and stored on the device, not uploaded to ApplyShortly.
+
+A source build with custom endpoint support can instead send answer-drafting and assistant chat requests directly from
+the extension to a user-configured OpenAI-compatible provider. The request contains the question,
+relevant professional profile fields and job context. The provider processes this information under
+its own terms. The ApplyShortly server is still used for the account, profile and answer-bank lookup;
+assistant chat also sends the conversation and form fields and values to the custom provider. When Agent based form assistant form filling is selected, the extension sends observed page content, form values, candidate profile, job context, action results and conversation directly to that provider for planning. It does not send screenshots to the custom provider. Page actions are subject to the extension's guarded command layer.
 
 When the extension fills a field or attaches your résumé, that information becomes available to
 the employer website. The website may read or transmit it before submission. Review that site's
@@ -47,15 +52,20 @@ privacy policy. The extension cannot control employer page scripts.
 ## The form agent
 
 When you start the form agent, the extension uses Chrome's debugger permission on that tab only,
-until it finishes or you stop it (Chrome shows a bar while it is attached). After each step it
-sends ApplyShortly a description of the application form on the page: the page URL
-and title, the form's questions, options, buttons, the values currently in the fields, and the
-page's own error messages. When the agent is stuck it also sends a screenshot of the visible part
-of the tab. The server uses these to choose the next step, sending them to the selected AI provider
-when a step needs AI; it keeps a short-lived session (about two hours) and does not store page
-descriptions or screenshots. Buttons the agent clicked to get through a form (their labels only,
-no answers) are kept per website so later visits need no AI. Answers you type in reply to the
-agent's questions are saved to your answer bank.
+until it finishes or you stop it (Chrome shows a bar while it is attached). For Agent based form assistant filling, one planner runs in the extension for both provider modes. It processes the
+page URL and title, questions, options, buttons, current field values, error messages, relevant
+candidate profile, job context, user replies and action results. Platform AI sends planner
+messages through ApplyShortly to its provider, subject to account usage and credit controls.
+Custom AI provider sends these directly to the selected provider; its API key stays on this device.
+The server remains involved in account/profile access and saved-answer lookup.
+
+Current Agent based form assistant planning does not send screenshots to either
+provider path. Earlier extension Platform AI versions used a screenshot-aware server planner;
+legacy step clients and the separate server browser can still use screenshots. This source
+change does not update an already installed extension or a published privacy page. Rule based form assistant
+continues to use the server step endpoint. Planner session state lives in extension runtime
+memory; platform gateway sessions keep short-lived billing, usage and retry state. User-approved
+answers may be saved to the answer bank. Employer pages can read filled values before submission.
 
 ## Autopilot windows
 
@@ -81,7 +91,8 @@ Submission sends form values and attachments to the employer or its application 
 For tracked applications, ApplyShortly stores attempt and confirmation events; an unconfirmed
 attempt is Needs verification, excluded from submitted metrics, and blocks retries/autofill
 until resolved. Confirmation may be detected on the page or supplied by the user. Starting the extension on a posting creates or reuses an application record in your connected
-account using its URL, page title and company. Attempt and confirmation metadata (without form
+account using its URL, page title and company. Localhost and loopback forms are not registered and
+remain untracked. Attempt and confirmation metadata (without form
 answers) is kept in restricted local extension storage while delivery is pending; temporary
 connection failures retry once a minute. Signing out clears pending metadata.
 
@@ -92,8 +103,11 @@ restricted to trusted extension contexts; credentials are not placed in Chrome s
 the installation package, or employer page scripts. Short-lived sign-in and tab state use
 session storage. Profile data is fetched when needed to fill the page.
 
-Personal AI provider keys are sent to the ApplyShortly server and stored encrypted there.
-Provider settings return configured-provider metadata rather than the key. The server stores
+Keys for ApplyShortly-managed AI providers are sent to the ApplyShortly server and stored encrypted
+there. Custom endpoint keys are stored in trusted extension-local storage on the device, not sent to
+ApplyShortly, and removed when the custom provider is removed or the extension signs out. Local
+storage is not described as an encrypted credential vault. Provider settings return configured-provider
+metadata rather than the key. The server stores
 hashes of extension authentication credentials and uses HTTPS for the hosted connection.
 
 The assistant's conversation remains in the current page until you leave. The server processes
@@ -104,7 +118,9 @@ the selected provider's retention terms still apply.
 ## Choices and deletion
 
 You may keep automatic AI drafting off, request individual drafts, or select a supported
-personal AI key instead of ApplyShortly credits. You can replace or delete that key in Settings.
+personal AI key instead of ApplyShortly credits. In a build that includes custom endpoint support,
+you can also save or remove a device-local provider in extension settings. You can replace or delete
+provider keys in the applicable settings.
 Logging out of the extension revokes its current credential and, for automatic sign-in, also
 signs that browser out of the website. Uninstalling clears its browser
 storage but does not delete the server account, profile or applications.

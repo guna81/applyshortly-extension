@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DialogOpenError, TabDriver, jpegSize } from "../src/agent/cdp.js";
+import { DialogOpenError, TabDriver, jpegSize, redactUrl } from "../src/page-control/cdp.js";
 
 test("application tabs must be opened by a recent interaction in the controlled tab", async () => {
   const api = { tabs: { get: async (id) => ({ id, url: "https://ats.example.test/apply", title: "Apply" }) } };
@@ -146,4 +146,55 @@ test("hover moves the pointer only; drag presses, moves in steps and releases", 
   assert.equal(events[1], "mousePressed");
   assert.equal(events.at(-1), "mouseReleased");
   assert.equal(events.filter((e) => e === "mouseMoved").length, 9);
+});
+
+test("console and network diagnostics keep status and path only, never queries, bodies or long tokens", () => {
+  const driver = new TabDriver(1, "", {});
+  driver.handleEvent({ tabId: 1 }, "Log.entryAdded", { entry: { level: "error", source: "javascript", text: `Bad token ${"a".repeat(60)} in form`, url: "https://jobs.example/app.js?session=secret#x" } });
+  driver.handleEvent({ tabId: 1 }, "Log.entryAdded", { entry: { level: "info", text: "ignored" } });
+  driver.handleEvent({ tabId: 1 }, "Network.requestWillBeSent", { requestId: "r1", request: { method: "POST", url: "https://jobs.example/api/apply?email=a@b.c" } });
+  driver.handleEvent({ tabId: 1 }, "Network.responseReceived", { requestId: "r1", response: { status: 422, url: "https://jobs.example/api/apply?email=a@b.c" } });
+  driver.handleEvent({ tabId: 1 }, "Network.responseReceived", { requestId: "r2", response: { status: 200, url: "https://jobs.example/ok" } });
+  driver.handleEvent({ tabId: 1 }, "Network.loadingFailed", { requestId: "r1", errorText: "net::ERR_FAILED", canceled: false });
+  const { console: logs, network } = driver.diagnostics();
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].url, "https://jobs.example/app.js");
+  assert.doesNotMatch(logs[0].text, /a{32}/);
+  assert.deepEqual(network.map((n) => [n.status, n.method, n.url]), [[422, "POST", "https://jobs.example/api/apply"], [0, "POST", "https://jobs.example/api/apply"]]);
+  assert.equal(JSON.stringify(driver.diagnostics()).includes("secret"), false);
+  assert.equal(JSON.stringify(driver.diagnostics()).includes("a@b.c"), false);
+  assert.equal(redactUrl("not a url?x=1"), "not a url");
+});
+
+test("the diagnostics buffer keeps only the latest fifty entries", () => {
+  const driver = new TabDriver(1, "", {});
+  for (let i = 0; i < 80; i += 1) driver.handleEvent({ tabId: 1 }, "Log.entryAdded", { entry: { level: "warning", text: `w${i}` } });
+  const { console: logs } = driver.diagnostics();
+  assert.equal(logs.length, 50);
+  assert.equal(logs[0].text, "w30");
+});
+
+test("run_js evaluates in the page through the debugger, with form submission blocked first", async () => {
+  const calls = [];
+  const api = { debugger: { sendCommand: async (_target, method, params) => {
+    calls.push({ method, params });
+    if (method === "Runtime.evaluate" && params.expression === "1 + 2") return { result: { type: "number", value: 3 } };
+    if (method === "Runtime.evaluate" && params.expression === "boom()") return { exceptionDetails: { text: "Uncaught", exception: { description: "ReferenceError: boom is not defined" } } };
+    if (method === "Runtime.evaluate" && params.expression === "({a: 1})") return { result: { type: "object", value: { a: 1 } } };
+    return {};
+  } } };
+  const driver = new TabDriver(1, "", api);
+  assert.deepEqual(await driver.evaluate("1 + 2"), { value: "3" });
+  const guard = calls.find((c) => c.method === "Runtime.evaluate" && /submit/.test(c.params.expression));
+  assert.ok(guard, "the submit guard is installed before the script runs");
+  assert.ok(calls.indexOf(guard) < calls.findIndex((c) => c.params?.expression === "1 + 2"));
+  assert.equal(calls.find((c) => c.params?.expression === "1 + 2").params.awaitPromise, true);
+  assert.deepEqual(await driver.evaluate("({a: 1})"), { value: '{"a":1}' });
+  assert.match((await driver.evaluate("boom()")).error, /boom is not defined/);
+});
+
+test("run_js results are capped so a huge return value cannot flood the model's history", async () => {
+  const api = { debugger: { sendCommand: async (_t, method, params) => (params?.expression === "big" ? { result: { type: "string", value: "y".repeat(20000) } } : {}) } };
+  const out = await new TabDriver(1, "", api).evaluate("big");
+  assert.ok(out.value.length <= 4100);
 });

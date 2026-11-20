@@ -1,18 +1,23 @@
 # ApplyShortly Chrome Extension Guide: Job Application Autofill
 
+> **Names (2026-11-18).** The extension now calls its two engines the **Rule based form assistant** (rules, saved answers, AI only for leftovers; `src/rule-based/`) and the
+> **Agent based form assistant** (one ReAct agent; `src/agent-based/`; both engines run on `src/page-control/`). Their old names, "Rules-led" and "AI-led", are
+> **still used by the platform** (website settings, docs, the `agent_engine` / `extensionEngine` values `rules_led` and `ai_led`). Those values are kept on purpose so the
+> extension and the platform stay in sync. **The platform will be renamed soon**; until then read "AI-led" there as the agent based form assistant.
+
 **Apply Shortly Form Agent** fills job application forms in your Chrome browser from your ApplyShortly profile and saved answer bank. Reuse contact details, work history, education and screening answers, get optional AI drafts, and review the completed application before submission.
 
 [Install the Chrome extension](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [ApplyShortly website](https://applyshortly.com) · [Source and developer README](../README.md)
 
-The form agent helps with multi-step applications, pop-ups and embedded forms on pages you start it on, including forms behind your own login. Site support varies, and you handle sign-in, CAPTCHAs, consent and any fields it cannot complete. Submit on the employer's site yourself, or explicitly choose **Fill and submit** to submit after required-field checks and a cancellable countdown. The form agent itself never clicks final Submit.
+The form agent helps with multi-step applications, pop-ups and embedded forms on pages you start it on, including forms behind your own login. Site support varies, and you handle sign-in, CAPTCHAs, consent and any fields it cannot complete. Submit on the employer's site yourself, or explicitly choose **Auto apply** to submit after required-field checks and a cancellable countdown. The form agent itself never clicks final Submit.
 
 ## Quick start: autofill a job application
 
 1. Install the extension from the Chrome Web Store and sign in to [ApplyShortly](https://applyshortly.com).
 2. Save your profile, résumé and application answers in ApplyShortly, then open the extension settings to check your connection.
-3. Open a job application in Chrome. Choose **Fill this form** or press **Alt+Shift+F**.
+3. Open a job application in Chrome and click the toolbar icon: the chat opens and starts filling by itself (or press **Alt+Shift+F**).
 4. Answer remaining questions in the on-page panel, review the fields and attachments, and complete any manual steps.
-5. Click the employer's Submit button, or explicitly choose **Submit for me (Fill and submit)** and use Cancel during the countdown if needed.
+5. Click the employer's Submit button, or explicitly choose **Auto apply** and use Cancel during the countdown if needed.
 
 Filling from your profile and saved answers is free with an ApplyShortly account. Optional AI features use credits or a supported personal AI provider key; provider charges may apply.
 
@@ -21,21 +26,21 @@ Filling from your profile and saved answers is free with an ApplyShortly account
 - [Extension screenshots](#screenshots)
 - [Installation and account connection](#install)
 - [Build and load an unpacked extension](#build-from-source)
-- [Autofill, form agent and Fill and submit](#use)
+- [Autofill, form agent and Auto apply](#use)
 - [How saved answers are chosen](#how-answers-are-chosen)
 - [Chrome permissions](#why-it-asks-for-these-permissions)
 - [Form compatibility and limitations](#limits)
 - [External AI assistant control pilot](#external-ai-assistant-control-pilot)
 
-Plain JavaScript with no compilation step. The build packages an allowlisted set of runtime files;
+> **TypeScript Migration (2026-11-19).** Runtime code in `src/` is written in TypeScript (`.ts`) and transpiled to JavaScript at build time. The build packages an allowlisted set of runtime files;
 it never reads `.env` or includes local credentials. An ApplyShortly account is required,
 including when using a personal AI key. See `../extension-bridge/README.md` for the API.
 
 ## Screenshots
 
-### Job application autofill and Fill and submit
+### Job application autofill and Auto apply
 
-![ApplyShortly filling a fictional Northstar Labs application with saved profile details, a relocation answer, AI draft options and an Fill and submit countdown with Cancel](../docs/images/applyshortly-autofill-auto-apply-demo.jpg)
+![ApplyShortly filling a fictional Northstar Labs application with saved profile details, a relocation answer, AI draft options and an Auto apply countdown with Cancel](../docs/images/applyshortly-autofill-auto-apply-demo.jpg)
 
 *The demo shows saved details filled into the application, a screening answer supplied in chat, optional AI drafting and the cancellable submission countdown. The company and applicant are fictional; no application is sent.*
 
@@ -111,7 +116,7 @@ apply. No shared token or credential-seeding file is distributed or loaded.
 
 ### The agent panel
 
-In the AI-led engine, questions inspect the page without editing it. Explicit instructions such
+In the Agent based form assistant engine, questions inspect the page without editing it. Explicit instructions such
 as "Recover this application", "Proceed with the edits", and "Please remove blank rows"
 allow the agent to make the requested changes. Recovery retains the session's AI spending
 limits; resuming does not reset them.
@@ -143,53 +148,109 @@ assistant never submits.
 
 Ashby Yes/No buttons are counted as screening questions, including a selected **No**.
 Required multi-select questions count as one question and stay open until you select an option.
-Consent still asks for your explicit choice. Fill and submit waits for those required answers;
+Consent still asks for your explicit choice. Auto apply waits for those required answers;
 a new positive Ashby **Success** receipt confirms the submission in ApplyShortly.
 
-### AI-led controller
+### Agent based form assistant controller
 
-The AI-led engine and a connected assistant run the same page commands (`extension/src/agent/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the AI-led engine uses them too and sends each action's `result`; the panel says who it is run by (ApplyShortly or your assistant).
+The Agent based form assistant engine and a connected assistant run the same page commands (`extension/src/page-control/commands.js`): guarded, read back from the page, with `fill_form` (several fields in one call), `options` and `review`. When the platform reports `verified_commands`, the Agent based form assistant engine uses them too and sends each action's `result`; the panel says who it is run by (ApplyShortly or your assistant).
 
-Protocol 2 pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. The platform also pauses after six decisions without progress and caps AI spend at about $1 per application. Resume explicitly after checking the page; each resume starts a new safety window.
+The guarded controller pauses locally before another planning call when a page state appears three times within the last ten observations (one state, or two taking turns, such as a pop-up that keeps closing and reopening), or after forty planning calls since user input/resume. Platform AI also enforces backend run budgets. Resume explicitly after checking the page; each resume starts a new safety window.
 
-Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. Besides click, type, choose, check, upload, keys, scroll and wait, the agent can hover, drag between two controls, and wait for text to appear. Screenshots are capped at 1280 pixels on the longest side, and taken only when the page layout changed. Taking one changes nothing on the page: the capture is shrunk and labelled inside the extension (never with Chrome's clip option, which briefly resizes the page), and the panel stays in place. A field already on screen is filled without scrolling. Your saved answers for plain fields (text, email, numbers, native dropdowns) are typed in one go without an AI call; the AI handles pickers, phone numbers, uploads and anything that didn't stick.
+Escape is sent only into an open dropdown list, never into the page, where it would close an application pop-up. A browser dialog (alert, confirm, "Leave site?") is handed to you and never answered by the agent; the run continues by itself once you close it. The shared Agent based form assistant planner uses structured page observations and one JSON action at a time,
+including filling, selecting, checking, uploads, navigation, options, waits and review. The
+executor supports additional commands for other controllers; this does not make them available
+to the shared planner. Current Agent based form assistant model inputs exclude screenshots.
 
-Choose **Settings → Advanced settings → Form filling method → AI-led** in ApplyShortly for new sessions.
-AI-led is the service default. It uses fresh page observations, screenshots
-and native AI tool calls; Anthropic and Gemini native tools are supported. Personal OpenAI
-keys support structured drafts rather than this native tool loop; sessions on those keys, or with
-no AI, run Rules-led instead.
+The shared planner fills deterministic known answers first in observation/document order (not
+visual order across frames), passing unknown fields to reach later known answers. Saved and
+explicit answers, supported résumé/cover-letter uploads and preapproved privacy acknowledgements
+participate in that same order. Profile answers marked as needing review are not treated as
+confirmed facts. Inspection, explicit corrections and covering banners/modals retain their
+special handling; all writes still pass through guarded validation and page readback.
+Unsupported or unavailable file attachments are deferred, not treated as explicit skips: known
+fields continue before the agent asks you to attach files manually and Continue. Unknown answers
+and manual attachments are then requested in page order. A required attachment still missing
+on reobservation prevents readiness, even if you chose to handle it yourself. The planner never
+submits, and never puts a résumé in an ambiguous multi-upload or unrelated file control.
 
-With controller protocol 2 (the server default), the extension inspects the page before filling
+Choose **Extension settings → Preferences → Extension form filling method** for new extension sessions. The platform has a separate account setting. Agent based form assistant is the default for both.
+Both Platform AI and Custom AI provider use the same JavaScript planner. It requires JSON responses,
+not native tool calls. Platform AI uses the authenticated model gateway; custom/local providers
+are called directly with keys kept on this device. Errors do not silently switch providers.
+
+With the guarded controller, the extension inspects the page before filling
 and keeps page questions, actions and review in one session. Messages interrupt pending actions
 and receive fresh page context. Page questions stay read-only until you ask it to edit or
 continue. The controller tracks field readback and user edits, bounds failed interaction
 strategies, and can follow an application tab opened by its recent click. It stops for review;
 the agent itself never clicks final Submit. Stop ends browser access.
 
-This upgraded session sends visible page context and transient screenshots to the configured
-AI provider through ApplyShortly. The panel stays visible (the AI is told it is ApplyShortly's own) and lets clicks through while the agent acts. The classic
-assistant description above applies outside this upgraded session.
+Platform AI sends page context and planner messages through ApplyShortly to its provider.
+Custom/local AI sends them directly to the selected endpoint. Neither current extension Agent based form assistant
+path sends screenshots to the model. Before unification, Platform AI used the screenshot-aware
+Python planner; restoring visual input in the shared planner remains future work. The server
+browser still uses screenshots. Reload after upgrading and start a new session. Scripted tests
+do not establish real-model reliability.
 
-The server gate defaults on. Reload the updated extension and start a new session after an
-upgrade; active sessions keep their negotiated protocol. Scripted browser tests cover these
-mechanics, but representative real-model ATS reliability has not been established.
+### Configure an endpoint on this device
 
-### Choose how AI drafts are paid for
+The current source build supports a custom endpoint for answer drafting and assistant chat. Availability in the
+Chrome Web Store depends on a future release. An ApplyShortly account and server connection are
+still required to retrieve the profile and saved answers.
 
-In extension setup, expand **Advanced: use your own AI key**, choose OpenAI, Anthropic Claude,
-or Google Gemini, then enter your personal API key and required model identifier. **Save and use**
-selects that provider. Use **AI funding** to choose a saved provider or ApplyShortly credits.
-You can also manage the same settings in ApplyShortly **Settings → Extension AI**.
-Personal-key mode is available on every account tier. Your provider bills those requests directly;
-no ApplyShortly credits are deducted and there is no automatic fallback to credits.
+1. In extension settings, open **Custom AI provider**.
+2. Enter the API **base URL**, including its API prefix, a model identifier, and an API key if the
+   service requires one. The extension appends `/chat/completions` to the base URL. The endpoint
+   must support OpenAI-style chat completions; provider implementations and model capabilities vary.
+3. Choose **Save and use for AI**, then **Test connection**. The test makes a short real model
+   request and may incur provider charges. On failure, check the URL, key, model and server status.
 
-Personal keys are sent to ApplyShortly, stored encrypted there, and never returned to
-the browser or employer site. Replace or delete them in extension setup or website Settings. Deleting a selected key leaves
-personal mode selected: restore the key or explicitly choose credits. Facts and lexical answer-bank
-fills remain available without an AI key. AI drafts are always marked for review; automatic drafts
-are on by default, like the website's agent (turn *Let AI answer questions it can't find* off in
-the popup or Settings). Turning it on drafts the open questions on a panel that's already open. A provider may reject an invalid key, unsupported model, quota, or schema.
+For example, the LLM CLI Gateway uses `http://127.0.0.1:8765/v1`, a gateway API key and a model
+such as `agy/gemini-3.8-flash-medium`. A local Ollama server commonly uses
+`http://127.0.0.1:11434/v1` and a locally installed model; its API key can be left blank when the
+server does not require one. OpenRouter uses `https://openrouter.ai/api/v1` with an OpenRouter key
+and model ID. Local services must be running on the same computer as Chrome. Remote endpoints must
+use HTTPS; HTTP is allowed only for localhost and loopback addresses. URLs cannot contain embedded
+credentials, query parameters or fragments.
+
+The background worker sends the question and relevant professional profile and job information
+directly to the selected endpoint. The provider receives the saved profile and answers as context, does not fall back
+to ApplyShortly AI on provider failure, and marks generated answers for review. Custom endpoint mode
+uses the method selected in extension settings on this device. With Agent based form assistant selected, the extension sends page observations, the candidate profile, job context, previous actions and conversation directly to the custom provider for planning, and runs returned commands through the same verified controller. Screenshots are not sent to the custom provider. The provider must follow the requested JSON format; an invalid response stops the run rather than switching providers or engines. Chat sends the conversation, form fields and values, and relevant professional profile information directly to the custom provider. No ApplyShortly AI credits are used for these requests. The server must support custom-planner negotiation.
+The provider's own billing and data policies apply.
+
+The key stays in trusted extension-local storage on this device and is removed on sign-out or when
+the custom provider is removed. Selecting ApplyShortly credits
+also removes the custom configuration. Re-enter the key when saving changes. Local extension storage
+is not an encrypted credential vault.
+
+Localhost and loopback forms can be filled without registering them as job postings. They are shown
+as **Not tracked in ApplyShortly** and do not create application records. A manual Chrome test of a
+fictional local form filled profile fields and a reviewed draft via the LLM CLI Gateway, then
+submitted only to the local test page. This is one tested flow, not a guarantee for all providers,
+models or job forms.
+
+### Custom AI provider
+
+In extension Settings → **Custom AI provider**, choose OpenAI, Gemini, Anthropic or Custom URL.
+The preset supplies the base URL and a default model; a model override is optional for presets.
+Custom URLs require a model. Grant access to that origin, save your key, then test the connection.
+The key stays in trusted extension-local storage, never Chrome sync, and is removed on sign-out.
+Chat, **Draft it for me**, and Agent based form assistant planning send their context directly to your provider.
+There is no fallback to platform credits. In-app browser, Autopilot and scheduled AI stay on
+platform credits. Choose credits explicitly to return to the platform flow.
+
+Gemini uses its OpenAI-compatible endpoint. Anthropic uses a small native Messages adapter with
+its API-key, version and direct-browser headers. Both provider modes share one planner requesting JSON actions as text;
+provider-native tool calling is not needed for this path. Mocked tests validate the wire formats,
+not real credentials, model availability, or browser CORS. **Test connection** makes a real billable
+request from your installed extension; organizations can restrict direct-browser requests.
+
+Existing encrypted server keys are retained but cannot be used or replaced. Re-enter a key on the
+device, save it, then test it. Only after a successful test does **Delete retained server key**
+allow you to remove the matching provider's old server key. No server key is copied to the device.
+Generated answers need review. Profile fills remain free.
 
 ### Standalone source archive
 
@@ -203,23 +264,29 @@ For an extracted source archive, run `npm ci`, `npm run check` and `npm run buil
 ## Use
 
 - **From the platform:** **Apply in your browser** (row menu or after a failed run), and **Prepare & review** on a job board, open the posting with `#jobhunt-autofill=<id>`. The extension fills the form on its own.
-  **Apply** on a job board or sign-in site adds a one-time code (`&jobhunt-auto=<code>`, valid 10 minutes). The extension claims it (`POST /api/extension/applications/{id}/auto-apply`) and, once claimed, runs **⚡ Fill and submit** on that page: the same checks and cancellable countdown. Reloading the page, or a link made anywhere else, only fills.
-- **On any page:** click the toolbar icon. The popup shows whether the page is a job in ApplyShortly
-  (`/applications/lookup`) and offers two choices, each with a line saying what it does:
-  - **Fill this form**: fills what it can, then the panel asks you the rest. You check and submit.
-    On a page that isn't tracked it fills the same way, with nothing recorded.
-  - **⚡ Fill and submit**: the same, then submits after a countdown (below).
+  **Apply** on a job board or sign-in site adds a one-time code (`&jobhunt-auto=<code>`, valid 10 minutes). The extension claims it (`POST /api/extension/applications/{id}/auto-apply`) and, once claimed, runs **Auto apply** on that page: the same checks and cancellable countdown. Reloading the page, or a link made anywhere else, only fills.
+- **On any page:** click the toolbar icon (or press the shortcut). The panel opens on the page, looks up whether the page is a job in ApplyShortly
+  (`/applications/lookup`) and starts the chat at once, with no button to press. It fills what it can,
+  tells you each step as a chat message (the chat is the step history), shows `done/total` steps at the
+  top, and asks you the rest. You check and submit. On a page that isn't tracked it fills the same way,
+  with nothing recorded. Two switches at the bottom:
+  - **Auto apply** (off by default): submits once every required answer is in, after a countdown (below).
+  - **Let AI answer**: drafts what your profile doesn't cover (uses AI credits; drafts are marked Check).
 
-  **Alt+Shift+F** fills without the popup. You can change it at
+  **Alt+Shift+F** fills without opening the panel. You can change it at
   `chrome://extensions/shortcuts`.
 
-The panel at the bottom right has:
+The panel sits at the bottom right. Its header has buttons to make it smaller (headline, progress and
+the Auto apply row only) and to move it to the left; it remembers both. **Settings → Appearance** sets
+light, dark or your browser's setting for the panel and the extension's own pages. While the form agent is
+waiting for your answer, the toolbar icon shows a **!** on that tab. The panel has:
 
-- **A headline and progress bar**, e.g. *6 things left for you · 11 of 17 answered* (the agent's
+
+- **A headline and progress bar**, e.g. *6 things left for you · 11/17 steps* (the agent's
   status instead while it runs).
-- **The assistant chat** (see above), or the agent's progress, questions and step log.
-- **Submit for me** (panel footer; disabled until every required answer is in) and **⚡ Fill and submit**
-  (in the popup, for tracked and untracked pages alike; it fills the form straight away first): click the
+- **The assistant chat** (see above): the agent's steps, questions and answers to check, all as messages.
+- **Auto apply** (panel footer, disabled until every required answer is in; also in the side
+  panel, for tracked and untracked pages alike, where it fills the form straight away first): clicks the
   form's own Submit button after a 3-second countdown with **Cancel**. It refuses, and
   says why, when a required field (including a consent checkbox or an upload) still needs you,
   when it can't find exactly one Submit button (multi-step forms stop at **Next**), when that
@@ -229,7 +296,7 @@ The panel at the bottom right has:
   registered the file, the upload goes back on your list with "attach it again". Minimising or closing the panel cancels the countdown. AI drafts you haven't
   checked are submitted as filled, so use it when you trust your answer bank. The attempt is
   reported as *submission attempted* until a confirmation is detected or you mark it.
-- **I already submitted it** (footer, tracked pages) covers sites where it can't detect the submit.
+- **Already submitted** (footer, tracked pages) covers sites where it can't detect the submit.
 
 Answers already present when filling starts count toward completion and are checked against the site's validation. Rerunning preserves the source and review flags of answers filled in the current session.
 
@@ -258,9 +325,9 @@ Inside, this is the form agent (`src/agent/`); to you it is the same chat.
   you've done it), and on job boards for the posting's own **Apply / Easy Apply** click, because
   there that can apply in one click. It never solves CAPTCHAs.
 - The form agent never submits. When it has been through the form, the chat picks up anything
-  still open. If you started with **Fill and submit** or **Apply with extension**, the panel resumes
-  Fill and submit with the same required-field checks and cancellable countdown. Otherwise, review
-  and submit yourself or choose **Submit for me**. Stopping the agent cancels that continuation;
+  still open. If you started with **Auto apply** or **Apply with extension**, the panel resumes
+  Auto apply with the same required-field checks and cancellable countdown. Otherwise, review
+  and submit yourself or choose **Auto apply**. Stopping the agent cancels that continuation;
   reloading or checking its status never replays approval.
 - **Pause** and **Stop and take over** are always available. Chrome shows a "started debugging
   this browser" bar while it runs (the `debugger` permission); closing the bar stops it.
@@ -273,10 +340,10 @@ session lapsed before the night's submit, are handed to the extension. About onc
 service worker (an alarm, the `alarms` permission) asks `POST /api/extension/autopilot/next`. When
 a job is due, the reply carries its link and a one-time code, and the extension opens the link in
 its own unfocused window (`#jobhunt-autofill=<id>&jobhunt-auto=<code>`, http(s) only). From there
-it is the usual Fill and submit: the code is claimed once, every required field must be answered, there
+it is the usual Auto apply: the code is claimed once, every required field must be answered, there
 must be one Submit button, and the countdown still runs.
 
-The window has nobody watching, so it is stricter than Fill and submit you start yourself: it never
+The window has nobody watching, so it is stricter than Auto apply you start yourself: it never
 starts the form agent (which would attach the debugger), never drafts answers with AI, and
 doesn't submit while an answer is marked **Check**. It also stops on a sign-in page (a visible
 password box or a `/login` path) and says so in the panel. Eight seconds after the click the
@@ -292,7 +359,7 @@ Autopilot hour; otherwise the job waits and rolls to the next night.
 
 For each empty field, in order:
 
-1. **Profile facts** (`src/fill.js` → `profileAnswer`): name and first/last name, email, phone,
+1. **Profile facts** (`src/profile-answer.js` → `profileAnswer`, shared by the filler and planner): name and first/last name, email, phone,
    location, links, total experience, current company and title, highest qualification, college
    and branch, cover letter, summary.
    Annual compensation uses saved amounts in the matching currency. Questions explicitly in
@@ -301,7 +368,7 @@ For each empty field, in order:
    period, CTC, relocation, work authorisation, sponsorship) and the answer bank. If the full
    question doesn't match, it retries with the first sentence. *"Current CTC? Mention fixed and
    variable components separately."* is matched as *"Current CTC?"*.
-3. **AI draft** using your selected payment mode, automatically unless *Let AI answer questions it can't find* is off (in the popup or
+3. **AI draft** using your selected payment mode, automatically unless *Let AI answer questions it can't find* is off (the *Let AI answer* switch under the chat, or
    Settings), and whenever you tap **Draft it for me**. On a page that isn't tracked in
    ApplyShortly, the draft request also carries the page's title and up to 6,000 characters of
    its visible text, so the AI knows the job ("What interests you about Outmarket?"). Profile and
@@ -327,7 +394,7 @@ nothing is left.
 | Fill starts | `opened` |
 | After each fill pass | `filled`, with filled and unresolved fields → the run shows *Ready for review* |
 | You attempt submission | `submission_attempted` → *Needs verification*, excluded from submitted metrics until confirmed |
-| Confirmation page or **I already submitted it** after verifying success | `submitted` → *Submitted*, preserving later application stages |
+| Confirmation page or **Already submitted** after verifying success | `submitted` → *Submitted*, preserving later application stages |
 | An error stops the fill | `failed` |
 
 The tab remembers its application, so later pages of a multi-page form on the same site are filled
@@ -336,7 +403,7 @@ and tracked too.
 ## Brand assets
 
 The ApplyShortly A/arrow mark is defined in the platform website and copied to
-`icons/logo.svg` for the popup and settings page. The toolbar PNGs are rasterized from the same
+`icons/logo.svg` for the settings page. The toolbar PNGs are rasterized from the same
 vector at 16, 48, and 128 pixels. The on-page panel embeds this SVG as a CSS data URL so it does
 not need additional extension resource permissions. Keep these copies in sync when changing the mark.
 
@@ -347,15 +414,15 @@ not need additional extension resource permissions. Keep these copies in sync wh
 | `manifest.json` | MV3 manifest. Has host access to `localhost`/`127.0.0.1` and the public origin selected by packaging. |
 | `platform.json` | Public default platform origin, generated by the build. Contains no credentials. |
 | `src/background.js` | Service worker. Holds the API key and makes every platform request, so job sites never see the key or hit CORS. Tracks which application each tab is filling. |
-| `src/bridge.js` | JS port of `extension-bridge/client.ts`. Keep the two in sync. |
+| `src/shared/bridge.js` | JS port of `extension-bridge/client.ts`. Keep the two in sync. |
 | `src/fill.js` | Field discovery, labels, profile answers, writing values (pure DOM, tested in jsdom) |
-| `src/content.js` | Runs the fill on the page, the Assistant tab's logic, live re-check, Fill and submit, submit detection |
+| `src/content.js` | Runs the fill on the page, the Assistant tab's logic, live re-check, Auto apply, submit detection |
 | `src/panel-view.js` | The review panel (closed shadow DOM): draws `content.js`'s state and calls back for actions |
-| `src/panel-model.js` | Pure helpers shared by the panel and popup: checklist and counts, friendly error messages |
-| `src/agent/loop.js` | The form agent's loop in the service worker: observe every frame, ask `/agent/step`, act, settle |
-| `src/agent/cdp.js` | Drives the tab through `chrome.debugger`: frames (cross-origin included), isolated worlds, trusted mouse and keyboard input, screenshots |
-| `src/agent/page.js` | In-frame half of the agent (needs `fill.js`): describes the page and locates elements; refuses final submits. Pure DOM, tested in jsdom. The platform's server agent uses a copy. |
-| `src/popup.*`, `src/options.*`, `src/ui.css` | Toolbar popup and settings page |
+| `src/panel-model.js` | Pure helpers shared by the panel: checklist and counts, friendly error messages |
+| `src/page-control/loop.js` | The form agent's loop in the service worker: observe every frame, ask `/agent/step`, act, settle |
+| `src/page-control/cdp.js` | Drives the tab through `chrome.debugger`: frames (cross-origin included), isolated worlds, trusted mouse and keyboard input, screenshots |
+| `src/page-control/page.js` | In-frame half of the agent (needs `fill.js`): describes the page and locates elements; refuses final submits. Pure DOM, tested in jsdom. The platform's server agent uses a copy. |
+| `src/options.*`, `src/ui/ui.css` | Settings page |
 | `test/*.test.mjs` | `node --test extension/test/*.test.mjs` (tests use the root npm dependencies) |
 
 `npm run typecheck` also type-checks `src/` from JSDoc (`tsconfig.extension.json`, `@types/chrome`).
@@ -372,7 +439,7 @@ not need additional extension resource permissions. Keep these copies in sync wh
 - **`alarms`.** The once-a-minute check for a job Autopilot has handed over (see Autopilot
   windows). It opens a window only for a link ApplyShortly returned, and only with the setting on.
 - **`debugger`.** The form agent's trusted input and cross-origin frames
-  (`src/agent/cdp.js`). It attaches only to the tab the agent was started in, and Chrome shows its
+  (`src/page-control/cdp.js`). It attaches only to the tab the agent was started in, and Chrome shows its
   debugging bar meanwhile.
 
 ## Limits
@@ -391,21 +458,25 @@ not need additional extension resource permissions. Keep these copies in sync wh
 
 ### Automatic application tracking
 
-Starting Fill this form, Fill and submit or the form agent registers that posting in the connected
+Starting Fill this form, Auto apply or the form agent registers that posting in the connected
 account's web app, including pages opened directly on an employer's site. Repeated starts on the
 same posting reuse its application. The extension sends the page URL, title and company for
 tracking; it does not fetch job boards or submit just by registering a page.
 
 A final Submit click records an attempt as **Needs verification**. An explicit application receipt
-on the page, or your confirmation through **I already submitted it**, moves it to **Applied**.
+on the page, or your confirmation through **Already submitted**, moves it to **Applied**.
 Duplicate-profile errors do not count as a successful application. Temporary connection errors
 queue outcome metadata locally and retry once a minute, even with Autopilot windows off.
 Signing out discards this queue so it cannot sync to another account.
 
 ## External AI assistant control (pilot)
 
-Compatible servers can enable application-only MCP control. Open **Let your assistant fill applications**
-from the popup, connect the browser, and approve the assistant's exact batch locally. Keep the
+> [!WARNING]
+> **Status: Feature Disabled**
+> External assistant browser control (connecting ChatGPT, Claude or Codex to drive the extension) is currently disabled and disconnected. The extension will not connect to the external relay or permit external agent control. Basic autofill from your profile and answers continues to work natively for free.
+
+Compatible servers can enable application-only MCP control. When enabled, users can open **Let your assistant fill applications**
+from the settings page, connect the browser, and approve the assistant's exact batch locally. Keep the
 control page open. New answers require review; submission needs explicit batch submission
 permission, validation and a cancellable countdown. Stop ends browser control. Login, CAPTCHA,
 and new domains require your intervention. No ApplyShortly AI calls or preparation credits are
@@ -436,15 +507,15 @@ tab for an existing submission before starting again.
 
 ### Assistant connection and filling methods
 
-Choose **Let your assistant fill applications** in the popup for the guided setup. Add the
+Choose **Let your assistant fill applications** on the settings page for the guided setup. Add the
 connector URL shown there to your assistant, connect Chrome, choose applications with your
 assistant, then review the selection and site permissions. A single online browser is selected
 automatically. Closing the setup page keeps the connection active; **Stop access** ends it.
 
 **Run by** identifies ApplyShortly or your connected assistant. Platform runs show
-**Rules-led** or **AI-led** under **Filling details**; change the method in website
-Settings → Advanced settings → Form filling method. Connected assistants use their own allowance.
-**Fill and submit** is an explicit submission choice with the existing completion checks and
+**Rule based form assistant** or **Agent based form assistant** under **Filling details**; change the method in website
+Extension settings → Preferences → Extension form filling method. Platform sessions use their separate website setting. Connected assistants use their own allowance.
+**Auto apply** is an explicit submission choice with the existing completion checks and
 cancellable countdown. **Submission needs verification** requires checking the employer result
 and resolving the attempt in ApplyShortly before retrying.
 
@@ -452,3 +523,30 @@ and resolving the attempt in ApplyShortly before retrying.
 Embedded CAPTCHA widgets do not pause the form agent before filling accessible application
 fields. Complete any verification the site requires at final review and submit on the page.
 A challenge-only page that prevents access to the form still asks for your help immediately.
+
+### Planning-session recovery
+
+Transient protocol-2 planning failures retry the same request ID. After retries are exhausted,
+the agent pauses and Resume retries that request; taking control invalidates its returned plan.
+An expired platform session asks for Resume before creating a fresh session from the current
+form. Previous skipped questions and answer permissions must be given again. Stop ends recovery.
+The shared executor fixture corpus lives in `test/executor-contract.json`; both real-browser
+executors are exercised by the platform's `backend/tests/browser/test_executor_contract.py`.
+
+
+### Agent based form assistant (one ReAct agent for every provider)
+
+Platform AI and Custom AI provider run the same agent (`src/agent-based/form-agent.js`, a LangGraph JS ReAct agent) in the background
+worker: one prompt, one tool set, the model's own message history, session state saved after every step, and the same hard limits in
+`agent-guards.js`. Platform AI calls the authenticated `/api/extension/agent/model` gateway, which selects the
+platform model and enforces credits, usage and run limits. Custom/local providers are called
+directly through their tool-calling API (plain JSON replies when a provider rejects tools); their credentials never go to that gateway. Saved-answer lookup uses
+`allow_generate: false` for both providers. `done` is refused while required fields are still empty, and the guarded command executor controls every page change.
+
+Rule based form assistant uses the existing backend step endpoint. The private server browser keeps its Python
+planner. Platform AI requires the server's `local_planner` capability; update the backend before
+installing this extension release. There is no silent fallback to a different agent.
+
+The Agent based form assistant shows verified filled fields and their values in chat. With **Fill optional fields** on, it fills supported optional answers or asks for missing information before finishing; choosing to skip a question leaves it to you.
+
+Before the Agent based form assistant finishes, it checks for unanswered required fields and available optional attachments. Custom radio options retain their required state, and verified page actions temporarily hide the chat panel so it cannot intercept clicks.
