@@ -234,7 +234,7 @@
       const mode = el.inputMode ? { input_mode: clip(el.inputMode, 20) } : {};
       const pat = el.getAttribute?.("pattern") ? { pattern: clip(el.getAttribute("pattern"), 200) } : {};
       return [base(el, { role, name: label, input_type: rich ? "richtext" : el.type || "text", value: clip(rich ? clean(F.textValue(el)) : el.value || picked || "", 2000), required,
-        ...(el.matches('[role="combobox"]') ? { popup: true } : {}), ...group, ...cap, ...mode, ...pat, ...invalidInfo(field) })];
+        ...(el.matches('[role="combobox"], .pac-target-input') ? { popup: true } : {}), ...group, ...cap, ...mode, ...pat, ...invalidInfo(field) })];
     }
     if (field.kind === "select") {
       const chosen = el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
@@ -272,14 +272,28 @@
   /** The listbox(es) a dropdown names in aria-controls / aria-owns. */
   function ownedLists(el) {
     const doc = el.ownerDocument;
-    return [...new Set(
-      ["aria-controls", "aria-owns"]
+    const active = doc.activeElement === el || el.getRootNode?.()?.activeElement === el;
+    const pac = el.classList?.contains("pac-target-input") && (active || doc.querySelectorAll(".pac-target-input").length === 1)
+      ? [...doc.querySelectorAll(".pac-container")] : [];
+    return [...new Set([
+      ...["aria-controls", "aria-owns"]
         .map((a) => el.getAttribute(a))
         .filter(Boolean)
         .flatMap((ids) => ids.split(/\s+/))
         .map((id) => doc.getElementById(id))
         .filter(Boolean),
-    )];
+      ...pac,
+    ])];
+  }
+
+  /** Google Places lazily creates .pac-container after the first focus; if predictions arrived while hidden and the input is focused, re-notify focus so Google Places reveals the list. */
+  function revealPacLists(el, lists) {
+    if (!el.classList?.contains("pac-target-input")) return;
+    if (el.ownerDocument?.activeElement !== el) return;
+    if (lists.some((list) => list.classList?.contains("pac-container") && list.style?.display === "none" && list.querySelector(".pac-item"))) {
+      const FocusEvt = el.ownerDocument.defaultView?.FocusEvent ?? Event;
+      el.dispatchEvent(new FocusEvt("focus"));
+    }
   }
 
   /** Answers without "-None-"/"Select…" entries or repeats. */
@@ -624,10 +638,13 @@
       if (!parent.popup && parent.role !== "combobox" && parent.role !== "listbox") continue;
       const el = find(parent.ref);
       if (!el) continue;
-      const lists = ownedLists(el).filter((list) => isVisible(list, checkLayout));
+      const owned = ownedLists(el);
+      revealPacLists(el, owned);
+      const lists = owned.filter((list) => isVisible(list, checkLayout));
+      if (lists.length) parent.expanded = true;
       for (const list of lists) {
-        for (const option of list.querySelectorAll('[role="option"]')) {
-          const name = clip(clean(option.getAttribute("aria-label") || option.textContent), 500);
+        for (const option of list.querySelectorAll('[role="option"], .pac-item')) {
+          const name = clip(optionText(option), 500);
           if (!name || !isVisible(option, checkLayout) || !F.applicationControl(option)) continue;
           push([base(option, { ...(extended ? contextOf(option) : {}), role: "option", name, group: parent.name, section: parent.section })]);
         }
@@ -741,7 +758,8 @@
     // Date and time inputs don't take typed text reliably; their value is set directly.
     if (/^(date|month|time|datetime-local|week|color|range)$/.test(el.type)) return { ok: true, mode: "direct" };
     el.select?.();
-    return { ok: true, mode: "keys" };
+    const popup = Boolean(el.classList?.contains("pac-target-input") || el.getAttribute?.("aria-haspopup") === "listbox" || el.getAttribute?.("role") === "combobox");
+    return { ok: true, mode: "keys", ...(popup ? { popup: true } : {}) };
   }
 
   /** The text typed into a field (search text in a typeahead), as the input holds it. */
@@ -799,11 +817,24 @@
     return true;
   }
 
+  /** Readable text for a dropdown/autocomplete option (joins Google Places .pac-item query + secondary text with ", "). */
+  function optionText(o) {
+    const aria = o.getAttribute?.("aria-label");
+    if (aria) return clean(aria);
+    if (o.classList?.contains("pac-item")) {
+      const q = clean(o.querySelector?.(".pac-item-query")?.textContent);
+      const rest = clean([...o.children].filter((c) => !c.classList?.contains("pac-icon") && !c.classList?.contains("pac-item-query")).map((c) => c.textContent).join(" "));
+      if (q && rest) return `${q}, ${rest}`;
+    }
+    return clean(o.textContent);
+  }
+
   function visibleOptions(ref, checkLayout = true, limit = 100) {
     const el = find(ref);
     if (!el) return [];
     const doc = el.ownerDocument;
     const owned = ownedLists(el);
+    revealPacLists(el, owned);
     const scopes = owned.length ? owned : roots(doc);
     let found = [...new Set(
       scopes
@@ -813,7 +844,7 @@
     if (!found.length && shownBefore) found = F.appearedOptions(shownBefore, doc, checkLayout).map((o) => o.el);
     return found
       .slice(0, limit)
-      .map((o) => ({ ref: refOf(o), text: clip(clean(o.getAttribute("aria-label") || o.textContent), 200) }));
+      .map((o) => ({ ref: refOf(o), text: clip(optionText(o), 200) }));
   }
 
   /** The answers an open dropdown offers, for the panel to show as choices. */
@@ -906,7 +937,9 @@
     if (!el) return false;
     const opener = el.closest?.('[aria-expanded]') ?? el;
     if (opener.getAttribute?.("aria-expanded") === "true" || el.getAttribute?.("aria-expanded") === "true") return true;
-    if (ownedLists(el).some((list) => isVisible(list, checkLayout))) return true;
+    const owned = ownedLists(el);
+    revealPacLists(el, owned);
+    if (owned.some((list) => isVisible(list, checkLayout))) return true;
     return !boundOnly && visibleOptions(ref, checkLayout).length > 0;
   }
 

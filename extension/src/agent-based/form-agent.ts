@@ -124,6 +124,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
   const deliver = (body: any, obs: any) => {
     const results = st.carry.splice(0);
     const notes: string[] = [];
+    let replyUsed = false;
     for (const p of st.pending.splice(0)) {
       if (p.kind === "action") {
         const lines = [...(p.notes ?? [])]; let error = false;
@@ -137,7 +138,8 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             : item.type === "options" ? ` ${cut(JSON.stringify(shown ?? null), 1500)}`
             : fresh && ["type", "select", "check"].includes(item.type) && (shown?.value_after ?? shown?.value ?? shown?.checked) === undefined ? `. The page now shows ${JSON.stringify(cut(fresh.value ?? (fresh.checked !== undefined ? String(fresh.checked) : ""), 200))}` : "";
           lines.push(`${r.ok !== false && ["type", "select", "check"].includes(item.type) ? `${item.type} ${item.ref}` : item.desc} → ${r.ok === false ? `failed: ${cut(r.detail, 200)}` : describeResult(r)}${extra}`);
-          if (r.ok === false || (shown?.verified === false && !shown?.changed)) error = true;
+          const pendingPicker = Boolean(shown?.picker_open || shown?.search_pending);
+          if (r.ok === false || (shown?.verified === false && !shown?.changed && !pendingPicker)) error = true;
           if (["type", "select", "check"].includes(item.type)) {
             if (r.ok !== false && shown?.verified === true) delete st.unverified[item.ref];
             else st.unverified[item.ref] = true;
@@ -155,14 +157,21 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
         let content: string;
         if (body.skip_question) { guards.skip(st.gs, obs, p.ref, p.question); content = "The user will fill this themselves on the page. Do not ask about it again and do not write to it."; }
         else if (body.user_reply) {
+          replyUsed = true;
           guards.recordAnswer(st.gs, obs, p.ref, body.user_reply);
           st.answered.push({ ref: p.ref, key: questionKey(p.question), answer: cut(body.user_reply, 1000) });
           content = `The user answered: ${JSON.stringify(cut(body.user_reply, 1000))}. This answer is final; use it.`;
         } else content = body.user_message ? "The user sent a conversational message, not a field answer. Respond to that message; do not record it as an answer or fill the pending field from it." : "The user pressed Continue without answering (they may have dealt with it on the page). Look at the page again.";
         if (p.id) results.push({ id: p.id, content, is_error: false }); else notes.push(content);
       } else if (p.kind === "done") {
+        if (body.user_reply) replyUsed = true;
         results.push({ id: p.id, content: body.user_reply || body.user_message ? `The user wrote: ${cut(body.user_reply || body.user_message, 1000)}` : "The user reviewed the form and continued. Look at the page again and carry on.", is_error: false });
       }
+    }
+    if (body.user_reply && !replyUsed) {
+      const reply = cut(body.user_reply, 2000);
+      st.instructions.push(reply);
+      notes.push(`The user replied after the handoff: ${JSON.stringify(reply)}. Act on their answer or suggestion on the page now, or answer their message directly before moving to another field.`);
     }
     const last = st.messages.at(-1);
     if (last?.role === "assistant") { // every call must be answered, in the order it was made
@@ -342,7 +351,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     if (target && st.gs.answers[guards.identity(obs, target)] !== undefined) return { error: `The user already answered this: ${JSON.stringify(st.gs.answers[guards.identity(obs, target)])}. Use it.` };
     if (target && !guards.open(obs, target) && !target.invalid && !target.error && !ctxInspect()) return { error: "That field already has an answer. Look at the snapshot, then continue with what is still empty." };
     if (st.questions >= MAX_QUESTIONS) return { error: "Enough questions were asked in this run. Leave the remaining fields for the user's review and call done." };
-    const actions = [...new Set(Array.isArray(args.actions) ? args.actions.filter((a: any) => ["draft", "skip", "on_page"].includes(a)) : [])];
+    const actions = [...new Set(Array.isArray(args.actions) ? args.actions.filter((a: any) => ["draft", "skip", "on_page"].includes(a) && !(a === "skip" && target?.required === true)) : [])];
     return { question: { kind: "question", ref: target ? target.ref : null, text, optional: target?.required === false, actions } };
   };
   let inspecting = false;

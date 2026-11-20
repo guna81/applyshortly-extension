@@ -96,7 +96,7 @@ test("ask_user stops the step with a question; the user's reply is the tool resu
 
 test("ask_user carries the buttons the model chose, and drops any it invented", async () => {
   const { request } = scripted({ tool_calls: [call("ask_user", { question: "Summary?", ref: "e1", actions: ["draft", "skip", "skip", "buy"] })] });
-  const asked = await make(request)(body(observation([el("e1", "textbox", "Summary")])));
+  const asked = await make(request)(body(observation([el("e1", "textbox", "Summary", { required: false })])));
   assert.deepEqual(asked.question.actions, ["draft", "skip"]);
 });
 
@@ -661,4 +661,52 @@ test("model-driven formatted writes report ok without is_error while staying vis
   assert.match(result.content, /page formatted value; check/);
   assert.match(result.content, /\(555\) 010-0199/);
   assert.match(seen[1].messages[1].content, /"ref":"e1"/);
+});
+
+test("user_reply after a failed action (stuck blocker handoff) is delivered to the model with full write tools", async () => {
+  const { request, seen } = scripted(
+    { tool_calls: [call("type_text", { ref: "e1", text: "Trichy" })] },
+    { tool_calls: [call("type_text", { ref: "e1", text: "Tiruchirapalli" })] });
+  const step = make(request);
+  const obs = observation([el("e1", "textbox", "Current Location")]);
+  await step(body(obs));
+  const plan = await step(body(obs, {
+    results: [{ index: 0, ok: false, detail: "The page did not show the requested value." }],
+    user_reply: "why dont you try tiruchirapalli?",
+  }));
+  assert.equal(seen[1].look.tool_names, undefined);
+  assert.match(seen[1].messages[1].content, /why dont you try tiruchirapalli\?/);
+  assert.equal(plan.status, "continue");
+  assert.equal(plan.actions[0].text, "Tiruchirapalli");
+});
+
+test("ask_user strips the skip (Leave it blank) button on required fields", async () => {
+  const { request } = scripted({
+    tool_calls: [call("ask_user", { question: "What should I enter for Current Company?", ref: "e1", actions: ["skip", "on_page"] })],
+  });
+  const plan = await make(request)(body(observation([el("e1", "textbox", "Current Company", { required: true })])));
+  assert.equal(plan.status, "ask_user");
+  assert.deepEqual(plan.question.actions, ["on_page"]);
+});
+
+test("model-driven type with picker_open or search_pending reports ok without is_error", async () => {
+  const { request, seen } = scripted(
+    { tool_calls: [call("type_text", { ref: "e1", text: "Trichy" })] },
+    { tool_calls: [call("select_option", { ref: "e1", text: "Trichy, Tamil Nadu, India" })] },
+    { message: "Done", tool_calls: [call("done", {})] });
+  const step = make(request);
+  const obs1 = observation([el("e1", "textbox", "Current Location")]);
+  await step(body(obs1));
+  const obs2 = observation([
+    el("e1", "textbox", "Current Location", { popup: true, expanded: true, value: "Trichy" }),
+    el("e2", "option", "Trichy, Tamil Nadu, India", { group: "Current Location" }),
+  ]);
+  const plan2 = await step(body(obs2, {
+    results: [{ index: 0, ok: true, result: { ref: "e1", type: "type", requested: "Trichy", matched: "Trichy", verified: false, picker_open: true } }],
+  }));
+  const result = seen[1].look.results[0];
+  assert.equal(result.is_error, false);
+  assert.match(result.content, /suggestions list opened; pick an option/);
+  assert.equal(plan2.status, "continue");
+  assert.equal(plan2.actions[0].type, "select");
 });

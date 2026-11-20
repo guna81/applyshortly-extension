@@ -231,7 +231,7 @@
   }
 
   function isRequired(el) {
-    if (el.required || el.getAttribute("aria-required") === "true") return true;
+    if (el.required || el.getAttribute("aria-required") === "true" || el.classList?.contains("required")) return true;
     if (el.matches('input[type="file" i]')) {
       const group = el.closest('[role="group"][aria-labelledby]');
       if (group && group.querySelectorAll('input[type="file" i]').length === 1 &&

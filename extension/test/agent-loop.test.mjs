@@ -262,8 +262,29 @@ test("execute: model typing leaves an open picker for the next tool call", async
   driver.suggestion = { ok: true, ref: "opt-9", text: "India" };
   const refs = new Map([["0.1", { frame: TOP, local: "1" }]]);
   const result = await execute(driver, refs, [TOP], { type: "type", ref: "0.1", text: "India" }, async () => null, true);
-  assert.deepEqual(result, { matched: "India", verified: false });
+  assert.deepEqual(result, { matched: "India", verified: false, picker_open: true });
   assert.deepEqual(driver.calls, [["click", 10, 20], ["insertText", "India"]]);
+});
+
+test("model selection keeps a typeahead's visible options available for an exact retry", async () => {
+  const label = "Trichy, Tamil Nadu, India";
+  class LocationDriver extends FakeDriver {
+    async call(frame, name, ...args) {
+      if (name === "matchOption") return args[1] === label
+        ? { ok: true, ref: "opt", text: label }
+        : { ok: false, options: [label] };
+      if (name === "scrollOptions") return false;
+      return super.call(frame, name, ...args);
+    }
+  }
+  const driver = new LocationDriver({ top: () => frameObs([]) });
+  driver.committed = label;
+  const refs = new Map([["0.1", { frame: TOP, local: "1", role: "textbox", popup: true }]]);
+  const select = (text) => execute(driver, refs, [TOP], { type: "select", ref: "0.1", text }, async () => null, true);
+  await assert.rejects(select("Trichy"), /Options shown: Trichy, Tamil Nadu, India/);
+  assert.deepEqual(driver.calls, [["click", 10, 20]]);
+  driver.pickerOpen = false;
+  assert.equal((await select(label)).verified, true);
 });
 
 test("execute: a masked input that drops inserted text is cleared and typed key by key", async () => {
@@ -1284,4 +1305,20 @@ test("execute marks model-driven formatted writes as changed (not failed), while
 
   const dropped = await execute(makeDriver(""), refs, [TOP], { type: "type", ref: "0.1", text: "~5 years", command_id: "c2" }, async () => null, true);
   assert.deepEqual(dropped, { matched: "~5 years", committed: "", verified: false });
+});
+
+test("ProgressGuard keeps a failed action's field even if it mutated the DOM, and clears it after a succeeding state change", () => {
+  const guard = new ProgressGuard();
+  const s1 = frameObs([{ role: "textbox", name: "Current Location", value: "" }]);
+  const s2 = frameObs([{ role: "textbox", name: "Current Location", value: "" }], { errors: ["Please enter your location"] });
+  const s3 = frameObs([{ role: "textbox", name: "Current Location", value: "Trichy, Tamil Nadu, India" }]);
+  assert.equal(guard.check(s1), null);
+  guard.noteFailures(["Current Location"], [{ label: "Current Location", tried: "Trichy", error: "No match" }]);
+  assert.equal(guard.check(s2), null);
+  assert.deepEqual(guard.failures, ["Current Location"]);
+  guard.noteFailures([], []);
+  assert.equal(guard.check(s2), null);
+  assert.deepEqual(guard.failures, ["Current Location"]);
+  assert.equal(guard.check(s3), null);
+  assert.deepEqual(guard.failures, []);
 });

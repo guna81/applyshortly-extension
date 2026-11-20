@@ -1624,3 +1624,25 @@ test("a ready agent without a legacy form context keeps the composer and on-page
   assert.match(page.shadow().querySelector(".hero strong").textContent, /Ready for your review/);
   page.win.close();
 });
+
+test("stuck blocker handoff sends typed answers as reply (with write tools) and Continue chip as resume", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({
+    type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [],
+    question: { kind: "blocker", text: "I couldn't fill: Current Location. Fill it yourself, or type the answer for me, then continue." },
+  });
+  await until(() => [...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "Continue"), "Continue chip");
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "why dont you try tiruchirapalli?";
+  input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "reply" && m.text === "why dont you try tiruchirapalli?"), "typed blocker reply");
+  assert.equal(page.sent.some((m) => m.type === "agentControl" && m.action === "message"), false);
+
+  const cont = [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "Continue");
+  cont.click();
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "resume"), "Continue resumes blocker");
+  page.win.close();
+});

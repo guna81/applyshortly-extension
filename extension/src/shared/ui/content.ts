@@ -576,14 +576,19 @@
     // read-only chat question and nothing would be ticked.
     const finishedChip = agent?.agent_engine !== "ai_led" && agent?.status === "ready" && P.LOCAL_REPLIES.includes(message);
     if (agent && !["failed", "stopped"].includes(agent.status) && !finishedChip) {
-      // The chips on the agent's own question are the panel's: "Draft it for me" drafts the answer
-      // and "I'll fill it on the page" skips it. Sent as replies they would be taken as the answer.
-      if (agent.status === "waiting" && agent.question?.kind === "question" && (P.isDraftRequest(message) || message === P.ON_PAGE_REPLY || message === P.SKIP_REPLY)) {
+      // The chips on the agent's own question/blocker are the panel's: "Draft it for me" drafts,
+      // "I'll fill it on the page" / "Leave it blank" skips, and "Continue" resumes a blocker/click handoff.
+      if (agent.status === "waiting" && (
+        (agent.question?.kind === "question" && (P.isDraftRequest(message) || message === P.ON_PAGE_REPLY || message === P.SKIP_REPLY)) ||
+        (agent.question?.kind !== "question" && (message === P.CONTINUE_REPLY || message === P.ON_PAGE_REPLY))
+      )) {
         return replyToAgent(message);
       }
       chat.lines.push({ role: "user", text: message });
       chat.draft = "";
-      const plainAnswer = agent.status === "waiting" && agent.question?.kind === "question";
+      // A typed response to a field question or a stuck blocker ("fill it yourself, or type the answer for me")
+      // goes as a reply so the agent keeps its write tools; other mid-run messages go as chat messages.
+      const plainAnswer = agent.status === "waiting" && (agent.question?.kind === "question" || agent.question?.kind === "blocker");
       await agentControl(plainAnswer ? "reply" : "message", message);
       panel.idle();
       return;

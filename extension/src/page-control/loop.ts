@@ -43,15 +43,21 @@ export class ProgressGuard {
   calls: number = 0;
   failures: string[] = [];
   failureDetails: any[] = [];
+  failedLastTurn: boolean = false;
   reading: boolean = false;
 
   constructor() { this.reset(); }
-  reset() { this.states = []; this.calls = 0; this.failures = []; this.failureDetails = []; this.reading = false; }
+  reset() { this.states = []; this.calls = 0; this.failures = []; this.failureDetails = []; this.failedLastTurn = false; this.reading = false; }
   /** The step just taken only looked (a screenshot, review, options): the same page after it is no stall. */
   noteReading(reading) { this.reading = Boolean(reading); }
   /** Labels of the actions that failed in the latest step ([] when all stuck). A stall with failures is a field the agent cannot fill. */
   /** `details`: for each failed action its label, the text it tried and the error, so a hand-off can say why it failed. */
-  noteFailures(labels, details = []) { this.failures = labels.slice(0, 3); this.failureDetails = details.slice(0, 3); }
+  noteFailures(labels, details = []) {
+    this.failedLastTurn = labels.length > 0;
+    if (!labels.length) return;
+    this.failures = labels.slice(0, 3);
+    this.failureDetails = details.slice(0, 3);
+  }
   check(observation) {
     if (this.reading) { this.reading = false; this.calls += 1; return this.calls >= CALL_LIMIT ? `The agent reached its ${CALL_LIMIT}-call safety limit.` : null; }
     const state = JSON.stringify({
@@ -60,6 +66,11 @@ export class ProgressGuard {
       elements: observation.elements.map((e) => [e.role, e.name, e.value, e.checked,
         e.disabled, e.expanded, e.bounds]),
     });
+    if (this.states.length && this.states.at(-1) !== state && !this.failedLastTurn) {
+      this.failures = [];
+      this.failureDetails = [];
+    }
+    this.failedLastTurn = false;
     this.states.push(state);
     this.states = this.states.slice(-RECENT_STATES);
     if (this.calls >= CALL_LIMIT) return `The agent reached its ${CALL_LIMIT}-call safety limit.`;
@@ -161,7 +172,7 @@ export async function observeTab(driver, { screenshot = false, annotate = false,
     for (const el of obs.elements) {
       if (merged.elements.length >= MAX_OBSERVED) break;
       const ref = `${index}.${el.ref}`;
-      refs.set(ref, { frame, local: el.ref, role: el.role, name: el.name, inputType: el.input_type, documentId: obs.document_id, value: el.value, href: el.href, inViewport: el.in_viewport, viewportHeight: obs.viewport_height, viewportWidth: obs.viewport_width });
+      refs.set(ref, { frame, local: el.ref, role: el.role, name: el.name, popup: Boolean(el.popup), inputType: el.input_type, documentId: obs.document_id, value: el.value, href: el.href, inViewport: el.in_viewport, viewportHeight: obs.viewport_height, viewportWidth: obs.viewport_width });
       if (extended && el.bounds) {
         const offset = await driver.offset(frame, frames);
         el.bounds = [el.bounds[0] + offset.x, el.bounds[1] + offset.y, el.bounds[2], el.bounds[3]];
@@ -260,8 +271,14 @@ async function typeInto(driver, target, frames, text, adaptive = false, modelDri
     if (!set.ok) throw new Error(set.detail);
   } else {
     if (!modelDriven) await driver.call(target.frame, "noteShown");
-    await driver.insertText(text);
-    if (text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
+    const isPopup = Boolean(target.popup || target.role === "combobox" || focus.popup);
+    if (isPopup && text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
+      // Async typeaheads (e.g. Google Places) often listen to keydown/keyup rather than Input.insertText.
+      await driver.typeKeys(text);
+    } else {
+      await driver.insertText(text);
+    }
+    if (!isPopup && text && text.length <= KEY_TYPING_LIMIT && driver.typeKeys) {
       const now = await driver.call(target.frame, "state", target.local);
       if (typeof now?.value === "string" && !(await driver.call(target.frame, "holdsTyped", now.value, text))) {
         // A masked input dropped the inserted string: clear it and type key by key instead.
@@ -271,8 +288,15 @@ async function typeInto(driver, target, frames, text, adaptive = false, modelDri
       }
     }
     if (modelDriven) {
-      // Leave an open picker visible for the next model turn.
-      if (await driver.call(target.frame, "pickerOpen", target.local, true, true)) return false;
+      // Leave an open picker visible for the next model turn. For popup/combobox inputs
+      // (e.g. Google Places autocomplete), wait briefly for async suggestions before blurring.
+      const isOpen = () => driver.call(target.frame, "pickerOpen", target.local, true, true);
+      if (await isOpen()) return "picker_open";
+      if (isPopup) {
+        const opened = Boolean(await waitForResult(isOpen, Boolean));
+        // Suggestions can arrive on the next observation. Blurring can discard the search.
+        return opened ? "picker_open" : "search_pending";
+      }
     } else {
       // A "Search…" box that is really a pick-one typeahead: the page drops text that was never
       // picked from its list, and dependent fields (State after Country) unlock only on a pick.
@@ -292,6 +316,7 @@ async function typeInto(driver, target, frames, text, adaptive = false, modelDri
 /** Native selects directly; custom dropdowns and typeaheads by opening, typing and picking. */
 async function choose(driver, target, frames, answer, adaptive = false, modelDriven = false) {
   const ruleMatch = !modelDriven;
+  const keepSearch = modelDriven && target.popup && target.role === "textbox";
   const native = await driver.call(target.frame, "selectNative", target.local, answer, ruleMatch);
   if (native?.native) {
     if (!native.ok) throw new Error(native.detail);
@@ -301,32 +326,34 @@ async function choose(driver, target, frames, answer, adaptive = false, modelDri
   await clickRef(driver, target, frames);
   if (!adaptive) await sleep(DROPDOWN_WAIT_MS);
   let match = adaptive
-    ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, ruleMatch), (r) => r?.ok || r?.options?.length)
-    : await driver.call(target.frame, "matchOption", target.local, answer, ruleMatch);
-  if (!match.ok) {
+    ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, true, ruleMatch), (r) => r?.ok || r?.options?.length, target.popup && target.role === "textbox" ? DROPDOWN_WAIT_MS : 2500)
+    : await driver.call(target.frame, "matchOption", target.local, answer, true, ruleMatch);
+  if (!match.ok && !(keepSearch && match.options?.length)) {
     // A typeahead: type the answer and wait for suggestions.
     const focus = await driver.call(target.frame, "focusForTyping", target.local);
     // A dial code ("+91") is not part of any country's name: typed into the search box it would
     // filter every country away (or leave an unfiltered list whose first entry is a different country).
     const dialCode = !modelDriven && /^\+\d{1,4}$/.test(String(answer).trim());
     if (focus?.ok && focus.mode === "keys" && !dialCode) {
-      await driver.insertText(answer);
+      const typed = String(answer ?? "");
+      if (typed && typed.length <= KEY_TYPING_LIMIT && driver.typeKeys) await driver.typeKeys(typed);
+      else await driver.insertText(typed);
       if (!adaptive) await sleep(TYPEAHEAD_WAIT_MS);
       match = adaptive
-        ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, ruleMatch), (r) => r?.ok)
-        : await driver.call(target.frame, "matchOption", target.local, answer, ruleMatch);
+        ? await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, true, ruleMatch), (r) => r?.ok || (modelDriven && r?.options?.length))
+        : await driver.call(target.frame, "matchOption", target.local, answer, true, ruleMatch);
     }
   }
   if (!match.ok && !match.options?.length) {
     // The first try often races the menu opening: make sure it is open, then wait for options.
     if (!(await driver.call(target.frame, "pickerOpen", target.local).catch(() => false))) await clickRef(driver, target, frames);
-    match = await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, ruleMatch), (r) => r?.ok || r?.options?.length, 3000);
+    match = await waitForResult(() => driver.call(target.frame, "matchOption", target.local, answer, true, ruleMatch), (r) => r?.ok || r?.options?.length, 3000);
   }
   if (!match.ok && (await driver.call(target.frame, "scrollOptions", target.local, true))) {
     // A virtualized list renders only the options in view: page through it.
     for (let i = 0; i < MAX_OPTION_PAGES; i++) {
       await sleep(OPTION_SCROLL_WAIT_MS);
-      match = await driver.call(target.frame, "matchOption", target.local, answer, ruleMatch);
+      match = await driver.call(target.frame, "matchOption", target.local, answer, true, ruleMatch);
       if (match.ok || !(await driver.call(target.frame, "scrollOptions", target.local, false))) break;
     }
   }
@@ -335,7 +362,8 @@ async function choose(driver, target, frames, answer, adaptive = false, modelDri
     // so ArrowDown + Enter commits it; keep it only if the widget then shows the answer.
     const keyed = modelDriven ? { committed: "", verified: false, undone: true } : await commitByKeys(driver, target, answer);
     if (keyed.verified) return { matched: answer, ...keyed };
-    await closePicker(driver, target);
+    // Keep the search and its choices visible so the model can select the site's exact label.
+    if (!keepSearch) await closePicker(driver, target);
     const shown = match.options?.length ? ` Options shown: ${match.options.join(", ")}` : " No options appeared.";
     const left = keyed.undone === false && keyed.committed ? ` The field now shows "${keyed.committed}": fix it by hand.` : "";
     throw new Error(`No option matches "${answer}".${shown}${left}`.slice(0, 290));
@@ -499,7 +527,8 @@ export async function execute(driver, refs, frames, action, files, modelDriven =
       const before = action.command_id && modelDriven
         ? await driver.call(target.frame, "committedValue", target.local).catch(() => null) : null;
       const committed = await typeInto(driver, target, frames, text, Boolean(action.command_id), modelDriven);
-      if (committed === false) return { matched: text, verified: false };
+      if (committed === "picker_open") return { matched: text, verified: false, picker_open: true };
+      if (committed === "search_pending") return { matched: text, verified: false, search_pending: true };
       if (!action.command_id || target.inputType === "password" || !text) return null;
       const shown = await driver.call(target.frame, "committedValue", target.local).catch(() => null);
       if (shown == null) return null;
@@ -890,7 +919,8 @@ export class Agent {
               this.emit();
               continue;
             }
-            const all = (this.last?.unresolved ?? []).map((u) => String(u?.label ?? u).trim().slice(0, 90));
+            const rawUnresolved = this.last?.unresolved?.length ? this.last.unresolved : scanFields(observation).missing.map((f) => f.name);
+            const all = rawUnresolved.map((u) => String(u?.label ?? u).trim().slice(0, 90)).filter(Boolean);
             // One field at a time, as the platform asks them: the first, and how many more wait.
             const open = all.slice(0, 1);
             const more = all.length > 1 ? ` (and ${all.length - 1} more)` : "";
@@ -1007,10 +1037,14 @@ export class Agent {
             if (outcome && typeof outcome === "object" && outcome.via === "activateOption") this.recovered("activate_option", action.label);
             const shown = action.type === "run_js" ? { value: outcome?.value } : this.verifiedCommands && outcome && typeof outcome === "object"
               ? ["fill_form", "options", "review"].includes(action.type) ? outcome : CommandRunner.shape(action, outcome) : null;
-            const failed = (shown?.verified === false && !shown?.changed) || (action.type === "fill_form" && shown && shown.done < shown.requested_count);
-            results.push({ index, ok: !failed, command_id: action.command_id, effect: "Input dispatched; verify committed result in next observation.",
+            const pausePicker = Boolean(shown?.picker_open || shown?.search_pending);
+            const failed = (!pausePicker && shown?.verified === false && !shown?.changed) || (action.type === "fill_form" && shown && shown.done < shown.requested_count);
+            results.push({ index, ok: !failed, command_id: action.command_id,
+              effect: shown?.picker_open ? "Typed into field and opened its suggestions list; pick an option on the next step."
+                : shown?.search_pending ? "Typed into popup field without blurring; check the next observation for suggestions."
+                : "Input dispatched; verify committed result in next observation.",
               ...(shown ? { result: boundedResult(shown) } : {}), ...(failed ? { detail: "The page did not show the requested value." } : {}) });
-            if (failed) break; // later actions assume this one stuck
+            if (failed || pausePicker) break; // later actions assume this one stuck, or would blur the open picker
           } catch (error: any) {
             results.push({ index, command_id: action.command_id, ok: false, detail: String(error?.message).slice(0, 290) });
             break; // later actions assume this one succeeded; re-observe before continuing
