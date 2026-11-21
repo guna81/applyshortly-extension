@@ -64,8 +64,33 @@ async function test() {
   $("logout").hidden = !connected;
   $("logoutHint").hidden = !connected;
   $("retest").hidden = true;
+  if ($("profileSetupCard")) $("profileSetupCard").hidden = true;
   if (connected) {
-    showConn("good", `Connected as ${s.name ?? s.email ?? "your account"}`, "You're ready to autofill.");
+    const needsProfile = s.hasProfile === false;
+    const needsDetails = !needsProfile && (s.resumeReady === false || s.contactReady === false);
+    if (needsProfile) {
+      showConn("wait", `Connected as ${s.name ?? s.email ?? "your account"}`, "Finish setting up your profile to autofill.");
+      if ($("profileSetupCard")) {
+        $("profileSetupCard").hidden = false;
+        $("profileSetupTitle").textContent = "Set up your profile";
+        $("profileSetupDetail").textContent = "Upload your resume and confirm your basic details so the extension can autofill applications.";
+        $("setupProfileBtn").textContent = "Upload resume & set up profile";
+      }
+    } else if (needsDetails) {
+      const missing = [
+        s.resumeReady === false ? "resume" : null,
+        s.contactReady === false ? "contact details" : null,
+      ].filter(Boolean).join(" and ");
+      showConn("good", `Connected as ${s.name ?? s.email ?? "your account"}`, `Connected. Add your ${missing} so forms fill completely.`);
+      if ($("profileSetupCard")) {
+        $("profileSetupCard").hidden = false;
+        $("profileSetupTitle").textContent = "Complete your profile";
+        $("profileSetupDetail").textContent = `Your ${missing} ${missing.includes(" and ") ? "are" : "is"} not set yet.`;
+        $("setupProfileBtn").textContent = "Complete profile";
+      }
+    } else {
+      showConn("good", `Connected as ${s.name ?? s.email ?? "your account"}`, "You're ready to autofill.");
+    }
     const plan = s.plan ? s.plan[0].toUpperCase() + s.plan.slice(1) : "Account";
     $("accountSummary").textContent = s.billingEnabled === false ? `${s.email} · No credit charges` : `${s.email} · ${plan} plan · ${s.credits ?? 0} credits available`;
     $("aiMode").textContent = s.ai?.mode === "personal" ? "Server-stored keys are disabled. Re-enter your key below to use it on this device, or explicitly choose credits." : s.billingEnabled === false ? "ApplyShortly AI — no credit charges." : `ApplyShortly credits: ${s.credits ?? 0} available.`;
@@ -275,6 +300,7 @@ $("theme").addEventListener("change", async (event) => {
 $("shortcuts").addEventListener("click", (event: any) => { event.preventDefault(); void chrome.tabs.create({ url: "chrome://extensions/shortcuts" }); });
 $("manageAI").addEventListener("click", async () => { try { await send("openWebsite", { path: "/settings#extension-ai" }); } catch (error: any) { setMsg(error?.message, "bad"); } });
 $("openWebsite").addEventListener("click", async () => { try { await send("openWebsite"); } catch (error: any) { setMsg(error?.message, "bad"); } });
+$("setupProfileBtn")?.addEventListener("click", async () => { try { await send("openWebsite", { path: "/profile?from=extension" }); } catch (error: any) { setMsg(error?.message, "bad"); } });
 void load().catch((error: any) => showConn("bad", "Could not load settings", error?.message));
 
 $("clearSavedCustomKey")?.addEventListener("click", () => {

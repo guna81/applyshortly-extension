@@ -1935,6 +1935,11 @@
             "title": "Billing Enabled",
             "type": "boolean"
           },
+          "contact_ready": {
+            "default": false,
+            "title": "Contact Ready",
+            "type": "boolean"
+          },
           "credits": {
             "title": "Credits",
             "type": "integer"
@@ -1942,6 +1947,11 @@
           "email": {
             "title": "Email",
             "type": "string"
+          },
+          "has_profile": {
+            "default": false,
+            "title": "Has Profile",
+            "type": "boolean"
           },
           "name": {
             "anyOf": [
@@ -1962,6 +1972,11 @@
             ],
             "title": "Plan",
             "type": "string"
+          },
+          "resume_ready": {
+            "default": false,
+            "title": "Resume Ready",
+            "type": "boolean"
           }
         },
         "required": [
