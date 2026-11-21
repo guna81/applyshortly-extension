@@ -5,11 +5,19 @@ The model fills known answers top to bottom before asking unknowns one at a time
 selects. Independent uploads may share a turn. Navigation and dependent controls
 still require a fresh observation. Every action passes the existing guards.
 
-Every reply retains the message/actions JSON envelope. The prompt starts with
-this contract and a silent-turn example. Malformed output still requires model
-correction; no inferred wording or user-answer parsing was added. Field questions
-must name a current field or choice-option ref, so the user's answer/skip binds
-to that control. Completion refusals include refs as well as labels.
+The model replies in brief plain language alongside native tool calls — no
+mandatory JSON envelope (legacy `{"message","actions"}` JSON is still unpacked
+cleanly if returned). `ask_user` takes `ref`, `question`, and optional `actions`
+(`draft`, `skip`, `on_page`); `done` takes `summary` and `posting_gone` takes
+`reason`. Tool arguments take precedence over assistant text so a fill summary
+never overwrites a question card. Field questions must name a current field or
+choice-option ref, so the user's answer/skip binds to that control. Completion
+refusals include refs as well as labels. User messages keep full browser tools
+so the agent can converse naturally or edit the form when asked.
+
+Design rule: never add form-specific rules, keyword/regex answer matching, or
+conditional code workarounds here — if a fix can be done by prompting or tools,
+do it via prompting or tools. Only core safety rails live in `agent-guards.ts`.
 
 After the first observation, snapshots include still-open fields and changed
 controls. Unchanged settled controls (including siblings of answered choice

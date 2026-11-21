@@ -146,63 +146,61 @@ test("an unknown tool or malformed arguments give an error result, never a crash
   assert.match(results[0].content, /unknown tool/i);
 });
 
-// Changed 2026-11-18: running out of corrections no longer ends the run with an error; the model's own plain words carry on.
-test("free-text replies are corrected twice, then the model's own words carry on instead of ending the run", async () => {
-  const { request, seen } = scripted({ text: "I think we are done." }, { text: "Really done." }, { text: "Which last name should I use?" });
+test("plain-text conversational replies work directly without JSON envelope nudges", async () => {
+  const { request, seen } = scripted({ text: "Which last name should I use?" });
   const plan = await make(request)(body(observation([el("e1", "textbox", "Last name")])));
-  assert.equal(seen.length, 3);
-  assert.match(seen[1].messages[1].content, /message.*actions/i);
+  assert.equal(seen.length, 1);
   assert.equal(plan.status, "ask_user");
   assert.equal(plan.message, "Which last name should I use?");
 });
 
-test("raw JSON or markup is never shown when the corrections run out", async () => {
-  const { request } = scripted({ text: '{"msg":1}' }, { text: '{"msg":2}' }, { text: '{"msg":3}' });
+test("raw JSON or markup without tool calls is nudged and never surfaced to the user", async () => {
+  const { request, seen } = scripted({ text: '{"msg":1}' }, { text: '{"msg":2}' }, { text: '{"msg":3}' });
   const plan = await make(request)(body(observation([el("e1", "textbox", "Last name")])));
+  assert.equal(seen.length, 3);
   assert.equal(plan.status, "ask_user");
   assert.equal(plan.message, "");
 });
 
 test("a turn that only fills may be silent; a question must have words", async () => {
   const replies = [
-    { text: JSON.stringify({ message: "", actions: [] }), tool_calls: [{ name: "type_text", arguments: { ref: "e1", text: "Asha" } }] },
+    { text: "", tool_calls: [{ name: "type_text", arguments: { ref: "e1", text: "Asha" } }] },
   ];
   const plan = await make(async () => replies.shift())(body(observation([el("e1", "textbox", "First name")])));
   assert.equal(plan.status, "continue");
   assert.equal(plan.message, "");
   let count = 0;
   const asks = [
-    { text: JSON.stringify({ message: "", actions: [] }), tool_calls: [{ name: "ask_user", arguments: { ref: "e1" } }] },
-    { text: JSON.stringify({ message: "What is your notice period?", actions: [] }), tool_calls: [{ name: "ask_user", arguments: { ref: "e1" } }] },
+    { text: "", tool_calls: [{ name: "ask_user", arguments: { ref: "e1" } }] },
+    { text: "What is your notice period?", tool_calls: [{ name: "ask_user", arguments: { ref: "e1" } }] },
   ];
   const asked = await make(async () => { count += 1; return asks.shift(); })(body(observation([el("e1", "textbox", "Notice period")])));
-  assert.equal(count, 2, "an empty question is corrected");
+  assert.equal(count, 2, "an empty question is rejected by checkQuestion");
   assert.equal(asked.question.text, "What is your notice period?");
 });
 
-test("a ```json fence around the envelope is accepted", async () => {
+test("a legacy ```json envelope is still unpacked cleanly", async () => {
   const replies = [{ text: '```json\n{"message":"Filling your name.","actions":[]}\n```', tool_calls: [{ name: "type_text", arguments: { ref: "e1", text: "Asha" } }] }];
   const plan = await make(async () => replies.shift())(body(observation([el("e1", "textbox", "First name")])));
   assert.equal(plan.message, "Filling your name.");
   assert.equal(plan.actions.length, 1);
 });
 
-test("malformed structured text executes nothing and correction supplies the only UI message", async () => {
-  const seen = [];
+test("ask_user prefers tool question over assistant summary text so fill summaries never replace the question card", async () => {
   const replies = [
-    { text: '{"message":', tool_calls: [{ name: "type_text", arguments: { ref: "e1", text: "wrong" } }] },
-    { text: JSON.stringify({ message: "Filling your first name.", actions: [] }), tool_calls: [{ name: "type_text", arguments: { ref: "e1", text: "Asha" } }] },
+    { text: "Filled your contact details and attached your resume.", tool_calls: [{ name: "ask_user", arguments: { ref: "e1", question: "What's your preferred name?", actions: ["skip"] } }] },
   ];
-  const plan = await make(async (_c, _m, _t, look) => { seen.push(look); return replies.shift(); })(body(observation([el("e1", "textbox", "First name")])));
-  assert.equal(plan.message, "Filling your first name.");
-  assert.equal(plan.actions[0].text, "Asha");
-  assert.equal(seen[1].results[0].is_error, true);
+  const plan = await make(async () => replies.shift())(body(observation([el("e1", "textbox", "Preferred name", { required: false })])));
+  assert.equal(plan.status, "ask_user");
+  assert.equal(plan.message, "Filled your contact details and attached your resume.");
+  assert.equal(plan.question.text, "What's your preferred name?");
+  assert.deepEqual(plan.question.actions, ["skip"]);
 });
 
-test("UI buttons and terminal wording come only from the structured envelope", async () => {
+test("ask_user accepts plain text or tool arguments for question and UI actions, filtering invalid buttons", async () => {
   const replies = [
-    { text: JSON.stringify({ message: "What should your summary say?", actions: ["draft", "on_page"] }), tool_calls: [{ name: "ask_user", arguments: { ref: "e1", question: "Legacy question", actions: ["skip"] } }] },
-    { text: JSON.stringify({ message: "Leaving this field for your review.", actions: [] }), tool_calls: [{ name: "done", arguments: { summary: "Legacy summary" } }] },
+    { text: "What should your summary say?", tool_calls: [{ name: "ask_user", arguments: { ref: "e1", actions: ["draft", "on_page", "buy"] } }] },
+    { text: "", tool_calls: [{ name: "done", arguments: { summary: "Leaving this field for your review." } }] },
   ];
   const step = make(async () => replies.shift());
   const obs = observation([el("e1", "textbox", "Summary", { required: false })]);
@@ -211,18 +209,6 @@ test("UI buttons and terminal wording come only from the structured envelope", a
   assert.deepEqual(asked.question.actions, ["draft", "on_page"]);
   const done = await step(body(obs, { skip_question: true }));
   assert.equal(done.message, "Leaving this field for your review.");
-});
-
-test("invalid UI actions are corrected rather than filtered or displayed", async () => {
-  let count = 0;
-  const replies = [
-    { text: JSON.stringify({ message: "Question?", actions: ["buy"] }), tool_calls: [{ name: "ask_user", arguments: { ref: "e1" } }] },
-    { text: JSON.stringify({ message: "What should your summary say?", actions: ["draft"] }), tool_calls: [{ name: "ask_user", arguments: { ref: "e1" } }] },
-  ];
-  const plan = await make(async () => { count += 1; return replies.shift(); })(body(observation([el("e1", "textbox", "Summary")])));
-  assert.equal(count, 2);
-  assert.deepEqual(plan.question.actions, ["draft"]);
-  assert.equal(plan.message, "What should your summary say?");
 });
 
 test("conversation while a field question is pending is answered without recording a field answer", async () => {
@@ -343,25 +329,32 @@ test("state is saved after every step and a fresh agent built from it carries on
   assert.match(results[0].content, /90000/);
 });
 
-test("fillOptional is read fresh every turn", async () => {
+test("fillOptional is read fresh in the snapshot every turn", async () => {
   let fill = true;
-  const { request, seen } = scripted({ tool_calls: [call("type_text", { ref: "e1", text: "https://x.test" })] }, { tool_calls: [call("done", { summary: "x" })] });
+  const { request, seen } = scripted({ tool_calls: [call("done", { summary: "x" })] });
   const step = formAgent({}, profile, {}, request, undefined, true, undefined, { vision: false, get fillOptional() { return fill; } });
   fill = false;
   const plan = await step(body(observation([el("e1", "textbox", "Website", { required: false })])));
-  assert.match(seen[1].look.results[0].content, /optional/i);
+  assert.match(seen[0].messages[1].content, /Fill optional fields: OFF/);
   assert.equal(plan.status, "ready_for_review");
 });
 
-test("an inspect-only request offers read tools only and ends with a click question instead of changing anything", async () => {
-  const { request, seen } = scripted({ tool_calls: [call("done", { summary: "The form asks for a name and an email." })] });
+test("user_message keeps full write tools so the user can ask questions or request edits", async () => {
+  const { request, seen } = scripted(
+    { text: "The form asks for your name." },
+    { text: "Updating your name.", tool_calls: [call("type_text", { ref: "e1", text: "Asha K" })] },
+  );
   const step = make(request);
-  const plan = await step(body(observation([el("e1", "textbox", "Name", { value: "A" })]), { user_message: "What does this form ask?", inspect_only: true }));
-  assert.ok(Array.isArray(seen[0].look.tool_names));
-  assert.ok(!seen[0].look.tool_names.includes("type"));
-  assert.equal(plan.status, "ask_user");
-  assert.equal(plan.question.kind, "click");
-  assert.match(plan.message, /name and an email/);
+  const obs = observation([el("e1", "textbox", "Name", { value: "A" })]);
+  const chat = await step(body(obs, { user_message: "What does this form ask?" }));
+  assert.equal(seen[0].look.tool_names, undefined);
+  assert.equal(chat.status, "ask_user");
+  assert.equal(chat.question.kind, "click");
+  assert.match(chat.message, /asks for your name/);
+  const edit = await step(body(observation([el("e1", "textbox", "Name", { value: "" })]), { user_message: "Change my name to Asha K" }));
+  assert.equal(seen[1].look.tool_names, undefined);
+  assert.equal(edit.status, "continue");
+  assert.equal(edit.actions[0].text, "Asha K");
 });
 
 test("command ids are unique across steps", async () => {
@@ -398,19 +391,19 @@ test("every snapshot shows the user's three switches as they are now", async () 
     vision: false, get fillOptional() { return switches.fillOptional; }, get allowDrafts() { return switches.allowDrafts; }, get autoApply() { return switches.autoApply; },
   });
   const first = await step(body(observation([el("e1", "textbox", "Name")])));
-  assert.match(seen[0].messages[1].content, /Fill optional fields: ON.*Let AI answer: ON.*Auto apply: OFF/);
+  assert.match(seen[0].messages[1].content, /Fill optional fields: ON.*Auto-draft open-ended answers: ON.*Auto apply: OFF/);
   Object.assign(switches, { fillOptional: false, allowDrafts: false, autoApply: true });
   await step(body(observation([el("e1", "textbox", "Name")], { observation_id: "obs-2" }), { results: [{ index: 0, ok: true, command_id: first.actions[0].command_id }] }));
-  assert.match(seen[1].messages[1].content, /Fill optional fields: OFF.*Let AI answer: OFF.*Auto apply: ON/);
+  assert.match(seen[1].messages[1].content, /Fill optional fields: OFF.*Auto-draft open-ended answers: OFF.*Auto apply: ON/);
 });
 
-test("Let AI answer is read fresh in the snapshot and does not hard-block factual textarea writes", async () => {
+test("Auto-draft open-ended answers is read fresh in the snapshot and does not hard-block factual textarea writes", async () => {
   let drafts = true;
   const { request, seen } = scripted({ tool_calls: [call("type_text", { ref: "e1", text: "https://github.com/example" })] });
   const step = formAgent({}, profile, {}, request, undefined, true, undefined, { vision: false, get allowDrafts() { return drafts; } });
   drafts = false;
   const plan = await step(body(observation([el("e1", "textarea", "Github profile")])));
-  assert.match(seen[0].messages[1].content, /Let AI answer: OFF/);
+  assert.match(seen[0].messages[1].content, /Auto-draft open-ended answers: OFF/);
   assert.equal(plan.status, "continue");
   assert.equal(plan.actions[0].type, "type");
 });

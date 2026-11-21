@@ -61,10 +61,18 @@ and verify 0 safety failures and no regressions.
 
 ## Two engines, one agent each, no versions (rule for every contributor and coding agent)
 
-The extension has exactly two form engines, in plain words:
+The extension has exactly two form engines, with a strict architectural boundary:
 
-- **Rule based form assistant** (`src/rule-based/`): saved rules, keyword mappings and site adapters fill the form. Never call a model, including embeddings, drafts or navigation. Unknowns stay with the user.
-- **Agent based form assistant** (`src/agent-based/`): one ReAct agent (an LLM with a prompt, tools and its own message history that decides every step: reason, call a tool, read the result, repeat). Slower and costlier, adapts to any form. It runs the same way for the platform's AI and for every custom provider.
+1. **Rule based form assistant (`src/rule-based/`)**
+   - Uses deterministic scripts for extraction, matching, and filling, with additional reliability logic (retries, cookie dismissal, multi-step navigation).
+   - **NEVER make LLM calls** — no model requests, no embeddings, no AI drafting, no AI navigation, and no imports from `src/agent-based/`. Unknowns stay with the user.
+
+2. **Agent based form assistant (`src/agent-based/`)**
+   - Designed to fill **any kind of form**: the LLM is the brain and browser events are its native tools; it reads the page and decides which tool to call.
+   - **NEVER write rule fixes** — no per-site rules, no keyword/regex answer matching, no deterministic prefill, and no conditional code or regex workarounds. **If a fix can be done by prompting or tools, it MUST be done by prompting or tools rather than conditional code or regex.**
+   - **Natural conversation:** Plain-language assistant text alongside native tool calls (no mandatory JSON wrapper), and user chat messages keep full tools so the agent can answer questions or edit the form when asked.
+   - **Default behaviour (prompted, not coded):** Fill the form top-to-bottom in page order — first fill all known answers without user interaction, report the initially filled fields in chat as a message only from the LLM (never a code-generated checklist), then ask the user unknown questions one by one top-to-bottom and move to the next after each answer.
+   - **Settings controlled via prompts:** `Auto apply`, `Fill optional fields`, and `Auto-draft open-ended answers` are read fresh every turn and passed to the model in each snapshot so behaviour is controlled via prompts rather than code branches.
 
 Both sit on `src/page-control/` (observe the page, run guarded commands, drive the tab). Do not add another planner, mode, flag, setting,
 "experimental" tier or numbered variant (classic, model-led, tool-led, v2, "new" ...) to compare against the agent: each one multiplies code,
@@ -91,31 +99,25 @@ step resumes with the tool results. The state is saved to `chrome.storage.sessio
 (graph and step), `agent-guards.js` (hard limits), `agent-prompt.js`, `tools.js` (catalog, `findElements`, `clickAtRef`). There are no model-skipping shortcuts:
 the model decides every step.
 
-Every model turn uses assistant text containing exactly `{"message":"plain-language words","actions":[]}` alongside native tool calls.
-`message` is at most 1000 characters. It may be `""` on a turn that only fills, looks or moves through the form, and must be nonempty with `ask_user`,
-`done`, `posting_gone` or a reply without tool calls. `actions` contains at most three unique `draft`, `skip`, `on_page` UI button names,
-only with `ask_user` (otherwise `[]`). A ```json fence around the object is tolerated.
-`ask_user` carries only a field `ref`; `done` and `posting_gone` need no text arguments. Legacy question/summary/reason arguments are ignored.
-The agent validates before executing any calls and sends malformed turns back for correction (two retries). After that it carries on with the
-model's own plain words as the message (never raw JSON or markup), and hands the form back only when there is nothing to say or do.
-The loop still receives its existing plan/question/actions interface; UI actions are not browser commands.
-A valid no-tool conversational reply pauses without claiming completion; `user_message` is never recorded as the pending field's answer.
+The model replies in brief, plain language (at most 1000 characters) alongside native tool calls — no mandatory JSON envelope (though a legacy `{"message","actions"}` envelope is still unpacked cleanly for backward compatibility). Silent write turns keep assistant text empty.
+`ask_user` accepts `ref`, `question`, and optional `actions` (at most three unique `draft`, `skip`, `on_page` UI button names; `skip` is stripped on required fields). `done` accepts `summary` and `posting_gone` accepts `reason`; tool arguments take precedence over assistant text so a fill summary never overwrites a question card.
+A no-tool conversational reply pauses without claiming completion; `user_message` keeps full tools so the agent can answer questions in text or edit the form when the user asks, and is never recorded as the pending field's answer.
 
 Behaviour (prompted, not coded): top to bottom in page order, in two passes. The first pass fills everything the facts support without asking, silently, and ends
-with one message saying what was filled. The second pass asks about the rest one field at a time, in page order (optional fields in their place), moving on after
+with one message from the LLM saying what was filled (never a code-generated checklist). The second pass asks about the rest one field at a time, in page order (optional fields in their place when enabled), moving on after
 each answer. On a multi-step form both passes finish on a step before the next one.
 
-The user's three switches are read fresh every turn (getters from `background.js`, which follows `chrome.storage` changes) and shown in every snapshot:
-"Fill optional fields" (`fillOptional`), "Let AI answer" (`aiDrafts` → `options.allowDrafts`: on, the agent writes open-ended answers at the length the
+The user's three switches are read fresh every turn (getters from `background.ts`, which follows `chrome.storage` changes) and shown in every snapshot:
+"Fill optional fields" (`fillOptional`), "Auto-draft open-ended answers" (`aiDrafts` → `options.allowDrafts`: on, the agent writes open-ended answers at the length the
 question needs, from the profile and the job; off, it asks with the draft button, and "Draft it for me" allows that one field) and "Auto apply"
 (`autoApply`, or the run's one-time auto-submit code → `options.autoApply`: only changes what the agent tells the user; the panel's Auto apply submits after `done`
 with its checks and cancellable countdown, the agent never does).
 
-`agent-guards.js` holds the limits that apply whatever the model decides: no submit, no CAPTCHA or human check, consent and legal facts (visa, sponsorship,
-criminal record, previous employment, anything that accepts, agrees to or confirms) only from the profile or the user's answer, no overwrite, no password,
-key and origin limits, optional fields left alone when "Fill optional fields" is off, open-ended answers left to the user when "Let AI answer" is off, a repeated
-question refused, and `done` refused while required fields are still empty. It never rewrites what the model chose: a refusal is a tool error the model reads and
-works around (a click or text write on a Yes/No option or checkbox is refused with "use check", so the consent limits always apply). `run_js` runs model-written
+`agent-guards.ts` holds only the core safety limits that apply whatever the model decides: no final submit, no sign-in or payment, no CAPTCHA or human check, consent and legal facts (visa, sponsorship,
+criminal record, previous employment, privacy/terms declarations) only from the profile or the user's answer, no overwrite of user-edited or filled fields, no password,
+key and origin limits, file availability check for uploads (without English filename regexes), a repeated
+question refused, and `done` refused while required fields are still empty. Optional-field preference and open-ended drafting are controlled via prompts rather than code vetoes. It never rewrites what the model chose: a refusal is a tool error the model reads and
+works around (a click or text write on a Yes/No option or checkbox is refused with "use check", so the consent and overwrite limits always apply). `run_js` runs model-written
 JavaScript through `chrome.debugger`; the page-level submit guard still blocks submission.
 The privacy switch "Send page screenshots to the AI" (`agentVision`, on by default) sends the image only to the provider that already gets the page text; custom providers get
 it only when the host is known to take images or `supportsVision` is set. Details: `apply-assistant/docs/development/form-agent-testing/form-agent.md`.
@@ -176,4 +178,6 @@ whether a provider used them (see `apply-assistant/docs/development/form-agent-t
 
 ## Enforced form-engine boundary
 
-Agent form reasoning belongs to the model: no keyword/regex answer matching, deterministic prefill or answer rewriting. Shared `page-control/` code observes and executes explicit commands; `shared/ui/` owns common panel presentation and routing. Safety guards may classify sensitive controls only to refuse unsafe operations, never to pick or substitute an answer. Rules never call model providers, directly or indirectly. Engine failures never switch engines, except when ApplyShortly platform AI credits run out (HTTP 402 `insufficient_credits` on `/api/extension/agent/model`), in which case the run automatically falls back to the Rule based form assistant for that run only while keeping the user's saved engine setting unchanged. Keep engine-boundary tests alongside changes.
+- **Agent based (`src/agent-based/`):** All form reasoning belongs to the LLM. Never add keyword/regex answer matching, per-site rules, deterministic prefill, answer rewriting, or conditional code/regex fixes for issues that can be solved by prompting or tools. Safety guards in `agent-guards.ts` enforce only core safety invariants (no submit, no sign-in/payment, no CAPTCHA/password, consent/legal confirmation, no overwrite, required-field completion) and never pick or substitute an answer.
+- **Rule based (`src/rule-based/`):** Purely deterministic script extraction, matching, and filling with reliability logic. Never call any LLM provider, embedding model, or AI drafting/navigation helper, directly or indirectly.
+- **Shared layers:** `src/page-control/` observes and executes explicit commands; `src/shared/ui/` owns common panel presentation and routing. Engine failures never switch engines, except when ApplyShortly platform AI credits run out (HTTP 402 `insufficient_credits` on `/api/extension/agent/model`), in which case the run automatically falls back to the Rule based form assistant for that run only while keeping the user's saved engine setting unchanged. Keep engine-boundary tests alongside changes.

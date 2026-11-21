@@ -936,7 +936,7 @@
 
   /** Drafts every open question with AI (the switch was just turned on), then says what it did. */
   // The panel's two switches (also on the settings page) take effect at once, also on an open panel.
-  // "Let AI answer": draft what the profile doesn't cover. "Auto apply": send once everything is answered.
+  // "Auto-draft open-ended answers": draft what the profile doesn't cover. "Auto apply": send once everything is answered.
   let autoApplyOn = false;
   try { void chrome.storage?.local?.get?.("autoApply")?.then?.((v) => { autoApplyOn = v?.autoApply === true; }); } catch { /* storage unavailable */ }
   chrome.storage?.onChanged?.addListener((changes, area) => {

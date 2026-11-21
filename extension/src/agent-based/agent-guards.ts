@@ -1,8 +1,8 @@
-// The hard limits of the Agent based form assistant agent, enforced in code whatever the model decides. The model chooses every step; this file only
-// refuses: never submit, never touch a human check, consent and legal facts only from the profile or the user, no overwrite, optional
-// fields left alone when their switch is off, and the list of required fields `done` is checked against. Open-ended drafting ("Let AI answer")
-// is decided by the model from the current switch in every snapshot rather than a DOM textarea heuristic. It never rewrites what the model chose
-// (no form-fixing rules): a refusal is a tool error the model reads and works around. Generic by design: it knows roles, labels and states, never a company or a form.
+// The hard safety limits of the Agent based form assistant agent, enforced in code whatever the model decides. The model chooses every step;
+// this file only enforces core safety rails: never submit, never sign in or pay, never touch a human check or password, consent and legal
+// declarations only from the profile or the user, never overwrite user-edited answers or skipped fields, and verify required fields before `done`.
+// Optional-field preference, file slot matching, and open-ended drafting ("Auto-draft open-ended answers") are decided by the model from the
+// prompt and current switches. Generic by design: it knows roles, labels and states, never a company or a form.
 import { AGENT_RULES } from "../shared/agent-rules.js";
 import { candidateContext } from "../shared/candidate-context.js";
 import { factMatches, profileFact } from "../shared/profile-facts.js";
@@ -10,7 +10,7 @@ import { choiceState, isChoiceOption, namesOption, optionsOf, scanFields } from 
 
 const FORM_ROLES = ["textbox", "textarea", "select", "combobox", "radio", "checkbox", "file"];
 const SAFE_KEYS = /^(?:Tab|Escape|Space|Backspace|Enter|Arrow(?:Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/;
-const FORBIDDEN_CLICK = /\b(?:submit|send|finish|complete application|sign.?in|log.?in|register|accept|agree|authorize|confirm|pay|purchase)\b/i;
+const FORBIDDEN_CLICK = /\b(?:submit|send|finish|complete application|sign.?in|log.?in|register|pay|purchase)\b/i;
 const COOKIE_DECLINE = /^(?:reject|decline|deny|refuse|opt[- ]?out)\b.*|\b(?:necessary|essential) (?:cookies )?only\b|\bonly (?:necessary|essential)\b/i;
 const FORWARD_BUTTON = /^\s*(?:next|continue|save (?:and|&) continue|proceed|go on|done|apply)\b/i;
 const PLACEHOLDER = /^(?:select|choose|pick|please select|--|none selected)[…\s.-]*$/i;
@@ -41,10 +41,9 @@ const controlHint = (el: any) => isChoiceOption(el) ? "It is one option of a que
 export const newGuardState = (): any => ({ skipped: [], labels: [], answers: {}, groupAnswers: {}, wrote: [], writeValues: {}, navigations: 0, waits: 0 });
 
 /**
- * @param {{profile: any, job: any, allowDrafts?: () => boolean, fillOptional: () => boolean}} config `fillOptional` is
- * read fresh on every check (the user's switches can change mid-run)
+ * @param {{profile: any, job: any, allowDrafts?: () => boolean, fillOptional?: () => boolean}} config
  */
-export function createGuards({ profile, job, fillOptional }: { profile: any; job?: any; allowDrafts?: () => boolean; fillOptional: () => boolean }) {
+export function createGuards({ profile, job }: { profile: any; job?: any; allowDrafts?: () => boolean; fillOptional?: () => boolean }) {
   const candidate = candidateContext(profile);
   const identity = (obs: any, el: any) => JSON.stringify([obs.url, el?.frame, el?.section, el?.identity ?? "", el?.name, el?.group, el?.role]);
   const groupKey = (obs: any, el: any) => (el?.group ? JSON.stringify([obs.url, el.frame, el.section, el.group, "choice"]) : null);
@@ -53,13 +52,8 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
   const grouped = (el: any) => isChoiceOption(el) || (el.role === "checkbox" && Boolean(el.group));
   const chosenIn = (obs: any, el: any) => obs.elements.some((m: any) => grouped(m) && (el.group ? m.group === el.group && m.frame === el.frame && m.section === el.section : m.ref === el.ref) && choiceState(m) === true);
   const empty = (el: any) => !el.disabled && !el.user_edited && (["checkbox", "radio"].includes(el.role) ? !el.checked : !String(el.value ?? "").trim() || PLACEHOLDER.test(String(el.value).trim()));
-  const uploadFile = (obs: any, el: any) => {
-    if (el.role !== "file") return null;
-    if (/cover.?letter/i.test(el.name ?? "")) return job?.cover_letter ? "cover_letter" : null;
-    const resume = /resume|résumé|\bcv\b|curriculum/i.test(el.name ?? "");
-    const sole = obs.elements.filter((e: any) => e.role === "file" && !e.disabled).length === 1 && !/cover|letter|photo|picture|portfolio|certificate|id\b|passport|transcript/i.test(el.name ?? "");
-    return candidate.has_resume_file && (resume || sole) ? "resume" : null;
-  };
+  const hasFile = (file: any) => (file === "resume" ? Boolean(candidate.has_resume_file) : file === "cover_letter" ? Boolean(job?.cover_letter) : false);
+  const anyFileAvailable = () => Boolean(candidate.has_resume_file || job?.cover_letter);
 
   // `question` is the text that was asked: when the page re-rendered and the ref is gone, the skip still holds by that text.
   const skip = (state: any, obs: any, ref: string, question = "") => {
@@ -83,30 +77,29 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
     (state.writeValues ??= {})[key] = choiceState(el) ?? el.value ?? "";
   };
 
-  /** Required fields still empty, leaving out what the user took on, human checks and attachments the agent cannot make. */
+  /** Required fields still empty, leaving out what the user took on, human checks and attachments when no file is available. */
   const missingRequired = (obs: any, state: any) => scanFields(obs).missing.filter((field: any) => {
     const el = obs.elements.find((e: any) => e.ref === field.ref);
     if (!el) return true;
-    return !(isSkipped(state, obs, el) || BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`) || (el.role === "file" && !uploadFile(obs, el)));
+    return !(isSkipped(state, obs, el) || BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`) || (el.role === "file" && !anyFileAvailable()));
   });
 
   /** Optional fields still empty (leaving out unavailable files, checkboxes, human checks and what the user took on): what "fill optional fields" still has to cover. */
   const emptyOptional = (obs: any, state: any) => scanFields(obs).fields.filter((field: any) => {
     if (field.required || !["textbox", "textarea", "select", "combobox", "radio", "file"].includes(field.role)) return false;
     const el = obs.elements.find((e: any) => e.ref === field.ref);
-    return Boolean(el) && (el.role !== "file" || Boolean(uploadFile(obs, el))) && open(obs, el) && !isSkipped(state, obs, el) && !BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`);
+    return Boolean(el) && (el.role !== "file" || anyFileAvailable()) && open(obs, el) && !isSkipped(state, obs, el) && !BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`);
   });
 
   /**
-   * One action through every hard limit. Returns {ok, action} (a loop action, possibly rewritten to fit the control), {error} (told
+   * One action through every hard limit. Returns {ok, action} (a loop action), {error} (told
    * to the model as a failed tool call) or {ask} (a question or hold the code puts to the user instead).
    */
-  const vet = (input: any, obs: any, state: any, { inspectOnly = false }: any = {}): any => {
+  const vet = (input: any, obs: any, state: any): any => {
     const action = { ...input };
     const refuse = (error: string) => ({ error });
     const KNOWN = ["type", "select", "check", "upload", "click", "scroll", "options", "review", "switch_tab", "wait", "wait_for", "press", "hover", "drag", "run_js"];
     if (!KNOWN.includes(action.type)) return refuse(`Unknown action "${String(action.type).slice(0, 40)}".`);
-    if (inspectOnly && !["options", "review"].includes(action.type)) return refuse("A question cannot change the form: the user has not asked for a change. Answer in text, or ask them to confirm a change.");
     if (action.type === "wait" || action.type === "wait_for") {
       if (state.waits >= MAX_WAITS) { state.waits = 0; return { ask: { kind: "blocker", text: "The page still hasn't finished loading. Check it, then tap Continue." } }; }
       state.waits += 1;
@@ -119,7 +112,6 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
     }
     if (action.type === "switch_tab" && !obs.tabs?.some((tab: any) => tab.id === action.tab_id)) return refuse("That tab was not opened by this application.");
     const el = obs.elements.find((e: any) => e.ref === action.ref);
-    if (fillOptional() === false && el?.required === false && ["check", "type", "select", "upload"].includes(action.type)) return refuse("The user turned off filling optional fields. Leave every optional field alone and continue with the required ones.");
     if (el && ["check", "click", "type", "select"].includes(action.type) && BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`)) return refuse("That is a human check. The user completes it; leave it alone and continue with the rest of the form.");
     if (!["review", "options", "scroll", "switch_tab", "wait", "wait_for"].includes(action.type) && !el) return refuse("That ref is not on the page any more. Use a ref from the latest snapshot.");
     if (el && isSkipped(state, obs, el) && ["type", "select", "check", "upload", "click", "press", "hover"].includes(action.type)) return refuse("The user said they will fill this themselves on the page: leave it alone.");
@@ -163,14 +155,13 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
       if (el.submit_like || lastStep || forbidden || (el.role === "link" && !el.href) || (!sameOrigin && !noForm) || !scheme) {
         return refuse(`That action needs your direct approval on the page.${el.submit_like || lastStep ? " (looks like a final submit)" : el.role === "link" && !el.href ? " (link has no address)" : !sameOrigin && !noForm ? " (the page already has a form)" : ""}`);
       }
-      // A choice is made with check (so its consent and overwrite limits apply) and a file with upload; a click would bypass them.
+      // A choice is made with check (so its overwrite limits apply) and a file with upload; a click would bypass them.
       if (["checkbox", "radio"].includes(el.role) || isChoiceOption(el)) return refuse(`Use check for this control, not click. ${controlHint(el)}`);
       if (el.role === "option") {
         const parents = obs.elements.filter((parent: any) => el.group?.trim() && parent.name === el.group && parent.frame === el.frame && parent.section === el.section && (["select", "combobox", "listbox"].includes(parent.role) || parent.popup) && parent.expanded !== false);
         const parent = parents.length === 1 ? parents[0] : null;
         if (!parent || parent.disabled || parent.user_edited || isSkipped(state, obs, parent) || el.selected || el.checked) return refuse("Choose an unselected option from the current, editable picker.");
         if (parent.value && !PLACEHOLDER.test(String(parent.value).trim()) && parent.expanded !== true) return refuse("The picker already has an answer.");
-        if (fillOptional() === false && parent.required === false) return refuse("The user turned off filling optional fields.");
         const question = String(parent.name ?? "");
         if (CONSENT.test(question) || LEGAL_FACT.test(question) || NOT_ACKNOWLEDGEMENT.test(question)) return refuse(ASK_CONSENT);
       }
@@ -185,7 +176,7 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
 
     if (action.type === "upload") {
       if (el.role !== "file") return refuse("upload works on a file field only.");
-      if (!uploadFile(obs, el) || action.file !== uploadFile(obs, el)) return { ask: { kind: "click", ref: el.ref, text: `Attach ${el.name || "the file"} on the page, then Continue.`, optional: el.required === false } };
+      if (!hasFile(action.file)) return { ask: { kind: "click", ref: el.ref, text: `Attach ${el.name || "the file"} on the page, then Continue.`, optional: el.required === false } };
     }
     if (action.type === "drag") {
       const to = obs.elements.find((e: any) => e.ref === action.to_ref);
@@ -207,5 +198,5 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
 
   /** Whether a field (or a pick-one question) still waits for an answer. */
   const open = (obs: any, el: any) => (grouped(el) ? !el.disabled && !el.submit_like && !chosenIn(obs, el) : empty(el));
-  return { vet, open, skip, recordAnswer, noteWrite, missingRequired, emptyOptional, identity, isSkipped, uploadFile: (obs: any, el: any) => uploadFile(obs, el), formRoles: FORM_ROLES, botCheck: (el: any) => BOT_CHECK.test(`${el?.group ?? ""} ${el?.name ?? ""}`) };
+  return { vet, open, skip, recordAnswer, noteWrite, missingRequired, emptyOptional, identity, isSkipped, formRoles: FORM_ROLES, botCheck: (el: any) => BOT_CHECK.test(`${el?.group ?? ""} ${el?.name ?? ""}`) };
 }

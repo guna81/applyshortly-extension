@@ -606,7 +606,7 @@ for (const scenario of ["stale", "navigation", "message"]) test(`controller reje
       assert.equal(req.results[0].ok, false);
       if (scenario === "message") {
         assert.equal(req.user_message, "Can you see City?");
-        assert.equal(req.inspect_only, true);
+        assert.equal(req.inspect_only, undefined);
         assert.equal(req.observation.screenshot, "SHOT");
       }
       return { guarded_commands: true, session_id: "s", status: "failed", actions: [] };

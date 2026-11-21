@@ -272,6 +272,21 @@ test('extension has its own engine selector, defaulting to Agent based form assi
   } finally { h.close(); }
 });
 
+test('autoApply defaults to off and persists when toggled', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const toggle = h.document.querySelector('#autoApply');
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(h.stored.autoApply, true);
+    assert.match(h.document.querySelector('#prefMsg').textContent, /Saved/);
+  } finally {
+    h.close();
+  }
+});
+
 test('saveLearnedAnswers defaults to off and persists opt-in', async () => {
   const h = await setup({ signedIn: true });
   try {

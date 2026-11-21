@@ -35,9 +35,13 @@ export const TOOL_CATALOG = [
   tool("read_console", "Read recent console errors and warnings of the page (read-only)."),
   tool("read_network", "Read recent failed requests: status, method and URL without query (read-only)."),
   tool("search_saved_answers", "Search the candidate's full saved Answer Bank for screening questions not listed in the inline top saved answers.", { query: TEXT }, ["query"]),
-  tool("ask_user", "Ask one specific field question. Put the question and UI buttons in the assistant message/actions JSON, not tool arguments. ALWAYS bind the current field or choice option ref.", { ref: REF }, ["ref"]),
-  tool("posting_gone", "The job posting is closed or removed (a 404 / \"not found\" page, \"position filled\", \"no longer accepting applications\") so there is no application form to fill. Ends the run; never use it for a form that merely failed to load.", {}),
-  tool("done", "Applicable required and enabled optional fields are settled; leave inapplicable conditional follow-ups blank. Hand over for review. Never submits.", {}),
+  tool("ask_user", "Ask one specific field question. ALWAYS bind the current field or choice option ref. Pass optional UI buttons in actions (draft, skip, on_page).", {
+    ref: REF,
+    question: { type: "string", maxLength: 1000 },
+    actions: { type: "array", items: { type: "string", enum: ["draft", "skip", "on_page"] }, maxItems: 3 },
+  }, ["ref"]),
+  tool("posting_gone", "The job posting is closed or removed (a 404 / \"not found\" page, \"position filled\", \"no longer accepting applications\") so there is no application form to fill. Ends the run; never use it for a form that merely failed to load.", { reason: { type: "string", maxLength: 1000 } }),
+  tool("done", "Applicable required and enabled optional fields are settled; leave inapplicable conditional follow-ups blank. Hand over for review. Never submits.", { summary: { type: "string", maxLength: 1000 } }),
 ];
 
 /** The one observed control under a screenshot point (image pixels), or an error: ambiguous points are refused. */

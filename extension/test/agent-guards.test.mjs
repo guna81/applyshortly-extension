@@ -69,8 +69,6 @@ test("a privacy checkbox is ticked only with the user's standing consent setting
   assert.equal(vet(setup({ preferences: { auto_consent: true } }), obs, { type: "check", ref: "e1", checked: true }).ok, true);
 });
 
-// Changed 2026-11-18 (found while porting the shared-rules replay to the new agent): any tick that accepts, agrees to or confirms
-// something needs the profile, the standing setting for a privacy or terms notice, or the user; a company policy is not a notice.
 test("accepting a policy that is not a privacy or terms notice needs the user, even with standing consent", () => {
   const obs = page([el("e1", "checkbox", "I accept the company attendance policy", { checked: false })]);
   assert.match(vet(setup({ preferences: { auto_consent: true } }), obs, { type: "check", ref: "e1", checked: true }).error ?? "", /consent|approval|ask/i);
@@ -130,28 +128,31 @@ test("a Yes/No option or a checkbox is answered with check: type, select or clic
   assert.equal(vet(ctx, obs, { type: "check", ref: "n", checked: true }).action.type, "check");
 });
 
-test("any click that is not a final submit, sign-in or consent passes: add another, open a dropdown, pick an option", () => {
+test("any click that is not a final submit, sign-in or payment passes: add another, open a dropdown, pick an option, confirm location", () => {
   const ctx = setup();
   const obs = page([
     el("a", "button", "Add another"), el("d", "combobox", "City"), el("o", "option", "Berlin", { group: "City" }), el("orphan", "option", "Paris"),
-    el("t", "textbox", "Name"), el("u", "textbox", "Email"), el("v", "textbox", "Phone"), el("w", "button", "I agree"),
+    el("t", "textbox", "Name"), el("u", "textbox", "Email"), el("v", "textbox", "Phone"), el("c", "button", "Confirm location"), el("p", "button", "Pay now"),
   ]);
-  for (const ref of ["a", "d", "o"]) assert.equal(vet(ctx, obs, { type: "click", ref }).ok, true, ref);
+  for (const ref of ["a", "d", "o", "c"]) assert.equal(vet(ctx, obs, { type: "click", ref }).ok, true, ref);
   assert.match(vet(ctx, obs, { type: "click", ref: "orphan" }).error, /picker/i);
-  assert.match(vet(ctx, obs, { type: "click", ref: "w" }).error, /direct approval/i);
+  assert.match(vet(ctx, obs, { type: "click", ref: "p" }).error, /direct approval/i);
 });
 
-test("optional fields are left alone when the user turned that off, read fresh each time", () => {
-  let fill = false;
-  const guards = createGuards({ profile: {}, job: {}, allowDrafts: () => true, fillOptional: () => fill });
-  const state = newGuardState();
+test("optional fields are not hard-blocked in code when fillOptional is off (controlled via prompt)", () => {
+  const ctx = setup({}, { fillOptional: false });
   const obs = page([el("e1", "textbox", "Website", { required: false })]);
-  assert.match(guards.vet({ type: "type", ref: "e1", text: "https://x.test" }, obs, state).error, /optional/i);
-  fill = true;
-  assert.equal(guards.vet({ type: "type", ref: "e1", text: "https://x.test" }, obs, state).ok, true);
+  assert.equal(vet(ctx, obs, { type: "type", ref: "e1", text: "https://x.test" }).ok, true);
 });
 
-test("textarea writes are not hard-blocked by DOM role when Let AI answer is off (model decides what is open-ended vs a profile fact)", () => {
+test("upload checks file availability without English filename regexes", () => {
+  const withResume = setup({ resume_url: "https://files.example/resume.pdf" });
+  const obs = page([el("f1", "file", "Lebenslauf hochladen")]);
+  assert.equal(vet(withResume, obs, { type: "upload", ref: "f1", file: "resume" }).ok, true);
+  assert.equal(vet(withResume, obs, { type: "upload", ref: "f1", file: "cover_letter" }).ask?.kind, "click");
+});
+
+test("textarea writes are not hard-blocked by DOM role when Auto-draft open-ended answers is off (model decides what is open-ended vs a profile fact)", () => {
   const ctx = setup({}, { allowDrafts: false });
   const obs = page([el("e1", "textarea", "Github profile"), el("e2", "textarea", "Cover letter")]);
   assert.equal(vet(ctx, obs, { type: "type", ref: "e1", text: "https://github.com/example" }).ok, true);
@@ -184,13 +185,6 @@ test("keys: only safe keys; run_js needs code; wait is capped", () => {
   assert.equal(vet(ctx, obs, { type: "run_js", code: "document.title" }).ok, true);
   for (let i = 0; i < 6; i++) assert.equal(vet(ctx, obs, { type: "wait", ms: 500 }).ok, true);
   assert.equal(vet(ctx, obs, { type: "wait", ms: 500 }).ask?.kind, "blocker");
-});
-
-test("an inspect-only request may only look", () => {
-  const ctx = setup();
-  const obs = page([el("e1", "textbox", "Name")]);
-  const inspecting = ctx.guards.vet({ type: "type", ref: "e1", text: "Asha" }, obs, ctx.state, { inspectOnly: true });
-  assert.match(inspecting.error, /cannot change the form/i);
 });
 
 test("required fields still empty: skipped, human-check and optional ones are not counted", () => {
