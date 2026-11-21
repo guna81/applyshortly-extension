@@ -5,7 +5,7 @@
 > **still used by the platform** (website settings, docs, the `agent_engine` / `extensionEngine` values `rules_led` and `ai_led`). Those values are kept on purpose so the
 > extension and the platform stay in sync. **The platform will be renamed soon**; until then read "AI-led" there as the agent based form assistant.
 
-**Apply Shortly Form Agent** fills job application forms in your Chrome browser from your ApplyShortly profile and saved answer bank. Reuse contact details, work history, education and screening answers, get optional AI drafts, and review the completed application before submission.
+**ApplyShortly Form Assisstant** fills job application forms in your Chrome browser from your ApplyShortly profile and saved answer bank. Reuse contact details, work history, education and screening answers, get optional AI drafts, and review the completed application before submission.
 
 [Install the Chrome extension](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) · [ApplyShortly website](https://applyshortly.com) · [Source and developer README](../README.md)
 
