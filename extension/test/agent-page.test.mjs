@@ -786,3 +786,51 @@ test("when multiple Google Places inputs exist, only the focused input claims ex
   assert.equal(options[0].group, "Current Location");
   win.close();
 });
+
+test("shadow DOM form resolves label[for], skips hidden backing controls, reads menu dropdowns and finds submit", () => {
+  const { observe, doc, win, A } = page(`<div id="app-host"></div><div role="menu"><div role="menuitem">Indian</div><div role="menuitem">Canadian</div></div>`);
+  const sr = doc.getElementById("app-host").attachShadow({ mode: "open" });
+  sr.innerHTML = `
+    <form>
+      <div><div><label for="em-1"><p>What is your email address?<span>*</span></p></label></div>
+        <div><input id="em-1" type="text" placeholder="olivia@example.com"></div></div>
+      <div><div><label for="nat-1"><p>Nationalities<span>*</span></p></label></div>
+        <button id="nat-1" type="button" aria-haspopup="menu" aria-expanded="false"><span></span></button></div>
+      <div><div><label for="exp-1"><p>How many years of experience do you have?<span>*</span></p></label></div>
+        <button id="exp-1" type="button" role="combobox" aria-expanded="false"><span>-</span></button>
+        <select aria-hidden="true" tabindex="-1"><option value="No experience">No experience</option><option value="5+ year">5+ year</option></select></div>
+      <div><button type="button" role="checkbox" aria-checked="false" value="on"></button>
+        <input aria-hidden="true" tabindex="-1" type="checkbox" value="on">
+        <span>I agree to the terms and conditions</span></div>
+      <button type="submit">Apply now</button>
+    </form>`;
+  const obs = observe();
+  const email = byName(obs, "What is your email address?");
+  assert.equal(email?.role, "textbox");
+  assert.equal(email?.required, true);
+  assert.equal(byName(obs, "olivia@example.com"), undefined);
+
+  const nat = byName(obs, "Nationalities");
+  assert.equal(nat?.role, "combobox");
+  assert.equal(nat?.required, true);
+  const natOpts = plain(A.visibleOptions(nat.ref, false).map((o) => o.text));
+  assert.deepEqual(natOpts, ["Indian", "Canadian"]);
+
+  const exp = byName(obs, "How many years of experience do you have?");
+  assert.equal(exp?.role, "combobox");
+  assert.equal(exp?.required, true);
+  assert.deepEqual(exp?.options, ["No experience", "5+ year"]);
+  assert.equal(byName(obs, "-"), undefined);
+  assert.equal(obs.elements.filter((e) => e.role === "select").length, 0);
+
+  const checkboxes = obs.elements.filter((e) => e.role === "checkbox");
+  assert.equal(checkboxes.length, 1);
+  assert.equal(checkboxes[0].name, "I agree to the terms and conditions");
+
+  // content.ts calls collectFields(document) and findSubmitButton(document, fields) directly.
+  const collected = win.JobHuntFill.collectFields(doc, { checkLayout: false });
+  assert.equal(collected.length, 4);
+  const submit = win.JobHuntFill.findSubmitButton(doc, collected, { checkLayout: false });
+  assert.equal(submit?.textContent?.trim(), "Apply now");
+  win.close();
+});

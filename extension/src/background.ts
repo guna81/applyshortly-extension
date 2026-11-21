@@ -26,7 +26,7 @@ try {
   });
 } catch { /* no storage events: the value at the start of the run stands */ }
 
-const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true, fillOptional: true };
+const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/page-control/phone.js", "src/rule-based/profile-answer.js", "src/rule-based/answers.js", "src/page-control/dom.js", "src/shared/ui/panel-model.js", "src/shared/ui/panel-view.js", "src/shared/ui/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
@@ -56,7 +56,7 @@ async function platformOrigin() {
 
 async function settings(): Promise<ExtensionSettings> {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "autoApply"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply", "disableCreditFallback"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -95,7 +95,7 @@ function syncOutcome(event = null) {
     const owner = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${s.baseUrl}|${s.token}`))));
     const stored = (await chrome.storage.local.get("outcomeQueue")).outcomeQueue;
     const events = stored?.owner === owner ? stored.events : [];
-    if (event) events.push({ application_id: event.application_id, event: event.event, url: event.url, note: event.note });
+    if (event) events.push({ application_id: event.application_id, event: event.event, url: event.url, note: event.note, ...(event.event === "submitted" && s.saveLearnedAnswers === true ? { save_answers: true } : {}) });
     const save = async () => {
       // A connection changed while a request was in flight: never restore the old account's queue.
       const current = await settings();
@@ -112,7 +112,8 @@ function syncOutcome(event = null) {
         if (error.status === 0 || error.status >= 500) return { pending: true };
         throw error;
       }
-      events.shift();
+      const sent = events.shift();
+      if (sent?.save_answers) profileCache = null;
       await save();
     }
     return result;
@@ -551,7 +552,14 @@ async function agentReport(appId: any, event: string, res: any, url: any) {
   if (appId == null) return;
   const body: any = { application_id: appId, event, url: url?.slice(0, 2000) || null };
   if (event === "filled") {
-    body.filled_fields = (res.filled ?? []).map((f: any) => ({ label: f.label, value: f.value, source: f.source, needs_review: f.needs_review }));
+    body.filled_fields = (res.filled ?? []).map((f: any) => ({
+      label: f.label,
+      value: f.value,
+      ...(f.kind ? { kind: f.kind } : {}),
+      ...(typeof f.answer_id === "number" ? { answer_id: f.answer_id } : {}),
+      source: f.source,
+      needs_review: f.needs_review,
+    }));
     body.unresolved_fields = (res.unresolved ?? []).map((label: string) => ({ label, reason: "No answer yet" }));
   } else if (event === "failed") {
     body.failure_code = res.failure_code ?? "unknown";
@@ -561,7 +569,7 @@ async function agentReport(appId: any, event: string, res: any, url: any) {
 }
 
 /** Starts the agent in a tab: from an extension page (finds the application by URL) or the page's panel. */
-async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) {
+async function agentStart(tabId, url, appId, autoSubmit = false, debug = false, allowCreditFallback = true) {
   const owner = await settings();
   const modelDriven = owner.extensionEngine === "ai_led";
   const revision = customProviderRevision;
@@ -607,6 +615,16 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
   const sources = await pageSources();
   if (modelDriven && (customProviderChanging || revision !== customProviderRevision)) throw new Error("AI provider changed. Start a new form session.");
   const modelSession = crypto.randomUUID();
+  const createRuleStep = () => ruleAgent(p, app, {
+    get fillOptional() { return liveFillOptional(owner); },
+    lookupSaved: async (question: string) => {
+      const hit = await b.suggestAnswer({ question, application_id: id, allow_generate: false }).catch(() => null);
+      if (hit?.source === "answer_bank" && typeof hit.answer === "string" && hit.answer.trim()) {
+        return { answer: hit.answer.trim(), ...(typeof hit.answer_id === "number" ? { answer_id: hit.answer_id } : {}) };
+      }
+      return null;
+    },
+  });
   const agent = new Agent({
     tabId,
     appId: id,
@@ -629,8 +647,14 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
         if (error?.status === 422 && /\b(?:history|results|native_tools|allow_js|tool_names|images)\b.*(?:extra|not permitted|forbidden)/i.test(String(error?.message ?? ""))) throw new Error("Update ApplyShortly: this server does not support the form agent's message history yet.");
         throw error;
       }
-    }, undefined, owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } })
-      : ruleAgent(p, app, { get fillOptional() { return liveFillOptional(owner); } }),
+    }, undefined, owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, searchSavedAnswers: (query: string) => b.searchAnswers(query, 5), debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } })
+      : createRuleStep(),
+    fallbackStep: capabilities.agent_engine === "ai_led" && !custom?.enabled && allowCreditFallback && owner.disableCreditFallback !== true
+      ? () => {
+        void chrome.storage.session.remove(`agentState:${tabId}`).catch(() => {});
+        return createRuleStep();
+      }
+      : null,
     files: agentFiles(p, app),
     notify: async (message) => {
       // Keep approval in this background run across page navigation, and deliver it
@@ -640,7 +664,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
       const submit = autoSubmit && message.status === "ready" && !message.captchaPending;
       if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
       setAttentionBadge(agent.driver.tabId, message.status === "waiting");
-      return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, planner: custom?.enabled ? "custom" : "platform", autoSubmit: submit }, { frameId: 0 }).catch(() => {});
+      return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, planner: agent.planner, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
     },
     report: (event, res, pageUrl) => agentReport(id, event, res, pageUrl),
   });
@@ -865,7 +889,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();
@@ -928,7 +952,7 @@ const handlers = {
   // From the page's panel: its own tab. From an extension page: the tab it names.
   agentStart: (msg: any, sender: any) => (fromPage(sender)
     ? agentStart(sender.tab.id, sender.url, msg.appId ?? null, msg.autoSubmit === true)
-    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true, msg.debug === true)), // debug only from an extension page (the test harness), never from a web page
+    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true, msg.debug === true, msg.disableCreditFallback !== true)), // debug & disableCreditFallback only from an extension page (test harnesses), never from a web page
   agentControl: (msg: any, sender: any) => agentControl(fromPage(sender) ? sender.tab.id : msg.tabId, msg.action, msg.text),
   agentStatus: (msg: any, sender: any) => agentStatus(fromPage(sender) ? sender.tab.id : msg.tabId),
   openOptions: () => chrome.runtime.openOptionsPage(),

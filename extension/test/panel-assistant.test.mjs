@@ -1407,14 +1407,66 @@ test("controller: after the agent finishes, consent requests still go to the mod
   page.start();
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   page.win.document.getElementById("name").value = "Profile name";
-  page.message({ type: "agentUpdate", status: "ready", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
-  const quick = () => [...page.shadow().querySelectorAll(".quick button")];
-  await until(() => quick().find((b) => b.textContent === "I agree, tick it"), "the tick chip");
+  page.message({ type: "agentUpdate", status: "ready", message: "Please tick the privacy policy box and submit.", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
+  await until(() => page.shadow().textContent.includes("Please tick the privacy policy box"), "agent closing message");
+  assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "I agree, tick it"), false);
   const consent = page.win.document.getElementById("consent");
   assert.equal(consent.checked, false);
-  quick().find((b) => b.textContent === "I agree, tick it").click();
-  await until(() => page.sent.some((m) => m.type === "agentControl"), "forwarded to the agent");
+  const input = page.shadow().querySelector(".composer-input");
+  input.value = "I agree, tick it";
+  input.dispatchEvent(new page.win.Event("input", { bubbles: true }));
+  input.dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "message" && m.text === "I agree, tick it"), "forwarded to the agent");
   assert.equal(consent.checked, false);
+  page.win.close();
+});
+
+test("controller: ai_led ready does not re-ask unanswered required fields after its closing message", async () => {
+  const form = `<form>
+    <label for="company">What is your current company?</label><input id="company" required>
+    <label for="position">What is your current position?</label><input id="position" required>
+    <button type="submit">Submit application</button>
+  </form>`;
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form,
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "ai_led", appId: 5, log: [], question: { kind: "question", text: "What is your current company?", actions: ["on_page"] } });
+  const chip = await until(() => [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "I'll fill it on the page"), "on_page chip");
+  chip.click();
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "skip"), "skip sent");
+  const closing = "Please complete the company and position fields, then review and submit the application.";
+  page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, message: closing, log: [] });
+  await until(() => page.shadow().textContent.includes(closing), "closing message");
+  const text = page.shadow().textContent;
+  assert.doesNotMatch(text, /questions? needs? your answer before you can submit/);
+  assert.equal(page.shadow().querySelectorAll(".question").length, 1); // only the original question, not re-asked
+  assert.match(page.shadow().querySelector(".f").textContent, /2 required fields still need you/);
+  page.win.close();
+});
+
+test("rules_led ready does not re-ask fields the user deferred with I'll fill it on the page", async () => {
+  const form = `<form>
+    <label for="company">What is your current company?</label><input id="company" required>
+    <button type="submit">Submit application</button>
+  </form>`;
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, {
+    form,
+    context: () => ({ agentAvailable: true, agentEngine: "rules_led", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({ type: "agentUpdate", status: "waiting", agent_engine: "rules_led", appId: 5, log: [], question: { kind: "question", text: "What is your current company?" } });
+  const chip = await until(() => [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "I'll fill it on the page"), "on_page chip");
+  chip.click();
+  await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "skip"), "skip sent");
+  page.message({ type: "agentUpdate", status: "ready", agent_engine: "rules_led", appId: 5, message: "Review the form and finish any remaining fields.", log: [] });
+  await until(() => page.shadow().textContent.includes("Review the form and finish any remaining fields."), "ready message");
+  assert.doesNotMatch(page.shadow().textContent, /question needs your answer before you can submit/);
+  assert.equal(page.shadow().querySelectorAll(".question").length, 1);
+  assert.match(page.shadow().querySelector(".f").textContent, /1 required field still needs you/);
   page.win.close();
 });
 
@@ -1644,5 +1696,19 @@ test("stuck blocker handoff sends typed answers as reply (with write tools) and 
   const cont = [...page.shadow().querySelectorAll(".quick button")].find((b) => b.textContent === "Continue");
   cont.click();
   await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "resume"), "Continue resumes blocker");
+  page.win.close();
+});
+
+test("consecutive agent step messages render as separate chat bubbles", async () => {
+  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  page.message({
+    type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5,
+    log: ["Filled your name and email.", "Attaching your resume."],
+  });
+  await until(() => page.shadow().querySelectorAll(".bubble.stepline").length === 2, "two separate step bubbles");
+  const texts = [...page.shadow().querySelectorAll(".bubble.stepline")].map((b) => b.textContent);
+  assert.deepEqual(texts, ["Filled your name and email.", "Attaching your resume."]);
   page.win.close();
 });

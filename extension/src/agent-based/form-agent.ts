@@ -28,14 +28,14 @@ const MAX_PAGE_READS = 2;
 const DRAFT_REQUEST = "Draft it for me";
 const TERMINAL_TOOLS = new Set(["ask_user", "done", "posting_gone"]);
 const UI_ACTIONS = ["draft", "skip", "on_page"];
-const READ_TOOLS = new Set(["find", "read_page", "get_page_text", "screenshot", "read_console", "read_network", "web_fetch"]);
+const READ_TOOLS = new Set(["find", "read_page", "get_page_text", "screenshot", "read_console", "read_network", "web_fetch", "search_saved_answers"]);
 const ACTION_TOOLS = new Set(["type_text", "select_option", "press_key", "click", "click_at", "check", "upload", "scroll", "wait", "wait_for", "hover", "drag", "switch_tab", "fill_form", "options", "review", "run_js"]);
 const ALIAS: Record<string, string> = { type_text: "type", select_option: "select", press_key: "press" };
 // After one of these the page may change, so a message's batch ends there; some stand alone.
 const ENDS_BATCH = new Set(["click", "press", "scroll", "switch_tab", "wait", "wait_for", "drag", "review", "options", "run_js"]);
 const ALONE = new Set(["review", "options", "wait", "wait_for", "switch_tab", "run_js"]);
 
-const blankState = (): any => ({ session: crypto.randomUUID(), messages: [], pending: [], carry: [], gs: newGuardState(), asked: [], answered: [], doneRefusals: 0, nudges: 0, questions: 0, tokens: 0, refusedTurns: 0, typedLinks: [], pages: {}, saved: {}, filled: {}, verified: {}, unverified: {}, observed: {}, pageContext: null, pageText: null, instructions: [] });
+const blankState = (): any => ({ session: crypto.randomUUID(), messages: [], pending: [], carry: [], gs: newGuardState(), asked: [], answered: [], doneRefusals: 0, nudges: 0, questions: 0, tokens: 0, refusedTurns: 0, typedLinks: [], pages: {}, saved: {}, searchedAnswers: [], filled: {}, verified: {}, unverified: {}, observed: {}, pageContext: null, pageText: null, instructions: [] });
 const clone = (value: any) => JSON.parse(JSON.stringify(value));
 const cut = (value: any, size: number) => String(value ?? "").slice(0, size);
 const isObject = (value: any): boolean => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -69,6 +69,7 @@ export interface FormAgentOptions {
   fillOptional?: boolean;
   allowDrafts?: boolean;
   autoApply?: boolean;
+  searchSavedAnswers?: (query: string) => Promise<any[]>;
   state?: any;
   onState?: (state: any) => void;
 }
@@ -149,7 +150,14 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             const verified = obs.elements.find((e: any) => e.ref === item.ref);
             if (verified) st.verified[item.ref] = JSON.stringify([obs.url, obs.document_id, snapElement(verified)]);
             const field = obs.elements.find((e: any) => e.ref === item.ref);
-            if (field) st.filled[guards.identity(obs, field)] = { label: cut(field.group || field.name, 500), value: cut(item.value ?? field.value ?? field.name, 200), source: "llm", needs_review: true };
+            if (field) {
+              const id = guards.identity(obs, field);
+              const kind = ["textarea", "select", "combobox", "radio", "checkbox", "file"].includes(field.role) ? field.role : "text";
+              const written = cut(item.value ?? field.value ?? field.name, 1000);
+              const matchedSavedId = st.gs.answers[id] === undefined ? findSavedAnswerId(written) : null;
+              const source = st.gs.answers[id] !== undefined ? "user" : matchedSavedId !== null ? "answer_bank" : "llm";
+              st.filled[id] = { label: cut(field.group || field.name, 500), value: written, kind, source, needs_review: source === "llm", ...(matchedSavedId !== null ? { answer_id: matchedSavedId } : {}) };
+            }
           }
         }
         results.push({ id: p.id, content: lines.join("\n"), is_error: error });
@@ -357,11 +365,34 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
   let inspecting = false;
   const ctxInspect = () => inspecting;
 
+  const findSavedAnswerId = (value: string): number | null => {
+    const trimmed = String(value ?? "").trim();
+    if (!trimmed) return null;
+    const pool = [...(Array.isArray(profile?.answers) ? profile.answers : []), ...(Array.isArray(st.searchedAnswers) ? st.searchedAnswers : [])];
+    const hit = pool.find((entry: any) => typeof entry?.id === "number" && String(entry?.answer ?? "").trim() === trimmed);
+    return hit ? hit.id : null;
+  };
+
   /** A look tool: answered from what the page shows now; returns [content, is_error]. */
   const look = async (name: string, args: any, ctx: any): Promise<[string, boolean?]> => {
     const { obs } = ctx;
     const query = cut(args.query, 200);
     if (name === "find" || name === "read_page") return [JSON.stringify(findElements(obs, query, name === "read_page" ? 150 : 20)).slice(0, 29000)];
+    if (name === "search_saved_answers") {
+      if (!query.trim()) return ["Provide a search query for saved answers.", true];
+      const results = options.searchSavedAnswers
+        ? await options.searchSavedAnswers(query).catch(() => [])
+        : (Array.isArray(profile?.answers) ? profile.answers : []).filter((a: any) => `${a.question_pattern ?? ""} ${(a.question_variants ?? []).join(" ")} ${(a.tags ?? []).join(" ")}`.toLowerCase().includes(query.toLowerCase())).slice(0, 5);
+      if (Array.isArray(results) && results.length) {
+        const seen = new Set((st.searchedAnswers ?? []).map((a: any) => a.id ?? a.question_pattern));
+        for (const r of results) {
+          const key = r.id ?? r.question_pattern;
+          if (!seen.has(key)) { st.searchedAnswers.push(r); seen.add(key); }
+        }
+        return [JSON.stringify(results.map((r: any) => ({ question: r.question_pattern, answer: r.answer, tags: r.tags ?? [] }))).slice(0, 12000)];
+      }
+      return ["No matching saved answers found."];
+    }
     if (name === "get_page_text") {
       const text = String(obs.text ?? "");
       return [(query ? text.split(/ \| |\n/).filter((line: string) => line.toLowerCase().includes(query.toLowerCase())).join("\n") : text).slice(0, 12000) || "(no text)"];
@@ -395,13 +426,14 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     const { results, notes } = deliver(body, obs);
     // Raw saved answers are candidate data. Matching them is the model's responsibility.
     const saved = profile.answers ?? [];
+    const answersTotal = Number(profile.answers_total ?? (Array.isArray(saved) ? saved.length : 0));
     const stuck = body.stuck_retry?.fields ?? null;
     const pageContext = JSON.stringify([obs.url, obs.document_id]);
     const samePage = st.pageContext === pageContext;
     const signatures = Object.fromEntries(obs.elements.map((el: any) => [el.ref, JSON.stringify(snapElement(el))]));
     const auxiliary = (el: any) => !guards.formRoles.includes(el.role) && !isChoiceOption(el);
     const unchangedControls = obs.elements.filter((el: any) => auxiliary(el) && samePage && st.observed[el.ref] === signatures[el.ref] && !el.invalid && !el.error && !el.expanded);
-    const text = snapshotText(obs, { saved, notes, userMessage: body.user_message ? cut(body.user_message, 2000) : "", skipped: st.gs.labels, fillOptional: options.fillOptional !== false, allowDrafts: draftsOn(), autoApply: options.autoApply === true, links: st.typedLinks, stuck,
+    const text = snapshotText(obs, { saved, answersTotal, notes, userMessage: body.user_message ? cut(body.user_message, 2000) : "", skipped: st.gs.labels, fillOptional: options.fillOptional !== false, allowDrafts: draftsOn(), autoApply: options.autoApply === true, links: st.typedLinks, stuck,
       // Keep every open/unverified field. Settled groups include unchecked siblings; page truth is never repaired from cache.
       omit: (el: any) => {
         if (el.invalid || el.error || el.expanded || st.unverified[el.ref]) return false;

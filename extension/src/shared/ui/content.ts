@@ -17,7 +17,8 @@
   let autoSubmitting = false; // Auto apply clicked Submit; its own report covers the submit event
   const AUTO_APPLY_DELAY_S = 3;
   // The assistant's conversation for this page; reset with `state`.
-  const newChat = () => ({ lines: [], draft: "", pending: false });
+  const newChat = () => ({ lines: [], draft: "", pending: false, deferred: new Set<string>() });
+  const deferredKey = (text: any) => String(text ?? "").toLowerCase().replace(/[\s?:*]+/g, " ").trim();
   let chat = newChat();
   // The form agent's latest update for this tab (it runs in the background; see page-control/loop.js).
   let agent = null;
@@ -444,6 +445,8 @@
     const agentBased = agent.agent_engine === "ai_led";
     if (message === P.ON_PAGE_REPLY || (message === P.SKIP_REPLY && (q.optional || agentBased))) {
       const blank = message === P.SKIP_REPLY;
+      const key = deferredKey(q?.text);
+      if (key) chat.deferred.add(key);
       if (!agentBased) chat.lines.push({ role: "assistant", local: true, text: blank ? "OK, leaving it blank. I'll carry on." : "OK, fill it on the page. I'll carry on." });
       await agentControl("skip");
       return panel.idle();
@@ -464,17 +467,11 @@
   let shownLog: string[] = []; // the agent's log lines already narrated in the chat
   let shownFilledCount = 0;
 
-  /** Steps taken back to back share one chat bubble (one line each) instead of one bubble per step. */
+  /** Each agent step message appears in its own chat bubble (skipping exact back-to-back duplicates). */
   function pushStep(text) {
     const tail = chat.lines.at(-1);
-    if (tail?.step && tail.parts) {
-      if (tail.parts.at(-1) === text) return;
-      tail.parts.push(text);
-      if (tail.parts.length > 8) tail.parts.shift();
-      tail.text = tail.parts.join("\n");
-      return;
-    }
-    chat.lines.push({ role: "assistant", local: true, step: true, parts: [text], text });
+    if (tail?.step && tail.text === text) return;
+    chat.lines.push({ role: "assistant", local: true, step: true, text });
   }
 
   function narrateFills(next: any) {
@@ -556,7 +553,9 @@
     const agentBased = next.agent_engine === "ai_led";
     const framedNote = next.status === "ready" && !agentBased ? P.readinessNote({ missing: (next.readiness?.missing ?? []).filter((m: any) => m.framed) }) : "";
     const leadWithNote = [lead, framedNote].filter(Boolean).join(" ");
-    const follow = next.status === "ready" && state ? P.nextPrompt(state.results) : null;
+    const follow = next.status === "ready" && !agentBased && state
+      ? P.nextPrompt(state.results.filter((r) => !chat.deferred.has(deferredKey(r.field?.label))))
+      : null;
     const bodyText = next.status === "ready"
       ? (follow ? followedBy(leadWithNote, follow) : { text: leadWithNote || DONE_TEXT, choices: [] })
       : { text: leadWithNote, choices: [] };

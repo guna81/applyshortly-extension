@@ -18,9 +18,12 @@ export interface Link {
 }
 
 export interface ExtensionAnswer {
+  id?: number;
   question_pattern: string;
+  question_variants?: string[];
   answer: string;
   tags: string[];
+  times_used?: number;
 }
 
 export interface ExtensionPreferences {
@@ -48,6 +51,7 @@ export interface ExtensionProfile {
   education: Record<string, unknown>[];
   preferences: ExtensionPreferences | null;
   answers: ExtensionAnswer[];
+  answers_total?: number;
   resume_url: string | null; // relative to the platform origin; needs the same API key
 }
 
@@ -79,6 +83,8 @@ export interface ExtensionEvent {
   note?: string | null;
   /** With "failed": why it stopped (the platform's FailureCode, e.g. "agent_stuck"). */
   failure_code?: string | null;
+  /** Opt-in: save learnable filled answers to AnswerBank when event is "submitted". */
+  save_answers?: boolean;
 }
 
 export interface ExtensionEventResult {
@@ -311,6 +317,7 @@ export class BridgeError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -333,8 +340,12 @@ export class JobHuntBridge {
       },
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
-      throw new BridgeError(res.status, typeof body.detail === "string" ? body.detail : res.statusText);
+      const body = (await res.json().catch(() => ({}))) as { detail?: unknown; code?: unknown };
+      throw new BridgeError(
+        res.status,
+        typeof body.detail === "string" ? body.detail : res.statusText,
+        typeof body.code === "string" ? body.code : undefined,
+      );
     }
     return (res.status === 204 ? undefined : await res.json()) as T;
   }

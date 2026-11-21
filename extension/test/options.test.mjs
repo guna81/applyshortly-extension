@@ -272,6 +272,20 @@ test('extension has its own engine selector, defaulting to Agent based form assi
   } finally { h.close(); }
 });
 
+test('saveLearnedAnswers defaults to off and persists opt-in', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const toggle = h.document.querySelector('#saveLearnedAnswers');
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(h.stored.saveLearnedAnswers, true);
+  } finally {
+    h.close();
+  }
+});
+
 test('the appearance choice is saved for every extension page', async () => {
   const h = await setup({ signedIn: true });
   try {

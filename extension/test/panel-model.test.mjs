@@ -126,6 +126,9 @@ test("the agent's questions become chat lines with quick replies", () => {
   assert.deepEqual(plain(optional.choices), ["Naukri", "LinkedIn", P.SKIP_REPLY]);
   assert.match(optional.question.note, /Optional/);
   assert.equal(P.agentAsk(null), null);
+  // A conversational pause (empty click question) shows only the agent's reply, never a bare "Tap Continue" bubble.
+  assert.equal(P.agentAsk({ kind: "click", text: "", optional: false }, "ai_led"), null);
+  assert.equal(P.agentAsk({ kind: "click", text: "   ", optional: false }, "ai_led"), null);
 });
 
 test("a free-text visa or work-authorization situation question offers a grounded draft", () => {

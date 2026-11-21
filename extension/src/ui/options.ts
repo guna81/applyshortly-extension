@@ -102,6 +102,7 @@ async function load() {
   $("agentVision").checked = s.agentVision !== false;
   $("fillOptional").checked = s.fillOptional !== false;
   $("aiDrafts").checked = Boolean(s.aiDrafts);
+  $("saveLearnedAnswers").checked = s.saveLearnedAnswers === true;
   $("autopilotWindows").checked = s.autopilotWindows !== false;
   $("version").textContent = chrome.runtime.getManifest().version;
   try {
@@ -252,6 +253,11 @@ $("fillOptional").addEventListener("change", async (event) => {
 });
 $("aiDrafts").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ aiDrafts: /** @type {HTMLInputElement} */ (event.target).checked });
+  $("prefMsg").textContent = "Saved";
+  setTimeout(() => ($("prefMsg").textContent = ""), 1500);
+});
+$("saveLearnedAnswers").addEventListener("change", async (event) => {
+  await chrome.storage.local.set({ saveLearnedAnswers: /** @type {HTMLInputElement} */ (event.target).checked });
   $("prefMsg").textContent = "Saved";
   setTimeout(() => ($("prefMsg").textContent = ""), 1500);
 });

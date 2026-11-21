@@ -124,3 +124,124 @@ test("ruleAgent waits briefly for async-rendered forms before settling", async (
   const done = await step(obs([]));
   assert.equal(done.status, "ready_for_review");
 });
+
+test("ruleAgent matches notice period and fractional years of experience against dropdown options", async () => {
+  const profile = {
+    ...PROFILE,
+    total_experience_years: 5.6,
+    preferences: { ...PROFILE.preferences, notice_period_days: 30 },
+  };
+  const step = ruleAgent(profile, null);
+  const exp = await step(obs([
+    { ref: "0.1", role: "combobox", name: "How many years of experience do you have?", required: true, value: "", options: ["No experience", "1+ year", "5+ year", "6+ year", "15+ year"] },
+    { ref: "0.2", role: "combobox", name: "What is your notice period?", required: true, value: "", options: ["Immediately", "10 days", "30 days", "60 days"] },
+  ]));
+  assert.equal(exp.status, "continue");
+  assert.deepEqual([exp.actions[0].type, exp.actions[0].ref, exp.actions[0].text], ["select", "0.1", "5+ year"]);
+
+  const notice = await step(obs([
+    { ref: "0.1", role: "combobox", name: "How many years of experience do you have?", required: true, value: "5+ year", options: ["No experience", "1+ year", "5+ year", "6+ year", "15+ year"] },
+    { ref: "0.2", role: "combobox", name: "What is your notice period?", required: true, value: "", options: ["Immediately", "10 days", "30 days", "60 days"] },
+  ]));
+  assert.equal(notice.status, "continue");
+  assert.deepEqual([notice.actions[0].type, notice.actions[0].ref, notice.actions[0].text], ["select", "0.2", "30 days"]);
+});
+
+test("ruleAgent summarizes the actual fields filled and reuses matching saved answers", async () => {
+  const profile = {
+    ...PROFILE,
+    answers: [
+      {
+        question_pattern: "Tell us about a problem you solved building close to the customer",
+        answer: "Built a clinical RAG pipeline directly with healthcare stakeholders.",
+        tags: ["customer", "problem"],
+      },
+    ],
+  };
+  const step = ruleAgent(profile, null);
+  const fields = [
+    { ref: "0.1", role: "textbox", name: "Name*", required: true, value: "" },
+    { ref: "0.2", role: "textbox", name: "Email*", required: true, value: "" },
+    { ref: "0.3", role: "file", name: "Resume*", required: true, value: "" },
+    { ref: "0.4", role: "textarea", name: "Tell us about a problem you've solved by building close to the customer", required: true, value: "" },
+    { ref: "0.5", role: "textbox", name: "Favorite database?", required: true, value: "" },
+  ];
+
+  // Fill 4 known fields (3 profile/upload + 1 saved answer), silent while filling.
+  for (let i = 0; i < 4; i++) {
+    const res = await step(obs(fields));
+    assert.equal(res.status, "continue");
+    assert.equal(res.message, "");
+    const act = res.actions[0];
+    const target = fields.find((f) => f.ref === act.ref);
+    target.value = act.type === "upload" ? "resume.pdf" : act.text;
+  }
+  assert.equal(fields[3].value, "Built a clinical RAG pipeline directly with healthcare stakeholders.");
+
+  // Next step asks the unknown field and emits a single summary of the actual filled fields.
+  const ask = await step(obs(fields));
+  assert.equal(ask.status, "ask_user");
+  assert.equal(ask.question.ref, "0.5");
+  assert.equal(
+    ask.message,
+    "Filled Name, Email, and Tell us about a problem you've solved by building close to the customer, and attached your resume.",
+  );
+
+  // User answers the unknown field; once verified, filled includes source: "user" for learning.
+  const applyReply = await step({ ...obs(fields), user_reply: "PostgreSQL" });
+  assert.equal(applyReply.status, "continue");
+  fields[4].value = "PostgreSQL";
+  const done = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(done.status, "ready_for_review");
+  const userEntry = done.filled.find((f) => f.label === "Favorite database?");
+  assert.deepEqual(userEntry, {
+    label: "Favorite database?",
+    value: "PostgreSQL",
+    kind: "text",
+    source: "user",
+    needs_review: false,
+  });
+});
+
+test("ruleAgent matches question_variants, falls back to lookupSaved, and propagates answer_id", async () => {
+  const profile = {
+    full_name: "Guna P",
+    answers: [
+      {
+        id: 42,
+        question_pattern: "Describe a technical challenge",
+        question_variants: ["Tell us about a tough engineering problem you solved"],
+        answer: "Scaled vector search latency down by 60%.",
+        tags: [],
+      },
+    ],
+    answers_total: 2,
+  };
+  const lookups = [];
+  const step = ruleAgent(profile, {}, {
+    lookupSaved: async (question) => {
+      lookups.push(question);
+      if (/deployment/i.test(question)) return { answer: "Kubernetes + ArgoCD", answer_id: 99 };
+      return null;
+    },
+  });
+  const fields = [
+    { ref: "0.1", role: "textarea", name: "Tell us about a tough engineering problem you solved*", value: "", required: true },
+    { ref: "0.2", role: "textbox", name: "Preferred deployment stack?", value: "", required: true },
+  ];
+  const r1 = await step(obs(fields));
+  assert.equal(r1.status, "continue");
+  assert.equal(r1.actions[0].text, "Scaled vector search latency down by 60%.");
+  fields[0].value = r1.actions[0].text;
+
+  const r2 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r2.status, "continue");
+  assert.equal(r2.actions[0].text, "Kubernetes + ArgoCD");
+  fields[1].value = r2.actions[0].text;
+
+  const done = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(done.status, "ready_for_review");
+  assert.equal(lookups.length, 1);
+  assert.equal(done.filled.find((f) => f.answer_id === 42)?.source, "answer_bank");
+  assert.equal(done.filled.find((f) => f.answer_id === 99)?.source, "answer_bank");
+});

@@ -831,3 +831,43 @@ test('the settings page is recognised as a privileged extension UI page', async 
   assert.equal(res.ok, true);
   assert.equal(res.data.configured, true);
 });
+
+test('platform ai_led attaches a local rules_led fallbackStep without changing saved extensionEngine', async () => {
+  const h = harness({ engine: 'ai_led' });
+  assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
+  const agent = h.agentInstances[0];
+  assert.equal(typeof agent.fallbackStep, 'function');
+  const fallback = agent.fallbackStep();
+  const res = await fallback({ observation: { url: 'https://example.com/apply', elements: [] }, results: [] });
+  assert.equal(res.agent_engine, 'rules_led');
+  assert.equal(res.status, 'ready_for_review');
+  assert.equal(h.calls.some((call) => call.agentModel || call.customRequest || call.agentStep), false);
+  assert.equal(h.local.extensionEngine, 'ai_led');
+});
+
+test('custom provider and rules_led runs do not attach a credit fallbackStep', async () => {
+  const customHarness = harness({ engine: 'ai_led' });
+  await customHarness.send({ type: 'saveCustomAI', baseUrl: 'http://127.0.0.1:8765/v1', model: 'fixture', apiKey: 'fixture' });
+  assert.equal((await customHarness.send({ type: 'agentStart', appId: null }, customHarness.content)).ok, true);
+  assert.equal(customHarness.agentInstances[0].fallbackStep, null);
+
+  const rulesHarness = harness({ engine: 'rules_led' });
+  assert.equal((await rulesHarness.send({ type: 'agentStart', appId: null }, rulesHarness.content)).ok, true);
+  assert.equal(rulesHarness.agentInstances[0].fallbackStep, null);
+});
+
+test('disableCreditFallback disables automatic credit fallback via storage or privileged agentStart', async () => {
+  const storageHarness = harness({ engine: 'ai_led' });
+  storageHarness.local.disableCreditFallback = true;
+  assert.equal((await storageHarness.send({ type: 'agentStart', appId: null }, storageHarness.content)).ok, true);
+  assert.equal(storageHarness.agentInstances[0].fallbackStep, null);
+
+  const msgHarness = harness({ engine: 'ai_led' });
+  assert.equal((await msgHarness.send({ type: 'agentStart', tabId: 10, url: 'https://example.com/apply', appId: null, disableCreditFallback: true }, msgHarness.ui)).ok, true);
+  assert.equal(msgHarness.agentInstances[0].fallbackStep, null);
+
+  // Web pages cannot pass disableCreditFallback through the content-script agentStart message.
+  const pageHarness = harness({ engine: 'ai_led' });
+  assert.equal((await pageHarness.send({ type: 'agentStart', appId: null, disableCreditFallback: true }, pageHarness.content)).ok, true);
+  assert.equal(typeof pageHarness.agentInstances[0].fallbackStep, 'function');
+});

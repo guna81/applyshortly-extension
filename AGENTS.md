@@ -55,6 +55,10 @@ Test in this order: Tier 0 replay (`npm test`), then Tier 1 synthetic pages (fre
 becomes a Tier 0 fixture that fails (`todo` until fixed). Rebuild with `python3 scripts/build_extension.py` before any live run (the
 testbed does it for you). Report numbers as measured on those forms, not as general accuracy.
 
+**Pre-production gate (every release):** Before merging/pushing to `main`, deploying to production, or publishing a new extension package,
+run the platform testbed (`apply-assistant/tools/form-agent-testbed/`) on the live regression set with **both** engines (`rules_led` and `ai_led`)
+and verify 0 safety failures and no regressions.
+
 ## Two engines, one agent each, no versions (rule for every contributor and coding agent)
 
 The extension has exactly two form engines, in plain words:
@@ -172,4 +176,4 @@ whether a provider used them (see `apply-assistant/docs/development/form-agent-t
 
 ## Enforced form-engine boundary
 
-Agent form reasoning belongs to the model: no keyword/regex answer matching, deterministic prefill or answer rewriting. Shared `page-control/` code observes and executes explicit commands; `shared/ui/` owns common panel presentation and routing. Safety guards may classify sensitive controls only to refuse unsafe operations, never to pick or substitute an answer. Rules never call model providers, directly or indirectly. Engine failures never switch engines. Keep engine-boundary tests alongside changes.
+Agent form reasoning belongs to the model: no keyword/regex answer matching, deterministic prefill or answer rewriting. Shared `page-control/` code observes and executes explicit commands; `shared/ui/` owns common panel presentation and routing. Safety guards may classify sensitive controls only to refuse unsafe operations, never to pick or substitute an answer. Rules never call model providers, directly or indirectly. Engine failures never switch engines, except when ApplyShortly platform AI credits run out (HTTP 402 `insufficient_credits` on `/api/extension/agent/model`), in which case the run automatically falls back to the Rule based form assistant for that run only while keeping the user's saved engine setting unchanged. Keep engine-boundary tests alongside changes.
