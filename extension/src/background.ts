@@ -12,7 +12,7 @@ import { TabDriver } from "./page-control/cdp.js";
 import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./shared/bridge.js";
 import type { ExtensionSettings } from "./shared/types.js";
 
-// The panel's switches ("Fill optional fields", "Let AI answer", "Auto apply") can change while an agent runs: the planner reads them every turn.
+// The panel's switches ("Fill optional fields", "Auto-draft open-ended answers", "Auto apply") can change while an agent runs: the planner reads them every turn.
 const liveSwitches: Record<"fillOptional" | "aiDrafts" | "autoApply", boolean | null> = { fillOptional: null, aiDrafts: null, autoApply: null };
 const liveFillOptional = (owner: any) => liveSwitches.fillOptional ?? owner.fillOptional !== false;
 const liveAiDrafts = (owner: any) => liveSwitches.aiDrafts ?? owner.aiDrafts !== false;
@@ -26,7 +26,7 @@ try {
   });
 } catch { /* no storage events: the value at the start of the run stands */ }
 
-const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
+const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autoApply: false, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/page-control/phone.js", "src/rule-based/profile-answer.js", "src/rule-based/answers.js", "src/page-control/dom.js", "src/shared/ui/panel-model.js", "src/shared/ui/panel-view.js", "src/shared/ui/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
@@ -889,7 +889,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autoApply: s.autoApply === true, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();

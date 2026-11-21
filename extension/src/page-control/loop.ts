@@ -909,7 +909,7 @@ export class Agent {
           continue;
         }
         if (this.messages.length) {
-          extra = { user_message: this.messages.splice(0).join("\n").slice(0, 4000), inspect_only: true };
+          extra = { user_message: this.messages.splice(0).join("\n").slice(0, 4000) };
         }
         const stalled = this.progressGuard.check(observation);
         if (stalled) {

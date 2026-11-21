@@ -8,7 +8,7 @@
 // so a rebuilt agent (`options.state`) carries on with the same history.
 import { addTypedLinks, fetchPage as readPage, isTypedLink, normalizeLink } from "../shared/web-fetch.js";
 import { createGuards, newGuardState, questionKey } from "./agent-guards.js";
-import { INSPECT_TOOLS, buildSystem, snapshotText, snapElement, stubText } from "./agent-prompt.js";
+import { buildSystem, snapshotText, snapElement, stubText } from "./agent-prompt.js";
 import { scanFields, isChoiceOption } from "../page-control/commands.js";
 import { Annotation, END, START, StateGraph } from "./langgraph.js";
 import { hasApplicationFields } from "../page-control/loop.js";
@@ -26,7 +26,6 @@ export const MAX_INPUT_TOKENS = 1_000_000; // per application run (set 2026-11-1
 const MAX_PAGE_READS = 2;
 // The "Draft it for me" button on the agent's question. A draft request typed in the user's own words is not matched here: the model reads it as the user's say (agent-prompt.js).
 const DRAFT_REQUEST = "Draft it for me";
-const TERMINAL_TOOLS = new Set(["ask_user", "done", "posting_gone"]);
 const UI_ACTIONS = ["draft", "skip", "on_page"];
 const READ_TOOLS = new Set(["find", "read_page", "get_page_text", "screenshot", "read_console", "read_network", "web_fetch", "search_saved_answers"]);
 const ACTION_TOOLS = new Set(["type_text", "select_option", "press_key", "click", "click_at", "check", "upload", "scroll", "wait", "wait_for", "hover", "drag", "switch_tab", "fill_form", "options", "review", "run_js"]);
@@ -39,22 +38,19 @@ const blankState = (): any => ({ session: crypto.randomUUID(), messages: [], pen
 const clone = (value: any) => JSON.parse(JSON.stringify(value));
 const cut = (value: any, size: number) => String(value ?? "").slice(0, size);
 const isObject = (value: any): boolean => value !== null && typeof value === "object" && !Array.isArray(value);
-/** The model's {"message","actions"} envelope (a ```json fence around it is tolerated), or null. message may be "" here; act() decides when words are needed. */
-const parseEnvelope = (text: any) => {
+/** Extract the assistant's plain text message (or unpack a legacy {"message","actions"} JSON envelope if returned). */
+const extractMessage = (text: any) => {
+  const raw = String(text ?? "").trim();
+  if (!raw) return { message: "", actions: [] as string[] };
   try {
-    const parsed = JSON.parse(String(text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
-    if (isObject(parsed) && Object.keys(parsed).every((key) => ["message", "actions"].includes(key))
-      && typeof parsed.message === "string" && parsed.message.length <= 1000
-      && Array.isArray(parsed.actions) && parsed.actions.length <= 3
-      && parsed.actions.every((a: any) => UI_ACTIONS.includes(a))
-      && new Set(parsed.actions).size === parsed.actions.length) return { message: parsed.message.trim(), actions: parsed.actions };
-  } catch { /* not JSON */ }
-  return null;
-};
-/** After the corrections run out: the model's own plain words carry on as its message (never raw JSON or markup). */
-const salvage = (text: any) => {
-  const plain = String(text ?? "").trim();
-  return { message: /^[{[`<]/.test(plain) ? "" : plain.slice(0, 1000), actions: [] };
+    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+    if (isObject(parsed) && typeof parsed.message === "string") {
+      const actions = Array.isArray(parsed.actions) ? [...new Set(parsed.actions.filter((a: any) => UI_ACTIONS.includes(a)))].slice(0, 3) : [];
+      return { message: parsed.message.trim().slice(0, 1000), actions };
+    }
+  } catch { /* plain text */ }
+  // Never surface raw JSON/markup if a model leaked broken structured output.
+  return { message: /^[{[`<]/.test(raw) ? "" : raw.slice(0, 1000), actions: [] as string[] };
 };
 const fieldAction = (entry: any, elements: any[]) => {
   const found = elements.find((e) => e.ref === entry.ref);
@@ -77,7 +73,7 @@ export interface FormAgentOptions {
 /**
  * Same contract as the loop expects of a planner: `(body) => plan`.
  * `options.vision` (default true) attaches the page screenshot. The user's switches are read fresh every turn (pass getters):
- * `options.fillOptional`, `options.allowDrafts` ("Let AI answer"; falls back to the `allowDrafts` argument) and `options.autoApply`
+ * `options.fillOptional`, `options.allowDrafts` ("Auto-draft open-ended answers"; falls back to the `allowDrafts` argument) and `options.autoApply`
  * (the extension submits after done, with a cancellable countdown; the agent itself never submits).
  * `options.state` / `options.onState` restore and save the agent's state; `options.debug` adds what happened to each reply.
  */
@@ -204,8 +200,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
 
   /** One planning step's graph; `ctx` holds this step's page and input. */
   const buildGraph = (ctx: any) => {
-    const { obs, inspectOnly } = ctx;
-    const toolNames = inspectOnly ? INSPECT_TOOLS : undefined;
+    const { obs } = ctx;
     const model = async () => {
       compact(); // older snapshots shrink before every call, so only the latest goes out in full
       const last = st.messages.at(-1);
@@ -218,12 +213,12 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
       }
       st.tokens += Math.ceil((system.length + last.text.length + JSON.stringify(history).length) / 4);
       const raw = await request(config, [{ role: "system", content: system }, { role: "user", content: last.text }], MAX_TOKENS,
-        { images, native_tools: true, allow_js: true, history, results: toWire(last).results, ...(toolNames ? { tool_names: toolNames } : {}) });
+        { images, native_tools: true, allow_js: true, history, results: toWire(last).results });
       const reply = typeof raw === "string" ? { text: raw, tool_calls: [] } : raw ?? {};
       if (reply.tool_calls_unsupported) throw new Error("This AI provider cannot call tools, which the form agent needs. Choose another provider in the extension settings.");
       ctx.turns += 1; ctx.shot = false;
       const calls = (Array.isArray(reply.tool_calls) ? reply.tool_calls : []).slice(0, MAX_CALLS).map((c: any) => ({ id: newId(), name: cut(c?.name, 100), arguments: isObject(c?.arguments) ? c.arguments : (c?.arguments ?? {}) }));
-      const result = parseEnvelope(reply.text); // malformed output is corrected by the model first (act)
+      const result = extractMessage(reply.text);
       const message = { role: "assistant", text: cut(reply.text, 8000), calls, result };
       st.messages.push(message);
       return { messages: [message] };
@@ -231,26 +226,22 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
 
     const act = async () => {
       const message = st.messages.at(-1);
-      // Words are needed when the user is spoken to (a question, the hand-over, a reply without tools); a turn that only fills may be silent.
-      const needsWords = !message.calls.length || message.calls.some((c: any) => TERMINAL_TOOLS.has(c.name));
-      const valid = message.result && (!needsWords || message.result.message) && (!message.result.actions.length || message.calls.some((c: any) => c.name === "ask_user"));
-      if (!valid) {
-        if (st.nudges < MAX_NUDGES) {
-          st.nudges += 1;
-          pushUser('Return assistant text as exactly {"message":"your message to the user","actions":[]}, alongside native tool calls. message may be "" only on a turn that just fills, looks or moves through the form; it must say something with ask_user, done, posting_gone or a reply without tools. actions may contain unique draft, skip, on_page buttons only with ask_user. No markdown or free text. The previous calls were not executed.', "(format correction)", message.calls.map((c: any) => ({ id: c.id, content: "Not executed: invalid structured result. Correct the message/actions JSON and call again.", is_error: true })));
-          return { messages: [] };
-        }
-        // The corrections ran out: carry on with the model's own plain words rather than end the run.
-        message.result = salvage(message.text);
-        note("recovery", { kind: "salvaged_text" });
-        if (!message.calls.length && !message.result.message) { st.nudges = 0; return finish(handBack()); }
-      }
-      st.nudges = 0;
       if (!message.calls.length) {
+        if (!message.result.message) {
+          if (st.nudges < MAX_NUDGES) {
+            st.nudges += 1;
+            pushUser("Reply in brief plain text, or call a tool to continue.", "(empty reply)");
+            return { messages: [] };
+          }
+          st.nudges = 0;
+          return finish(handBack());
+        }
+        st.nudges = 0;
         // A conversational answer is not an application-field answer or a completion claim.
         st.pending = [];
         return finish({ status: "ask_user", message: message.result.message, question: { kind: "click", text: "", optional: false } });
       }
+      st.nudges = 0;
       const results: any[] = []; const actions: any[] = []; const pend: any[] = [];
       let terminal: any = null; let ended = false; let refused = 0;
       for (const c of message.calls) {
@@ -263,28 +254,28 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
           put(...(await look(c.name, args, ctx)));
         } else if (c.name === "ask_user") {
           if (actions.length) { put("Not asked yet: the actions above run first. Ask again if you still need to.", true); ended = true; continue; }
-          const asked: any = checkQuestion({ ...args, question: message.result.message, actions: message.result.actions }, obs);
+          const qText = cut(args.question, 1000).trim() || message.result.message;
+          const qActions = Array.isArray(args.actions) && args.actions.length ? args.actions : message.result.actions;
+          const asked: any = checkQuestion({ ...args, question: qText, actions: qActions }, obs);
           if (asked.error) { put(asked.error, true); refused += 1; continue; }
           terminal = { kind: "ask", id: c.id, ...asked }; put("Asked the user. Their answer arrives with the next snapshot."); results.pop(); ended = true;
         } else if (c.name === "posting_gone") {
           if (actions.length) { put("Not executed: the actions above run first. Call posting_gone again afterwards.", true); ended = true; continue; }
-          terminal = { kind: "gone", id: c.id, reason: message.result.message }; ended = true;
+          terminal = { kind: "gone", id: c.id, reason: cut(args.reason, 1000).trim() || message.result.message }; ended = true;
         } else if (c.name === "done") {
           if (actions.length) { put("Not executed: the actions above run first. Call done again afterwards.", true); ended = true; continue; }
-          if (!inspectOnly) {
-            const missing = guards.missingRequired(obs, st.gs);
-            if (missing.length) { put(`Required fields are still unanswered: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill them from supported facts or ask the user before calling done.`, true); refused += 1; continue; }
-          }
+          const missing = guards.missingRequired(obs, st.gs);
+          if (missing.length) { put(`Required fields are still unanswered: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill them from supported facts or ask the user before calling done.`, true); refused += 1; continue; }
           // Optional applicability is a model decision (the full attention list is in the snapshot).
           // Refusing every blank optional follow-up forces questions even when its parent excludes it.
-          terminal = { kind: "done", id: c.id, summary: message.result.message }; results.push({ id: c.id, content: "", is_error: false }); results.pop(); ended = true;
+          terminal = { kind: "done", id: c.id, summary: cut(args.summary, 1000).trim() || message.result.message }; results.push({ id: c.id, content: "", is_error: false }); results.pop(); ended = true;
         } else if (ACTION_TOOLS.has(c.name)) {
           if (ALONE.has(ALIAS[c.name] ?? c.name) && actions.length) { put("Not executed: this call must be alone in its message; the actions above run first.", true); ended = true; continue; }
           const raws = rawActions(c.name, args, obs);
           if (raws.error) { put(raws.error, true); refused += 1; continue; }
           const items: any[] = []; const notes: string[] = []; let hold: any = null;
           for (const raw of raws.list) {
-            const verdict: any = guards.vet(raw, obs, st.gs, { inspectOnly });
+            const verdict: any = guards.vet(raw, obs, st.gs);
             if (verdict.ok) {
               const action = { ...verdict.action, observation_id: obs.observation_id, command_id: crypto.randomUUID() };
               items.push({ index: actions.length, action });
@@ -293,7 +284,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             } else if (verdict.error) { notes.push(`${describeAction(raw)} → refused: ${verdict.error}`); refused += 1; note("refused", { type: raw.type, ref: raw.ref, reason: cut(verdict.error, 160) }); }
             else if (verdict.ask) { hold = verdict.ask; break; }
           }
-          if (hold && !actions.length) { put(`This action needs the user's input: ${hold.text ?? JSON.stringify(hold)}. Ask with ask_user and your own message/actions JSON.`, true); refused += 1; continue; }
+          if (hold && !actions.length) { put(`This action needs the user's input: ${hold.text ?? JSON.stringify(hold)}. Ask with ask_user.`, true); refused += 1; continue; }
           if (items.length) pend.push({ id: c.id, kind: "action", items: items.map(({ index, action }) => ({ index, desc: describeAction(action), ref: action.ref, type: action.type, value: action.text })), notes });
           else put(notes.join("\n") || "Refused.", true);
         } else { put(`Unknown tool "${cut(c.name, 60)}".`, true); refused += 1; }
@@ -306,15 +297,14 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
         st.carry = results; st.pending = [{ kind: "ask", id: terminal.id, ref: terminal.question.ref ?? null, question: terminal.question.text }]; st.refusedTurns = 0;
         const q = terminal.question;
         st.asked.push(questionKey(q.text)); if (q.kind === "question") st.questions += 1;
-        return finish({ status: "ask_user", message: message.result.message, question: q });
+        return finish({ status: "ask_user", message: message.result.message || q.text, question: q });
       }
       if (terminal?.kind === "gone") {
         st.carry = results; st.pending = [{ kind: "done", id: terminal.id }]; st.refusedTurns = 0;
-        return finish({ status: "failed", failure_code: "posting_gone", message: message.result.message });
+        return finish({ status: "failed", failure_code: "posting_gone", message: terminal.reason });
       }
       if (terminal?.kind === "done") {
         st.carry = results; st.pending = [{ kind: "done", id: terminal.id }]; st.refusedTurns = 0;
-        if (inspectOnly) return finish({ status: "ask_user", message: terminal.summary || message.result.message, question: { kind: "click", text: "", optional: false } });
         return finish({ status: "ready_for_review", message: terminal.summary || message.result.message });
       }
       // Only looks, refusals and errors: the model sees the results and decides again, within this step.
@@ -352,18 +342,16 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     let text = cut(args.question, 1000).trim();
     if (!text) return { error: "ask_user needs the question text." };
     const target = args.ref ? obs.elements.find((e: any) => e.ref === args.ref) : null;
-    if (!target && !ctxInspect()) return { error: "ask_user needs the current field ref (or one option ref for a choice group). Read the snapshot and call again with ref; otherwise answers/skips cannot bind to the field." };
+    if (!target) return { error: "ask_user needs the current field ref (or one option ref for a choice group). Read the snapshot and call again with ref; otherwise answers/skips cannot bind to the field." };
     if (guards.botCheck(target) || /\b(?:not a (?:robot|bot)|captcha|human verification)\b/i.test(text)) return { error: "A human check is the user's to complete on the page; leave it and continue with the rest of the form." };
     if (st.asked.includes(questionKey(text))) { const given = st.answered.find((a: any) => a.key === questionKey(text)); return { error: given ? `You already asked this and the user answered: ${JSON.stringify(given.answer)}. Use it.` : "You already asked this. Do not ask the same question again; leave the field or call done." }; }
     if (target && guards.isSkipped(st.gs, obs, target)) return { error: "The user said they will fill that themselves on the page: do not ask about it." };
     if (target && st.gs.answers[guards.identity(obs, target)] !== undefined) return { error: `The user already answered this: ${JSON.stringify(st.gs.answers[guards.identity(obs, target)])}. Use it.` };
-    if (target && !guards.open(obs, target) && !target.invalid && !target.error && !ctxInspect()) return { error: "That field already has an answer. Look at the snapshot, then continue with what is still empty." };
+    if (target && !guards.open(obs, target) && !target.invalid && !target.error) return { error: "That field already has an answer. Look at the snapshot, then continue with what is still empty." };
     if (st.questions >= MAX_QUESTIONS) return { error: "Enough questions were asked in this run. Leave the remaining fields for the user's review and call done." };
     const actions = [...new Set(Array.isArray(args.actions) ? args.actions.filter((a: any) => ["draft", "skip", "on_page"].includes(a) && !(a === "skip" && target?.required === true)) : [])];
     return { question: { kind: "question", ref: target ? target.ref : null, text, optional: target?.required === false, actions } };
   };
-  let inspecting = false;
-  const ctxInspect = () => inspecting;
 
   const findSavedAnswerId = (value: string): number | null => {
     const trimmed = String(value ?? "").trim();
@@ -412,13 +400,11 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
   const planStep = async (inputBody: any) => {
     let body = inputBody;
     const obs = normalizeObservation(body.observation);
-    // The "Draft it for me" button on the agent's question: tells the model to draft that one field regardless of the "Let AI answer" switch.
+    // The "Draft it for me" button on the agent's question: tells the model to draft that one field regardless of the "Auto-draft open-ended answers" switch.
     if (String(body.user_reply ?? "") === DRAFT_REQUEST) {
       body = { ...body, user_reply: undefined, user_message: "Draft it for me: write the answer to the pending question yourself, as long as the question asks for, using only my profile, the job and my earlier answers. Never invent legal status, consent, employment, numbers or qualifications; ask if a needed fact is missing." };
     }
     if (body.user_message) st.instructions.push(cut(body.user_message, 2000));
-    const inspectOnly = body.inspect_only === true;
-    inspecting = inspectOnly;
     st.typedLinks = addTypedLinks(addTypedLinks(st.typedLinks, body.user_message), body.user_reply);
     const base = { guarded_commands: true, agent_engine: "ai_led", session_id: st.session, actions: [], filled: Object.values(st.filled), unresolved: [], question: null, ...(vision ? { want_screenshot: true, annotate_screenshot: true } : {}) };
     // A sign-in or verification the user must do on the page is theirs; the model is not asked.
@@ -447,7 +433,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
       memory: { answers: st.answered, instructions: [...new Set(st.instructions)] } });
     st.observed = signatures; st.pageContext = pageContext; st.pageText = obs.text;
     pushUser(text, stubText(obs), results);
-    const ctx = { obs, body, inspectOnly, turns: 0, shot: Boolean(stuck) };
+    const ctx = { obs, body, turns: 0, shot: Boolean(stuck) };
     const final = await buildGraph(ctx).invoke({ messages: [], outcome: null, turns: 0 });
     const plan = final.outcome;
     compact();

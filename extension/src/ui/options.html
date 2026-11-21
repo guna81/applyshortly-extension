@@ -133,13 +133,18 @@
         <input id="agentVision" type="checkbox" class="switch" role="switch">
       </label>
       <label class="switch-row">
+        <span>Auto apply
+          <small class="muted">When enabled, automatically clicks Submit once every required field is answered, after a 3-second countdown you can cancel. Off: the agent stops for you to review and submit.</small></span>
+        <input id="autoApply" type="checkbox" class="switch" role="switch">
+      </label>
+      <label class="switch-row">
         <span>Fill optional fields
           <small class="muted">On: the agent fills optional fields from your profile and saved answers, and asks you about the rest once (you can skip). Off: it fills and asks about required fields only, and leaves every optional field for you.</small></span>
         <input id="fillOptional" type="checkbox" class="switch" role="switch">
       </label>
       <label class="switch-row">
-        <span>Let AI answer questions it can't find
-          <small class="muted">When enabled, the selected AI provider drafts answers missing from your profile and answer bank. Drafts are always marked “Check”. You can still request a draft when this is off.</small></span>
+        <span>Auto-draft open-ended answers
+          <small class="muted">When enabled, the selected AI provider automatically drafts open-ended and long-form answers from your profile and the job description. Factual questions are never invented. You can still request a draft per question when this is off.</small></span>
         <input id="aiDrafts" type="checkbox" class="switch" role="switch">
       </label>
       <label class="switch-row">
