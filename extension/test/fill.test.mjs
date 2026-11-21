@@ -1012,3 +1012,18 @@ test("chooseOption maps a length of time to the option that is the same number o
   assert.equal(F.chooseOption(opts, "45 days"), null);
   assert.equal(F.chooseOption(opts, "30 days", { strict: true }), null);
 });
+
+test("Google Forms ARIA checkbox list groups options under the heading and detects required", () => {
+  const { doc, F } = page(`<div role="listitem">
+    <div id="q1" role="heading" aria-level="3"><span>What do you expect to learn?</span><span aria-label="Required question"> *</span></div>
+    <div role="list" aria-labelledby="q1">
+      <div role="listitem"><div role="checkbox" aria-label="Basics of AI" aria-checked="false" tabindex="0"></div></div>
+      <div role="listitem"><div role="checkbox" aria-label="Generative AI" aria-checked="true" tabindex="0"></div></div>
+    </div></div>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.equal(fields.length, 1);
+  assert.equal(fields[0].kind, "checkbox");
+  assert.equal(fields[0].label, "What do you expect to learn?");
+  assert.equal(fields[0].required, true);
+  assert.deepEqual(plain(fields[0].options.map((o) => o.text)), ["Basics of AI", "Generative AI"]);
+});

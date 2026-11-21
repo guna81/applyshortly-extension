@@ -1,6 +1,6 @@
 // Local deterministic rule-based form agent (0 LLM calls, 0 server step calls).
 // Self-contained engine under src/rule-based/ (zero imports from src/agent-based/).
-import { choiceGroup, choiceState, isChoiceOption, matchChoice, optionsOf, scanFields } from "../page-control/commands.js";
+import { choiceState, isChoiceOption, matchChoice, optionsOf, scanFields } from "../page-control/commands.js";
 import { hasApplicationFields } from "../page-control/loop.js";
 import { durationDays, factMatches, profileFact } from "../shared/profile-facts.js";
 
@@ -593,9 +593,9 @@ export function ruleAgent(
       if (st.asked.has(askKey)) continue;
       st.asked.add(askKey);
 
-      const isChoice = isChoiceOption(el) || el.role === "radio";
+      const isChoice = isChoiceOption(el) || el.role === "radio" || (el.role === "checkbox" && Boolean(el.group));
       const choices = isChoice
-        ? choiceGroup(obs.elements, el).map((m: any) => m.name).filter(Boolean)
+        ? optionsOf(obs.elements, el).map((m: any) => m.name).filter(Boolean)
         : Array.isArray(el.options) ? el.options : [];
       const summary = flushFilledSummary();
       st.pending = { kind: "ask", ref: el.ref, question: label, label };

@@ -10,7 +10,7 @@
   // Custom dropdowns that aren't a <select> or a Google Forms listbox: Angular Material's mat-select
   // and the ARIA combobox / listbox-popup pattern. Their options only exist while open.
   const CUSTOM_DROPDOWN = 'mat-select, [role="combobox"], [aria-haspopup="listbox"]';
-  const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=url], input[type=number], input[type=date], input:not([type]), textarea, [role="textbox"][contenteditable="true"], [role="textbox"][contenteditable="plaintext-only"]';
+  const TEXT_INPUT = 'input[type=text], input[type=email], input[type=tel], input[type=phone], input[type=url], input[type=number], input[type=date], input:not([type]), textarea, [role="textbox"][contenteditable="true"], [role="textbox"][contenteditable="plaintext-only"]';
   const PICK_PLACEHOLDER = /^[\s-]*(select|choose|please select|pick)\b/i;
   // The "nothing chosen" entry of a list: "Select…", "--", Zoho's "-None-".
   const EMPTY_OPTION = /^(select|choose|please select|-+|-+\s*none\s*-+)$/i;
@@ -40,10 +40,30 @@
       .trim();
   }
 
-  function textOfIds(doc, ids) {
+  function rootOf(el) {
+    const r = el?.getRootNode?.();
+    return r && typeof r.querySelector === "function" ? r : el?.ownerDocument ?? document;
+  }
+
+  function byId(root, id) {
+    if (!root || !id) return null;
+    return root.getElementById?.(id) ?? root.querySelector?.(`[id="${CSS.escape(id)}"]`) ?? root.ownerDocument?.getElementById?.(id) ?? null;
+  }
+
+  function domRoots(root) {
+    const out = [root];
+    for (let i = 0; i < out.length; i++) {
+      for (const el of out[i].querySelectorAll("*")) {
+        if (el.shadowRoot && el.tagName !== "JOBHUNT-AUTOFILL-PANEL") out.push(el.shadowRoot);
+      }
+    }
+    return out;
+  }
+
+  function textOfIds(root, ids) {
     return ids
       .split(/\s+/)
-      .map((id) => doc.getElementById(id)?.textContent ?? "")
+      .map((id) => byId(root, id)?.textContent ?? "")
       .join(" ");
   }
 
@@ -68,13 +88,13 @@
   }
 
   function rawLabel(el) {
-    const doc = el.ownerDocument;
+    const root = rootOf(el);
     // Greenhouse gives the file input a generic "Attach" label; the actual question
     // and required flag belong to the containing upload group.
     if (el.matches('input[type="file" i]')) {
       const group = el.closest('[role="group"][aria-labelledby]');
       if (group && group.querySelectorAll('input[type="file" i]').length === 1) {
-        const label = cleanLabel(textOfIds(doc, group.getAttribute("aria-labelledby")));
+        const label = cleanLabel(textOfIds(root, group.getAttribute("aria-labelledby")));
         if (label) return label;
       }
     }
@@ -84,12 +104,12 @@
     if (rippling) return rippling.label;
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
-      const t = cleanLabel(textOfIds(doc, labelledBy));
+      const t = cleanLabel(textOfIds(root, labelledBy));
       if (t) return t;
     }
     const id = el.getAttribute("id");
     if (id) {
-      const forLabel = doc.querySelector(`label[for="${CSS.escape(id)}"]`);
+      const forLabel = root.querySelector(`label[for="${CSS.escape(id)}"]`);
       if (forLabel && cleanLabel(forLabel.textContent)) return cleanLabel(forLabel.textContent);
     }
     const wrapping = el.closest("label");
@@ -97,7 +117,7 @@
       const ids = wrapping.getAttribute("aria-labelledby");
       if (ids) {
         const caption = ids.split(/\s+/).filter((id) => /-label$/.test(id));
-        const text = cleanLabel(textOfIds(doc, caption.join(" ")));
+        const text = cleanLabel(textOfIds(root, caption.join(" ")));
         if (text) return text;
       }
       const clone = wrapping.cloneNode(true);
@@ -232,10 +252,16 @@
 
   function isRequired(el) {
     if (el.required || el.getAttribute("aria-required") === "true" || el.classList?.contains("required")) return true;
+    const root = rootOf(el);
     if (el.matches('input[type="file" i]')) {
       const group = el.closest('[role="group"][aria-labelledby]');
       if (group && group.querySelectorAll('input[type="file" i]').length === 1 &&
-          (group.getAttribute("aria-required") === "true" || /\*/.test(textOfIds(el.ownerDocument, group.getAttribute("aria-labelledby"))))) return true;
+          (group.getAttribute("aria-required") === "true" || /\*/.test(textOfIds(root, group.getAttribute("aria-labelledby"))))) return true;
+    }
+    const id = el.getAttribute?.("id");
+    if (id) {
+      const forLabel = root.querySelector(`label[for="${CSS.escape(id)}"]`);
+      if (forLabel && /\*\s*$/.test(forLabel.textContent ?? "")) return true;
     }
     if (ashbyField(el)?.required) return true;
     if (ripplingField(el)?.required) return true;
@@ -244,8 +270,13 @@
     const cf7 = el.closest('.wpcf7-form-control-wrap');
     const cf7Label = cf7?.closest('label') || cf7?.parentElement?.querySelector('label');
     if (cf7 && /\*/.test(cf7Label?.textContent ?? '')) return true;
-    const item = el.closest('[role="listitem"]');
-    if (item?.querySelector('[aria-label="Required question"]')) return true;
+    for (let item = el.closest('[role="listitem"]'); item; item = item.parentElement?.closest('[role="listitem"]')) {
+      if (item.querySelector('[aria-label="Required question"]')) return true;
+    }
+    const labelledBy = el.getAttribute?.("aria-labelledby");
+    if (labelledBy && el.matches?.('[role="list"], [role="group"], [role="radiogroup"]')) {
+      if (/\*\s*$/.test(textOfIds(root, labelledBy).trim())) return true;
+    }
     return starredLabelAbove(el) || starredGroupAbove(el);
   }
 
@@ -277,8 +308,8 @@
   }
 
   function isVisible(el, checkLayout) {
-    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
-      if (n.hidden) return false;
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement ?? n.getRootNode?.().host) {
+      if (n.hidden || n.tagName === "JOBHUNT-AUTOFILL-PANEL") return false;
       const style = n.ownerDocument.defaultView?.getComputedStyle(n);
       if (style && (style.display === "none" || style.visibility === "hidden")) return false;
     }
@@ -310,7 +341,11 @@
     return Boolean(r && (r.width || r.height) && (r.right < -1000 || r.bottom < -1000));
   }
 
-  function collectFields(doc, { checkLayout = true } = {}) {
+  function collectFields(doc, { checkLayout = true, shadow = true } = {}) {
+    if (shadow) {
+      const roots = domRoots(doc);
+      if (roots.length > 1) return roots.flatMap((root) => collectFields(root, { checkLayout, shadow: false }));
+    }
     const fields = [];
     const visible = (el) => applicationControl(el) && isVisible(el, checkLayout);
 
@@ -330,6 +365,9 @@
     }
     for (const el of doc.querySelectorAll("select")) {
       if (!visible(el) || !isEditable(el)) continue;
+      // Radix/headless UI keeps a visually-hidden <select aria-hidden="true" tabindex="-1"> beside its combobox button.
+      if (el.matches('select[aria-hidden="true"][tabindex="-1"]') &&
+          el.parentElement?.querySelector('[role="combobox"]')) continue;
       const options = [...el.options].filter((o) => o.value !== "").map((o) => ({ text: cleanLabel(o.text), el: o }));
       fields.push({ kind: "select", el, label: labelOf(el), required: isRequired(el), options });
     }
@@ -364,17 +402,20 @@
     const seenCheckboxGroups = new Set();
     for (const el of doc.querySelectorAll('input[type=checkbox], [role="checkbox"]')) {
       if (!visible(el)) continue;
-      // The backing checkbox of a yes/no question isn't a separate consent field.
+      // The backing checkbox of a yes/no question or ARIA checkbox widget isn't a separate consent field.
       if (el.closest(".ashby-application-form-input-yesno")) continue;
+      if (el.matches('input[type="checkbox"][aria-hidden="true"][tabindex="-1"]') &&
+          el.parentElement?.querySelector('[role="checkbox"]')) continue;
       const cf7 = el.closest('.wpcf7-checkbox');
       const ashby = el.closest('.ashby-application-form-input-checkbox-group');
       const named = el.name ? [...(el.form ?? doc).querySelectorAll('input[type=checkbox]')]
         .filter((other) => other.name === el.name && visible(other)) : [];
-      const semantic = el.closest('fieldset, [role="group"][aria-labelledby], [role="group"][aria-label]');
-      const candidates = semantic ? [...semantic.querySelectorAll('input[type=checkbox]')].filter(visible) : [];
+      const semantic = el.closest('fieldset, [role="group"][aria-labelledby], [role="group"][aria-label], [role="list"][aria-labelledby]');
+      const candidates = semantic ? [...semantic.querySelectorAll('input[type=checkbox], [role="checkbox"]')].filter(visible) : [];
       // A fieldset headed "Legal" may hold several independent acknowledgements.
       const semanticInputs = candidates.length > 1 && (
         candidates.every((input) => input.name && input.name === candidates[0].name) ||
+        semantic.matches('[role="list"][aria-labelledby]') ||
         /\?|\b(?:select|choose|pick)\b|all that apply/i.test(labelOf(semantic))
       ) ? candidates : [];
       let common = named.length > 1 ? named[0].parentElement : null;
@@ -384,12 +425,18 @@
       if (group) {
         if (seenCheckboxGroups.has(group)) continue;
         seenCheckboxGroups.add(group);
-        const inputs = group === shared ? semanticInputs.length > 1 ? semanticInputs : named : [...group.querySelectorAll('input[type=checkbox]')].filter(visible);
-        const options = inputs.map((input) => ({ text: labelOfOption(input), el: input }));
+        const inputs = group === shared ? semanticInputs.length > 1 ? semanticInputs : named : [...group.querySelectorAll('input[type=checkbox], [role="checkbox"]')].filter(visible);
+        const options = inputs.map((input) => ({ text: input.getAttribute("role") === "checkbox" ? optionText(input) : labelOfOption(input), el: input }));
         fields.push({ kind: "checkbox", el, label: ashby || semantic === group ? labelOf(group) : nearbyLabel(shared ?? el) || textAbove(shared ?? el), required: isRequired(group) || inputs.some(isRequired), options });
         continue;
       }
-      fields.push({ kind: "checkbox", el, label: labelOf(el) || optionText(el), required: isRequired(el) });
+      let chkLabel = labelOf(el) || optionText(el);
+      if ((!chkLabel || /^on$/i.test(chkLabel)) && el.parentElement &&
+          el.parentElement.querySelectorAll('input:not([type=hidden]):not([aria-hidden="true"]), select, textarea, [role="checkbox"]').length === 1) {
+        const t = cleanLabel(el.parentElement.textContent);
+        if (t && t.length <= 300) chkLabel = t;
+      }
+      fields.push({ kind: "checkbox", el, label: chkLabel, required: isRequired(el) });
     }
     for (const el of doc.querySelectorAll("input[type=file]")) {
       if (el.disabled || !applicationControl(el)) continue;
@@ -404,9 +451,14 @@
       fields.push({ kind: "dropdown", el, label: labelOf(el), required: isRequired(el) });
     }
     const dropdowns = fields.filter((f) => f.kind === "dropdown").map((f) => f.el);
-    for (const el of doc.querySelectorAll(CUSTOM_DROPDOWN)) {
+    for (const el of doc.querySelectorAll(`${CUSTOM_DROPDOWN}, button[aria-haspopup="menu"][id]`)) {
       const input = selectLikeInput(el);
       if (!visible(el) || el.closest("select")) continue;
+      if (el.matches('button[aria-haspopup="menu"][id]') && !el.matches(CUSTOM_DROPDOWN)) {
+        // Only treat a menu button as a form dropdown when explicitly tied to a <label for="id">.
+        const id = el.getAttribute("id");
+        if (!id || !doc.querySelector(`label[for="${CSS.escape(id)}"]`)) continue;
+      }
       if (input ? el.disabled : !isEditable(el) || el.matches("input, textarea, select")) continue;
       if (dropdowns.some((d) => d === el || d.contains(el) || el.contains(d))) continue;
       dropdowns.push(el);
@@ -479,18 +531,18 @@
 
   /** The label the page attaches to a custom dropdown ("" when it only shows its value). */
   function explicitDropdownLabel(el) {
-    const doc = el.ownerDocument;
+    const root = rootOf(el);
     const rippling = ripplingField(el);
     if (rippling) return rippling.label;
     const ids = (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean);
-    const own = ids.map((id) => doc.getElementById(id)).filter((n) => n && !el.contains(n));
+    const own = ids.map((id) => byId(root, id)).filter((n) => n && !el.contains(n));
     const fromIds = cleanLabel(own.map((n) => n.textContent).join(" "));
     if (fromIds) return fromIds;
     // "Select" / "Search" are the control's prompt (Rippling), not its question.
     const aria = cleanLabel(el.getAttribute("aria-label") ?? "");
     if (aria && !PICK_PLACEHOLDER.test(aria) && !/^search$/i.test(aria)) return aria;
     const id = el.getAttribute("id");
-    const forLabel = id && doc.querySelector(`label[for="${CSS.escape(id)}"]`);
+    const forLabel = id && root.querySelector(`label[for="${CSS.escape(id)}"]`);
     if (forLabel && cleanLabel(forLabel.textContent)) return cleanLabel(forLabel.textContent);
     const tabular = zohoTabular(el);
     if (tabular) return tabular.label;
@@ -672,13 +724,17 @@
   function openOptions(field, before = null) {
     const el = field.el;
     const doc = el.ownerDocument;
+    const root = rootOf(el);
     // Some libraries (Rippling) link nothing but name the list after the control: "field-5" → "field-5-list".
     const named = el.id ? [`${el.id}-list`, `${el.id}-listbox`] : [];
     const owned = [...["aria-controls", "aria-owns"].map((a) => el.getAttribute(a)).filter(Boolean), ...named]
-      .map((id) => doc.getElementById(id)).filter(Boolean);
-    const scopes = owned.length ? owned : [doc];
+      .map((id) => byId(root, id)).filter(Boolean);
+    const scopes = owned.length ? owned : [...new Set([root, doc])];
+    const selector = el.getAttribute("aria-haspopup") === "menu"
+      ? '[role="option"], mat-option, [role="menuitem"], [role="menuitemcheckbox"]'
+      : '[role="option"], mat-option';
     const options = scopes
-      .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option')])
+      .flatMap((s) => [...s.querySelectorAll(selector)])
       .filter((o) => isVisible(o, field.layout))
       .map((o) => ({ text: optionText(o), el: o }));
     return options.length || !before ? options : appearedOptions(before, doc, field.layout);
@@ -814,8 +870,8 @@
 
   function labelOfOption(radio) {
     const id = radio.getAttribute("id");
-    const doc = radio.ownerDocument;
-    const label = (id && doc.querySelector(`label[for="${CSS.escape(id)}"]`)) || radio.closest("label");
+    const root = rootOf(radio);
+    const label = (id && root.querySelector(`label[for="${CSS.escape(id)}"]`)) || radio.closest("label");
     return cleanLabel(label?.textContent || radio.getAttribute("aria-label") || radio.value);
   }
 
@@ -891,11 +947,12 @@
   }
 
   function ownedLists(el) {
+    const root = rootOf(el);
     return ["aria-controls", "aria-owns"]
       .map((a) => el.getAttribute(a))
       .filter(Boolean)
       .flatMap((ids) => ids.split(/\s+/))
-      .map((id) => el.ownerDocument.getElementById(id))
+      .map((id) => byId(root, id))
       .filter(Boolean);
   }
 
@@ -1212,9 +1269,9 @@
    */
   function findSubmitButton(doc, fields, { checkLayout = true, includeDisabled = false } = {}) {
     const forms = new Set(fields.map((f) => f.el.closest?.("form")).filter(Boolean));
-    const scope = forms.size === 1 ? [...forms][0] : doc;
+    const scopes = forms.size === 1 ? [[...forms][0]] : domRoots(doc);
     const usable = (el) => isVisible(el, checkLayout) && (includeDisabled || (!el.disabled && el.getAttribute("aria-disabled") !== "true"));
-    const candidates = [...scope.querySelectorAll('button, input[type=submit], [role="button"]')].filter((el) => {
+    const candidates = scopes.flatMap((scope) => [...scope.querySelectorAll('button, input[type=submit], [role="button"]')]).filter((el) => {
       if (!usable(el) || el.type === "reset") return false;
       const text = buttonText(el);
       const formSend = forms.size === 1 && forms.has(el.form) &&

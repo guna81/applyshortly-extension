@@ -1126,6 +1126,17 @@
       "AgentStepRequest": {
         "additionalProperties": false,
         "properties": {
+          "allow_drafts": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Drafts"
+          },
           "application_id": {
             "anyOf": [
               {
@@ -1136,6 +1147,17 @@
               }
             ],
             "title": "Application Id"
+          },
+          "auto_apply": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Apply"
           },
           "extension_engine": {
             "anyOf": [
@@ -1151,6 +1173,17 @@
               }
             ],
             "title": "Extension Engine"
+          },
+          "fill_optional": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill Optional"
           },
           "guarded_commands": {
             "const": true,
@@ -1948,9 +1981,27 @@
             "title": "Answer",
             "type": "string"
           },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
           "question_pattern": {
             "title": "Question Pattern",
             "type": "string"
+          },
+          "question_variants": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Question Variants",
+            "type": "array"
           },
           "tags": {
             "items": {
@@ -1958,6 +2009,11 @@
             },
             "title": "Tags",
             "type": "array"
+          },
+          "times_used": {
+            "default": 0,
+            "title": "Times Used",
+            "type": "integer"
           }
         },
         "required": [
@@ -1966,6 +2022,29 @@
           "tags"
         ],
         "title": "ExtensionAnswer",
+        "type": "object"
+      },
+      "ExtensionAnswerSearchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 5,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ExtensionAnswerSearchRequest",
         "type": "object"
       },
       "ExtensionAnswerSuggestRequest": {
@@ -2235,6 +2314,11 @@
             ],
             "title": "Note"
           },
+          "save_answers": {
+            "default": false,
+            "title": "Save Answers",
+            "type": "boolean"
+          },
           "unresolved_fields": {
             "items": {
               "additionalProperties": true,
@@ -2464,6 +2548,11 @@
             },
             "title": "Answers",
             "type": "array"
+          },
+          "answers_total": {
+            "default": 0,
+            "title": "Answers Total",
+            "type": "integer"
           },
           "date_of_birth": {
             "anyOf": [
@@ -3072,7 +3161,7 @@
     },
     "/api/extension/agent/step": {
       "post": {
-        "description": "One observe \u2192 decide round trip. Known answers are typed without a model call; the model\nis asked only to navigate and for questions nothing else could answer.",
+        "description": "Run one observation through the pinned form engine.",
         "operationId": "extensionAgentStep",
         "parameters": [
           {
@@ -3294,6 +3383,69 @@
           }
         },
         "summary": "Ai Delete Provider",
+        "tags": [
+          "extension"
+        ]
+      }
+    },
+    "/api/extension/answers/search": {
+      "post": {
+        "operationId": "extensionSearchAnswers",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionAnswerSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtensionAnswer"
+                  },
+                  "title": "Response Extensionsearchanswers",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Extension Search Answers",
         "tags": [
           "extension"
         ]
@@ -3608,7 +3760,6 @@
     },
     "/api/extension/assistant/fill": {
       "post": {
-        "description": "Chat turn for the autofill panel's Assistant tab: a reply plus validated field values.\n\nThe fields come from the page the user is filling; nothing is stored, and the extension\nwrites accepted values into the page form for the user to review and submit.",
         "operationId": "extensionAssistFill",
         "parameters": [
           {

@@ -96,6 +96,18 @@ test("a filled field is not overwritten, except by the agent's own earlier write
   assert.equal(vet(ctx, filled, { type: "type", ref: "e1", text: "Asha K" }).ok, true);
 });
 
+test("a dropdown with a form default can be changed unless the user edited it", () => {
+  const ctx = setup();
+  const defaults = page([
+    el("c1", "combobox", "Currency", { value: "US Dollar", options: ["US Dollar", "INRIndian Rupee"], expanded: false, user_edited: false }),
+    el("f1", "select", "Frequency", { value: "Monthly", options: ["Monthly", "Annually"], user_edited: false }),
+    el("c2", "combobox", "Currency", { value: "US Dollar", options: ["US Dollar", "INRIndian Rupee"], expanded: false, user_edited: true }),
+  ]);
+  assert.equal(vet(ctx, defaults, { type: "select", ref: "c1", text: "INRIndian Rupee" }).ok, true);
+  assert.equal(vet(ctx, defaults, { type: "select", ref: "f1", text: "Annually" }).ok, true);
+  assert.match(vet(ctx, defaults, { type: "select", ref: "c2", text: "INRIndian Rupee" }).error, /overwrite/i);
+});
+
 // Changed 2026-11-18: the guards no longer fix the model's choices (no label-echo or number-box rules, no rewriting a write into
 // another tool). What the model wrote goes to the page as written; the read-back tells it whether the page kept it.
 test("the model's write goes out as written: no number extraction, no tool rewriting", () => {

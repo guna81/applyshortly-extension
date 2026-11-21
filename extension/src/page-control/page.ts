@@ -47,6 +47,16 @@
   const clean = (s) => F.cleanLabel(s ?? "");
   const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+  const rootOf = (el) => {
+    const r = el?.getRootNode?.();
+    return r && typeof r.querySelector === "function" ? r : el?.ownerDocument ?? document;
+  };
+  const byId = (el, id) => {
+    if (!el || !id) return null;
+    const r = rootOf(el);
+    return r.getElementById?.(id) ?? r.querySelector?.(`[id="${CSS.escape(id)}"]`) ?? el.ownerDocument?.getElementById?.(id) ?? null;
+  };
+
   /** The document plus every open shadow root in it, so web-component forms are seen too. */
   function roots(doc) {
     const out = [doc];
@@ -166,7 +176,7 @@
     const group = el.closest('[role="group"][aria-labelledby], fieldset');
     const ids = group?.getAttribute?.("aria-labelledby");
     const text = ids
-      ? ids.split(/\s+/).map((id) => el.ownerDocument.getElementById(id)?.textContent ?? "").join(" ")
+      ? ids.split(/\s+/).map((id) => byId(el, id)?.textContent ?? "").join(" ")
       : group?.querySelector?.("legend")?.textContent ?? "";
     const name = clip(clean(text), 500);
     return name ? { name, required: /\*\s*$/.test(text.trim()) } : { name: label, required: false };
@@ -253,7 +263,13 @@
     }
     if (field.kind === "checkbox") {
       if (field.options) {
-        return field.options.map((o) => base(o.el, { role: "checkbox", name: clip(o.text, 500), group: label, checked: Boolean(o.el.checked), required }));
+        return field.options.map((o) => base(o.el, {
+          role: "checkbox",
+          name: clip(o.text, 500),
+          group: label,
+          checked: o.el.getAttribute("role") === "checkbox" ? o.el.getAttribute("aria-checked") === "true" : Boolean(o.el.checked),
+          required,
+        }));
       }
       const checked = el.getAttribute("role") === "checkbox" ? el.getAttribute("aria-checked") === "true" : Boolean(el.checked);
       return [base(el, { role: "checkbox", name: label, checked, required })];
@@ -280,7 +296,7 @@
         .map((a) => el.getAttribute(a))
         .filter(Boolean)
         .flatMap((ids) => ids.split(/\s+/))
-        .map((id) => doc.getElementById(id))
+        .map((id) => byId(el, id))
         .filter(Boolean),
       ...pac,
     ])];
@@ -307,7 +323,16 @@
    */
   function listedOptions(el) {
     const options = ownedLists(el).flatMap((list) => [...list.querySelectorAll('[role="option"]')]);
-    return answerTexts(options.filter((o) => o.getAttribute("aria-disabled") !== "true").map((o) => o.getAttribute("aria-label") || o.textContent));
+    if (options.length) {
+      return answerTexts(options.filter((o) => o.getAttribute("aria-disabled") !== "true").map((o) => o.getAttribute("aria-label") || o.textContent));
+    }
+    const backing = el.matches?.('[role="combobox"]')
+      ? el.parentElement?.querySelector?.(':scope > select[aria-hidden="true"][tabindex="-1"]')
+      : null;
+    if (backing) {
+      return answerTexts([...backing.options].filter((o) => o.value !== "" && !o.disabled).map((o) => o.textContent));
+    }
+    return [];
   }
 
   /** Date/time inputs and rich-text editors, which fill.js leaves to the user. */
@@ -361,7 +386,7 @@
     let required = false;
     for (let node = parent, depth = 0; node && node !== document.body && depth < 4 && !label; node = node.parentElement, depth++) {
       const ids = node.getAttribute?.("aria-labelledby");
-      const named = ids ? ids.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ") : node.getAttribute?.("aria-label") || "";
+      const named = ids ? ids.split(/\s+/).map((id) => byId(node, id)?.textContent ?? "").join(" ") : node.getAttribute?.("aria-label") || "";
       const prior = [...(node.parentElement?.children ?? [])].slice(0, [...(node.parentElement?.children ?? [])].indexOf(node)).reverse();
       const heading = node.matches?.("fieldset") ? node.querySelector("legend") : prior.find((n) => n.matches?.("label, legend, h1, h2, h3, h4, h5, h6, p, [class*=title i], [class*=label i], [class*=question i]") && !n.querySelector?.("button, input, select, textarea"));
       const raw = String(named || heading?.textContent || "");
@@ -615,7 +640,7 @@
       }
     };
     for (const root of roots(doc)) {
-      const fields = F.collectFields(root, { checkLayout }).filter((f) => f.kind !== "picker" && (!dialog || contains(dialog, f.el)));
+      const fields = F.collectFields(root, { checkLayout, shadow: false }).filter((f) => f.kind !== "picker" && (!dialog || contains(dialog, f.el)));
       for (const field of fields) push(fieldElements(field));
       push(extraTextElements(root, dialog, checkLayout));
       push(disabledElements(root, dialog, checkLayout));
@@ -724,7 +749,7 @@
     if (!el) return null;
     revealIfHidden(el, { block: "center", inline: "center" });
     const target = el.matches?.("input[type=radio], input[type=checkbox]") && !isVisible(el, true)
-      ? (el.closest("label") ?? el.ownerDocument.querySelector(`label[for="${CSS.escape(el.id)}"]`) ?? el)
+      ? (el.closest("label") ?? (el.id ? rootOf(el).querySelector(`label[for="${CSS.escape(el.id)}"]`) : null) ?? el)
       : el;
     const r = target.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, width: r.width, height: r.height };
@@ -836,9 +861,12 @@
     const owned = ownedLists(el);
     revealPacLists(el, owned);
     const scopes = owned.length ? owned : roots(doc);
+    const selector = el.getAttribute("aria-haspopup") === "menu"
+      ? '[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location, [role="menuitem"], [role="menuitemcheckbox"]'
+      : '[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location';
     let found = [...new Set(
       scopes
-        .flatMap((s) => [...s.querySelectorAll('[role="option"], mat-option, li[id*="option" i], .pac-item, .dropdown-location')])
+        .flatMap((s) => [...s.querySelectorAll(selector)])
         .filter((o) => isVisible(o, checkLayout) && o.getAttribute("aria-disabled") !== "true"),
     )];
     if (!found.length && shownBefore) found = F.appearedOptions(shownBefore, doc, checkLayout).map((o) => o.el);
@@ -1029,7 +1057,7 @@
     const chips = selectedChips(el);
     if (chips) return clip(chips, 2000);
     const root = el.getRootNode?.() ?? document;
-    const field = F.collectFields(root.nodeType === 9 || root.host ? root : document, { checkLayout: false })
+    const field = F.collectFields(root.nodeType === 9 || root.host ? root : document, { checkLayout: false, shadow: false })
       .find((f) => f.el === el || f.options?.some?.((o) => o.el === el));
     // A rich-text box (contenteditable) has no `value`: what it holds is its text.
     const rich = el.isContentEditable || el.hasAttribute?.("contenteditable");
@@ -1107,7 +1135,7 @@
     if (find(ref)) return true;
     const matches = [];
     for (const root of roots(document)) {
-      for (const field of F.collectFields(root, { checkLayout: false })) {
+      for (const field of F.collectFields(root, { checkLayout: false, shadow: false })) {
         for (const item of fieldElements(field)) {
           if (item.name === name && item.role === role) matches.push(item.ref);
         }

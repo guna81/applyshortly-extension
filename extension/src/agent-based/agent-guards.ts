@@ -138,7 +138,7 @@ export function createGuards({ profile, job, fillOptional }: { profile: any; job
       const userSaidIt = answered !== undefined && answered.trim().toLowerCase() === action.text.trim().toLowerCase();
       if ((CONSENT.test(String(el.name ?? "")) || CITIZENSHIP.test(String(el.name ?? "")) || LEGAL_FACT.test(name)) && !userSaidIt && !profileBacked(el.name, action.text)) return refuse(ASK_CONSENT);
       const holds = String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim());
-      if (el.user_edited || (!mine && holds && !(action.type === "select" && el.expanded === true))) return refuse("The agent will not overwrite an existing answer.");
+      if (el.user_edited || (!mine && holds && !(action.type === "select" && (el.expanded === true || ["select", "combobox"].includes(el.role))))) return refuse("The agent will not overwrite an existing answer.");
     }
     if (action.type === "check") {
       const option = isChoiceOption(el);

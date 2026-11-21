@@ -20,6 +20,9 @@ credentials, provider keys, user data or platform code belongs in either archive
 Before release, run the private platform's Chromium fixtures with `EXTENSION_REPO` pointing
 to this checkout. Its `scripts/ci.sh backend` validates integration and contract compatibility
 against disposable data. Unit checks alone do not validate browser integration or live ATS support.
+Before every production release (merging to `main`, deploying, or publishing to the store), also
+run the platform's form-agent testbed (`tools/form-agent-testbed/`) with **both** engines
+(`rules_led` and `ai_led`) and confirm 0 safety failures and no regressions.
 Coordinate backend/API changes and refresh the platform's integration lock after validation.
 
 ## Fictional screenshots

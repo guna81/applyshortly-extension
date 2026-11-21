@@ -55,6 +55,10 @@ Test in this order: Tier 0 replay (`npm test`), then Tier 1 synthetic pages (fre
 becomes a Tier 0 fixture that fails (`todo` until fixed). Rebuild with `python3 scripts/build_extension.py` before any live run (the
 testbed does it for you). Report numbers as measured on those forms, not as general accuracy.
 
+**Pre-production gate (every release):** Before merging/pushing to `main`, deploying to production, or publishing a new extension package,
+run the platform testbed (`apply-assistant/tools/form-agent-testbed/`) on the live regression set with **both** engines (`rules_led` and `ai_led`)
+and verify 0 safety failures and no regressions.
+
 ## Two engines, one agent each, no versions (rule for every contributor and coding agent)
 
 The extension has exactly two form engines, in plain words:
