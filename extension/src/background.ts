@@ -56,7 +56,7 @@ async function platformOrigin() {
 
 async function settings(): Promise<ExtensionSettings> {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply", "disableCreditFallback"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -569,7 +569,7 @@ async function agentReport(appId: any, event: string, res: any, url: any) {
 }
 
 /** Starts the agent in a tab: from an extension page (finds the application by URL) or the page's panel. */
-async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) {
+async function agentStart(tabId, url, appId, autoSubmit = false, debug = false, allowCreditFallback = true) {
   const owner = await settings();
   const modelDriven = owner.extensionEngine === "ai_led";
   const revision = customProviderRevision;
@@ -615,6 +615,16 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
   const sources = await pageSources();
   if (modelDriven && (customProviderChanging || revision !== customProviderRevision)) throw new Error("AI provider changed. Start a new form session.");
   const modelSession = crypto.randomUUID();
+  const createRuleStep = () => ruleAgent(p, app, {
+    get fillOptional() { return liveFillOptional(owner); },
+    lookupSaved: async (question: string) => {
+      const hit = await b.suggestAnswer({ question, application_id: id, allow_generate: false }).catch(() => null);
+      if (hit?.source === "answer_bank" && typeof hit.answer === "string" && hit.answer.trim()) {
+        return { answer: hit.answer.trim(), ...(typeof hit.answer_id === "number" ? { answer_id: hit.answer_id } : {}) };
+      }
+      return null;
+    },
+  });
   const agent = new Agent({
     tabId,
     appId: id,
@@ -638,16 +648,13 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
         throw error;
       }
     }, undefined, owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, searchSavedAnswers: (query: string) => b.searchAnswers(query, 5), debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } })
-      : ruleAgent(p, app, {
-        get fillOptional() { return liveFillOptional(owner); },
-        lookupSaved: async (question: string) => {
-          const hit = await b.suggestAnswer({ question, application_id: id, allow_generate: false }).catch(() => null);
-          if (hit?.source === "answer_bank" && typeof hit.answer === "string" && hit.answer.trim()) {
-            return { answer: hit.answer.trim(), ...(typeof hit.answer_id === "number" ? { answer_id: hit.answer_id } : {}) };
-          }
-          return null;
-        },
-      }),
+      : createRuleStep(),
+    fallbackStep: capabilities.agent_engine === "ai_led" && !custom?.enabled && allowCreditFallback && owner.disableCreditFallback !== true
+      ? () => {
+        void chrome.storage.session.remove(`agentState:${tabId}`).catch(() => {});
+        return createRuleStep();
+      }
+      : null,
     files: agentFiles(p, app),
     notify: async (message) => {
       // Keep approval in this background run across page navigation, and deliver it
@@ -657,7 +664,7 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false) 
       const submit = autoSubmit && message.status === "ready" && !message.captchaPending;
       if (["ready", "failed", "stopped"].includes(message.status)) autoSubmit = false;
       setAttentionBadge(agent.driver.tabId, message.status === "waiting");
-      return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, planner: custom?.enabled ? "custom" : "platform", autoSubmit: submit }, { frameId: 0 }).catch(() => {});
+      return chrome.tabs.sendMessage(agent.driver.tabId, { ...message, planner: agent.planner, autoSubmit: submit }, { frameId: 0 }).catch(() => {});
     },
     report: (event, res, pageUrl) => agentReport(id, event, res, pageUrl),
   });
@@ -945,7 +952,7 @@ const handlers = {
   // From the page's panel: its own tab. From an extension page: the tab it names.
   agentStart: (msg: any, sender: any) => (fromPage(sender)
     ? agentStart(sender.tab.id, sender.url, msg.appId ?? null, msg.autoSubmit === true)
-    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true, msg.debug === true)), // debug only from an extension page (the test harness), never from a web page
+    : agentStart(msg.tabId, msg.url, msg.appId ?? null, msg.autoSubmit === true, msg.debug === true, msg.disableCreditFallback !== true)), // debug & disableCreditFallback only from an extension page (test harnesses), never from a web page
   agentControl: (msg: any, sender: any) => agentControl(fromPage(sender) ? sender.tab.id : msg.tabId, msg.action, msg.text),
   agentStatus: (msg: any, sender: any) => agentStatus(fromPage(sender) ? sender.tab.id : msg.tabId),
   openOptions: () => chrome.runtime.openOptionsPage(),

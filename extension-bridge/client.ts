@@ -317,6 +317,7 @@ export class BridgeError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -339,8 +340,12 @@ export class JobHuntBridge {
       },
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
-      throw new BridgeError(res.status, typeof body.detail === "string" ? body.detail : res.statusText);
+      const body = (await res.json().catch(() => ({}))) as { detail?: unknown; code?: unknown };
+      throw new BridgeError(
+        res.status,
+        typeof body.detail === "string" ? body.detail : res.statusText,
+        typeof body.code === "string" ? body.code : undefined,
+      );
     }
     return (res.status === 204 ? undefined : await res.json()) as T;
   }

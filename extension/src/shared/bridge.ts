@@ -84,9 +84,10 @@ export const AGENT_TIMEOUT_MS = 90000;
 export class BridgeError extends Error {
   status: number;
   code?: string;
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
@@ -142,7 +143,11 @@ export class JobHuntBridge {
       }
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new BridgeError(res.status, errorMessage(body, res.statusText));
+        throw new BridgeError(
+          res.status,
+          errorMessage(body, res.statusText),
+          typeof body?.code === "string" ? body.code : undefined,
+        );
       }
       return res.status === 204 ? (null as T) : res.json();
     };

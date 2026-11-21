@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/shared/bridge.js";
 import { PAGE } from "./page-rules.mjs";
-import { ProgressGuard, Agent, execute, explain, observeTab, questionChoices, stepWithRetry } from "../src/page-control/loop.js";
+import { CREDIT_FALLBACK_NOTICE, ProgressGuard, Agent, execute, explain, isInsufficientCreditsError, observeTab, questionChoices, stepWithRetry } from "../src/page-control/loop.js";
 import { formAgent } from "../src/agent-based/form-agent.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
@@ -1321,4 +1321,124 @@ test("ProgressGuard keeps a failed action's field even if it mutated the DOM, an
   assert.deepEqual(guard.failures, ["Current Location"]);
   assert.equal(guard.check(s3), null);
   assert.deepEqual(guard.failures, []);
+});
+
+test("isInsufficientCreditsError distinguishes platform credit exhaustion from plan limits and other statuses", () => {
+  assert.equal(isInsufficientCreditsError(new BridgeError(402, "This needs 5 credits; you have 0.", "insufficient_credits")), true);
+  assert.equal(isInsufficientCreditsError(new BridgeError(402, "Plan limit reached.", "plan_limit")), false);
+  assert.equal(isInsufficientCreditsError(new BridgeError(402, "Not enough credits")), true);
+  assert.equal(isInsufficientCreditsError(new BridgeError(402, "Payment required")), false);
+  assert.equal(isInsufficientCreditsError(new BridgeError(500, "credits")), false);
+  assert.equal(isInsufficientCreditsError(null), false);
+});
+
+test("platform 402 insufficient_credits falls back to rule-based for this run and continues seamlessly", async () => {
+  const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "First name", value: "" }], { document_id: "doc" }) });
+  const notices = [];
+  let aiCalls = 0;
+  let fallbackCreated = 0;
+  let fallbackCalls = 0;
+  const fallbackObsIds = [];
+  const agent = new Agent({
+    tabId: 1,
+    appId: null,
+    driver,
+    files: {},
+    notify: (m) => { notices.push(m); },
+    report: async () => {},
+    step: async () => {
+      aiCalls += 1;
+      throw new BridgeError(402, "This needs 5 credits; you have 0.", "insufficient_credits");
+    },
+    fallbackStep: () => {
+      fallbackCreated += 1;
+      return async (req) => {
+        fallbackCalls += 1;
+        fallbackObsIds.push(req.observation.observation_id);
+        if (fallbackCalls === 1) {
+          return {
+            guarded_commands: true,
+            session_id: "rules-1",
+            agent_engine: "rules_led",
+            status: "continue",
+            want_screenshot: false,
+            actions: [{ type: "type", ref: "0.1", text: "Ada", command_id: "r1", observation_id: req.observation.observation_id }],
+            message: "Filled First name.",
+          };
+        }
+        return {
+          guarded_commands: true,
+          session_id: "rules-1",
+          agent_engine: "rules_led",
+          status: "ready_for_review",
+          want_screenshot: false,
+          actions: [],
+          message: "Ready to review.",
+        };
+      };
+    },
+  });
+  const runPromise = agent.run();
+  // Stop once it reaches ready_for_review so waitForUser resolves.
+  await new Promise((resolve) => {
+    const origNotify = agent.notify;
+    agent.notify = (m) => { origNotify(m); if (m.status === "ready") { agent.stop("Done"); resolve(); } };
+  });
+  await runPromise;
+  assert.equal(aiCalls, 1);
+  assert.equal(fallbackCreated, 1);
+  assert.equal(fallbackCalls, 2);
+  assert.equal(agent.planner, "rules");
+  assert.equal(agent.last.agent_engine, "rules_led");
+  assert.ok(agent.log.includes(CREDIT_FALLBACK_NOTICE));
+  assert.ok(notices.some((m) => m.message === CREDIT_FALLBACK_NOTICE));
+  assert.equal(fallbackObsIds.every(Boolean), true);
+});
+
+test("402 plan_limit, non-402 errors, custom planner, and stopped runs do not fall back", async () => {
+  const cases = [
+    { name: "plan_limit", planner: "platform", error: new BridgeError(402, "Plan limit reached.", "plan_limit") },
+    { name: "server_500", planner: "platform", error: new BridgeError(500, "Internal error") },
+    { name: "custom_402", planner: "custom", error: new BridgeError(402, "Insufficient credits", "insufficient_credits") },
+  ];
+  for (const c of cases) {
+    const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "First name", value: "" }], { document_id: "doc" }) });
+    let fallbackCreated = 0;
+    const agent = new Agent({
+      tabId: 1,
+      appId: null,
+      driver,
+      files: {},
+      notify: () => {},
+      report: async () => {},
+      step: async () => { throw c.error; },
+      fallbackStep: () => { fallbackCreated += 1; return async () => ({ guarded_commands: true, session_id: "r", agent_engine: "rules_led", status: "ready_for_review", actions: [] }); },
+    });
+    agent.planner = c.planner;
+    await agent.run();
+    assert.equal(fallbackCreated, 0, `${c.name} should not fall back`);
+    assert.equal(agent.status, "failed", `${c.name} should fail closed`);
+    assert.equal(agent.planner, c.planner, `${c.name} should preserve planner`);
+  }
+
+  // A run stopped while the model call is in flight does not fall back either.
+  const driver = new GuardedDriver({ top: () => frameObs([{ ref: "1", role: "textbox", name: "First name", value: "" }], { document_id: "doc" }) });
+  let fallbackCreated = 0;
+  let rejectModel;
+  const agent = new Agent({
+    tabId: 1,
+    appId: null,
+    driver,
+    files: {},
+    notify: () => {},
+    report: async () => {},
+    step: () => new Promise((_, reject) => { rejectModel = reject; }),
+    fallbackStep: () => { fallbackCreated += 1; return async () => ({ guarded_commands: true, session_id: "r", agent_engine: "rules_led", status: "ready_for_review", actions: [] }); },
+  });
+  const running = agent.run();
+  while (!rejectModel) await new Promise((r) => setTimeout(r, 5));
+  agent.stop("User stopped");
+  rejectModel(new BridgeError(402, "This needs 5 credits; you have 0.", "insufficient_credits"));
+  await running;
+  assert.equal(fallbackCreated, 0);
 });

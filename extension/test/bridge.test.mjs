@@ -110,3 +110,28 @@ test('the agent model and step calls get the longer agent timeout, others the de
     delete globalThis.chrome;
   }
 });
+
+test('BridgeError preserves the platform error code on HTTP 402 responses', async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    const bridge = new JobHuntBridge('http://x.test', 't');
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ detail: 'This needs 5 credits; you have 0.', code: 'insufficient_credits', required: 5, available: 0 }),
+      { status: 402, statusText: 'Payment Required' },
+    );
+    await assert.rejects(
+      bridge.agentModel({ messages: [] }),
+      (error) => error.status === 402 && error.code === 'insufficient_credits' && /5 credits/.test(error.message),
+    );
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ detail: 'Plan limit reached.', code: 'plan_limit' }),
+      { status: 402, statusText: 'Payment Required' },
+    );
+    await assert.rejects(
+      bridge.agentModel({ messages: [] }),
+      (error) => error.status === 402 && error.code === 'plan_limit',
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -114,6 +114,15 @@ export async function stepWithRetry(step, body, waits = BUSY_RETRIES) {
   }
 }
 
+export const CREDIT_FALLBACK_NOTICE = "You're out of AI credits — continuing with the Rule based form assistant (free, no AI calls).";
+
+export function isInsufficientCreditsError(error: unknown): boolean {
+  const e = error as { status?: number; code?: string; message?: string } | null | undefined;
+  if (e?.status !== 402) return false;
+  if (typeof e.code === "string") return e.code === "insufficient_credits";
+  return /\bcredits?\b/i.test(String(e.message ?? ""));
+}
+
 /** Platform errors in words the panel can show. */
 export function explain(error) {
   if (unsupported(error)) {
@@ -668,6 +677,7 @@ export class Agent {
   appId: string | null;
   driver: any;
   step: any;
+  fallbackStep: (() => any) | null;
   files: any;
   notify: any;
   report: any;
@@ -685,7 +695,7 @@ export class Agent {
   url: string = "";
   reviewResult: any = null;
 
-  constructor({ tabId, appId, driver, step, files, notify, report, startUrl = null, verifiedCommands = false }: any) {
+  constructor({ tabId, appId, driver, step, fallbackStep = null, files, notify, report, startUrl = null, verifiedCommands = false }: any) {
     this.trustedOrigins = new Set(startUrl ? [new URL(startUrl).origin] : []);
     this.planner = "platform";
     this.silenceMs = 20000; // a planning call that takes longer than this is reported to the user every interval, so the chat never goes silent
@@ -700,6 +710,7 @@ export class Agent {
     this.appId = appId;
     this.driver = driver;
     this.step = step;
+    this.fallbackStep = fallbackStep;
     this.files = files;
     this.notify = notify;
     this.report = report;
@@ -963,22 +974,47 @@ export class Agent {
           ...extra,
           });
         } catch (error: any) {
-          if (this.planner !== "platform" || error?.status !== 410 || ++recoveries > 1) throw error;
-          // Lost planner state includes skips and answer consent. Never silently recreate it.
-          // Keep local call/progress/command limits and trusted origins; drop all pending work.
-          this.runner.reset();
-          results = [];
-          extra = {};
-          sessionId = null;
-          captchaClearedFor = "";
-          this.pause();
-          this.say("The planning session expired. Resume to start a fresh session from the current form. Previous skipped questions and answer permissions must be given again.");
-          this.emit({ message: this.log.at(-1) });
-          const input = await this.waitForUser();
-          if (input.kind === "stop" || this.stopped) break;
-          if (this.paused) continue;
-          wantScreenshot = true;
-          continue;
+          if (!this.stopped && this.planner === "platform" && this.fallbackStep && isInsufficientCreditsError(error)) {
+            const nextStep = this.fallbackStep();
+            this.fallbackStep = null;
+            this.step = nextStep;
+            this.planner = "rules";
+            sessionId = null;
+            results = [];
+            extra = {};
+            wantScreenshot = false;
+            annotateScreenshot = false;
+            this.progressGuard.reset();
+            this.say(CREDIT_FALLBACK_NOTICE);
+            this.emit({ message: this.log.at(-1) });
+            res = await this.planningStep({
+              guarded_commands: true,
+              request_id: crypto.randomUUID(),
+              ...(this.verifiedCommands ? { verified_commands: true } : {}),
+              session_id: null,
+              application_id: this.appId,
+              observation,
+              results: [],
+              in_user_tab: true,
+            });
+          } else {
+            if (this.planner !== "platform" || error?.status !== 410 || ++recoveries > 1) throw error;
+            // Lost planner state includes skips and answer consent. Never silently recreate it.
+            // Keep local call/progress/command limits and trusted origins; drop all pending work.
+            this.runner.reset();
+            results = [];
+            extra = {};
+            sessionId = null;
+            captchaClearedFor = "";
+            this.pause();
+            this.say("The planning session expired. Resume to start a fresh session from the current form. Previous skipped questions and answer permissions must be given again.");
+            this.emit({ message: this.log.at(-1) });
+            const input = await this.waitForUser();
+            if (input.kind === "stop" || this.stopped) break;
+            if (this.paused) continue;
+            wantScreenshot = true;
+            continue;
+          }
         }
         if (!res) break;
         sessionId = res.session_id;

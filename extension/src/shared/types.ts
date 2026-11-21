@@ -33,6 +33,7 @@ export interface ExtensionSettings {
   fillOptional: boolean;
   saveLearnedAnswers: boolean;
   autoApply?: boolean;
+  disableCreditFallback?: boolean;
   connectionType?: string;
   [key: string]: unknown;
 }
