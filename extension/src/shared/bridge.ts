@@ -239,8 +239,22 @@ export class JobHuntBridge {
     }
   }
 
-  suggestAnswer(body: { question: string; application_id?: number | null; allow_generate?: boolean; page?: any }): Promise<{ answer: string; [key: string]: unknown }> {
+  suggestAnswer(body: { question: string; application_id?: number | null; allow_generate?: boolean; page?: any }): Promise<{ answer: string | null; source?: string; answer_id?: number | null; [key: string]: unknown }> {
     return this.request("/api/extension/answers/suggest", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  /** Search the user's full active Answer Bank (for answers beyond the inline top-K). */
+  async searchAnswers(query: string, limit: number = 5): Promise<any[]> {
+    try {
+      const res = await this.request("/api/extension/answers/search", {
+        method: "POST",
+        body: JSON.stringify({ query: String(query ?? "").slice(0, 500), limit }),
+      });
+      return Array.isArray(res) ? res : [];
+    } catch (err) {
+      if (err instanceof BridgeError && (err.status === 404 || err.status === 405)) return [];
+      return [];
+    }
   }
 
   assistFill(body: any): Promise<any> {
@@ -309,7 +323,14 @@ export class JobHuntBridge {
     }
   }
 
-  report(event: ExtensionEvent): Promise<ExtensionEventResult> {
-    return this.request("/api/extension/events", { method: "POST", body: JSON.stringify(event) });
+  async report(event: ExtensionEvent): Promise<ExtensionEventResult> {
+    const send = (b: any) => this.request<ExtensionEventResult>("/api/extension/events", { method: "POST", body: JSON.stringify(b) });
+    try {
+      return await send(event);
+    } catch (error: any) {
+      if (error.status !== 422 || !/save_answers/.test(error.message) || !("save_answers" in (event as any))) throw error;
+      const { save_answers: _skipped, ...legacy } = event as any;
+      return await send(legacy);
+    }
   }
 }

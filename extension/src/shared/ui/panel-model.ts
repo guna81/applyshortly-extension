@@ -265,7 +265,9 @@
         draftable: draft,
       };
     }
-    return { text: `${question.text} Tap Continue when it's done.`, choices: [CONTINUE_REPLY] };
+    const text = String(question.text ?? "").trim();
+    if (!text) return null;
+    return { text: `${text} Tap Continue when it's done.`, choices: [CONTINUE_REPLY] };
   }
 
   /** The optional question the assistant offers to help with, until it is answered or skipped. */

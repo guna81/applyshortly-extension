@@ -50,6 +50,122 @@ const stripDialCode = (phone: any): string => String(phone ?? "").replace(/^\s*\
 
 const fieldLabel = (el: any): string => String(el?.group || el?.name || "").trim();
 
+const cleanFieldName = (el: any): string => fieldLabel(el)
+  .replace(/\s*\((?:required|optional)\)\s*$/i, "")
+  .replace(/[\s*:]+$/, "")
+  .trim();
+
+const fieldKindOf = (el: any): string => {
+  if (["textarea", "select", "combobox", "radio", "checkbox", "file"].includes(el?.role)) return el.role;
+  if (isChoiceOption(el)) return "radio";
+  return "text";
+};
+
+const STOPWORDS = new Set([
+  "a", "an", "the", "to", "of", "in", "on", "for", "with", "about", "your", "you", "us",
+  "tell", "please", "describe", "share", "what", "how", "why", "where", "when", "who",
+  "is", "are", "was", "were", "do", "does", "did", "have", "has", "had", "that", "this",
+  "these", "those", "by", "from", "at", "as", "or", "and", "be", "been", "being", "can",
+  "could", "would", "should", "will", "we", "our", "it", "its", "me", "my", "i", "any",
+  "if", "so", "not", "no", "yes", "ve", "re", "ll", "m", "s", "t",
+]);
+
+const normalizeText = (text: any): string => String(text ?? "")
+  .toLowerCase()
+  .replace(/['’]/g, " ")
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim();
+
+const contentTokens = (text: any): string[] => normalizeText(text)
+  .split(/\s+/)
+  .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+
+function matchSavedAnswer(el: any, profile: any): { answer: string; answer_id?: number } | null {
+  const answers = Array.isArray(profile?.answers) ? profile.answers : [];
+  if (!answers.length) return null;
+  const rawLabel = fieldLabel(el);
+  if (!rawLabel) return null;
+  const section = String(el.section ?? "");
+  const l = rawLabel.toLowerCase();
+  if (CONSENT_OR_LEGAL.test(l) || /\breference\b/.test(`${section} ${rawLabel}`.toLowerCase())) return null;
+
+  const normLabel = normalizeText(rawLabel);
+  if (!normLabel) return null;
+
+  const patternsOf = (entry: any): string[] => [
+    entry?.question_pattern,
+    ...(Array.isArray(entry?.question_variants) ? entry.question_variants : []),
+  ].filter((p: any) => typeof p === "string" && p.trim());
+
+  // 1. Exact normalized match on question_pattern or any stored question_variants.
+  for (const entry of answers) {
+    const ans = String(entry?.answer ?? "").trim();
+    if (!ans) continue;
+    if (patternsOf(entry).some((p) => normalizeText(p) === normLabel)) {
+      return { answer: ans, ...(typeof entry?.id === "number" ? { answer_id: entry.id } : {}) };
+    }
+  }
+
+  // 2. High-confidence content-token overlap (deterministic, no LLM).
+  const labelTokens = new Set(contentTokens(rawLabel));
+  if (labelTokens.size < 2) return null;
+
+  let best: { answer: string; answer_id?: number; score: number } | null = null;
+  for (const entry of answers) {
+    const ans = String(entry?.answer ?? "").trim();
+    if (!ans) continue;
+    const tagTokens = Array.isArray(entry?.tags) ? entry.tags.flatMap((t: any) => contentTokens(t)) : [];
+    for (const pat of patternsOf(entry)) {
+      const patTokens = new Set([...contentTokens(pat), ...tagTokens]);
+      if (patTokens.size < 2) continue;
+      let shared = 0;
+      for (const tok of labelTokens) if (patTokens.has(tok)) shared += 1;
+      if (shared < 2) continue;
+      const union = labelTokens.size + patTokens.size - shared;
+      const jaccard = shared / union;
+      const containment = shared / Math.min(labelTokens.size, patTokens.size);
+      if (jaccard >= 0.5 || containment >= 0.75) {
+        const score = jaccard + containment;
+        if (!best || score > best.score) {
+          best = { answer: ans, ...(typeof entry?.id === "number" ? { answer_id: entry.id } : {}), score };
+        }
+      }
+    }
+  }
+  return best ? { answer: best.answer, ...(best.answer_id !== undefined ? { answer_id: best.answer_id } : {}) } : null;
+}
+
+function formatList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function formatFilledSummary(entries: Array<{ kind: "fill" | "upload"; label: string }>): string {
+  const filled: string[] = [];
+  const attached: string[] = [];
+  for (const e of entries) {
+    if (!e.label) continue;
+    if (e.kind === "upload") {
+      if (!attached.includes(e.label)) attached.push(e.label);
+    } else if (!filled.includes(e.label)) {
+      filled.push(e.label);
+    }
+  }
+  const parts: string[] = [];
+  if (filled.length) {
+    const shown = filled.length > 5
+      ? `${filled.slice(0, 5).join(", ")}, and ${filled.length - 5} more field${filled.length - 5 === 1 ? "" : "s"}`
+      : formatList(filled);
+    parts.push(`Filled ${shown}`);
+  }
+  if (attached.length) {
+    parts.push(`${parts.length ? "attached" : "Attached"} ${formatList(attached)}`);
+  }
+  if (!parts.length) return "";
+  return `${parts.length === 2 ? `${parts[0]}, and ${parts[1]}` : parts[0]}.`;
+}
+
 const isEmptyField = (el: any): boolean => {
   if (!el || el.disabled || el.user_edited) return false;
   if (["checkbox", "radio"].includes(el.role) || isChoiceOption(el)) return !choiceState(el);
@@ -153,6 +269,9 @@ function matchProfileRule(el: any, profile: any, job: any, hasPhoneCountryField:
       return d.toISOString().slice(0, 10);
     }
   }
+  if (/\bnotice\s*period\b/.test(l) && typeof prefs.notice_period_days === "number") {
+    return prefs.notice_period_days === 0 ? "Immediately" : `${prefs.notice_period_days} days`;
+  }
   if (/\brelocat(?:e|ion)\b/.test(l) && typeof prefs.willing_to_relocate === "boolean") {
     return prefs.willing_to_relocate ? "Yes" : "No";
   }
@@ -180,8 +299,18 @@ function buildActionForAnswer(el: any, answer: string, obs: any): any | null {
     if (Array.isArray(el.options) && el.options.length) {
       const exact = el.options.find((o: string) => o.toLowerCase() === answer.toLowerCase());
       const factHit = el.options.find((o: string) => factMatches(answer, o));
+      const days = durationDays(answer);
+      const durationHit = days != null
+        ? el.options.find((o: string) => durationDays(o) === days)
+        : /^immediate/i.test(answer.trim()) ? el.options.find((o: string) => /^immediate/i.test(o.trim())) : undefined;
+      const numericHit = /^\d+(?:\.\d+)?$/.test(answer.trim()) ? (() => {
+        const n = Math.floor(Number(answer.trim()));
+        return n === 0
+          ? el.options.find((o: string) => /^no\s+experience\b|^0\b/i.test(o.trim()))
+          : el.options.find((o: string) => new RegExp(`^${n}\\+?\\s*years?\\b`, "i").test(o.trim()));
+      })() : undefined;
       const partial = el.options.find((o: string) => o.toLowerCase().includes(answer.toLowerCase()) || answer.toLowerCase().includes(o.toLowerCase()));
-      pick = exact ?? factHit ?? partial ?? answer;
+      pick = exact ?? factHit ?? durationHit ?? numericHit ?? partial ?? answer;
     }
     return { type: "select", ref: el.ref, text: pick, label: `Select ${el.name}` };
   }
@@ -197,7 +326,11 @@ function buildActionForAnswer(el: any, answer: string, obs: any): any | null {
 }
 
 /** Local deterministic rules_led form planner (0 LLM calls). */
-export function ruleAgent(profile: any, job: any, options: { fillOptional?: boolean } = {}) {
+export function ruleAgent(
+  profile: any,
+  job: any,
+  options: { fillOptional?: boolean; lookupSaved?: (question: string) => Promise<{ answer: string; answer_id?: number } | null> } = {},
+) {
   const st: any = {
     session: crypto.randomUUID(),
     revision: 0,
@@ -205,9 +338,18 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
     pending: null,
     asked: new Set<string>(),
     attempted: new Map<string, number>(),
+    lookedUp: new Map<string, { answer: string; answer_id?: number } | null>(),
     navClicks: new Set<string>(),
     lastActions: [] as any[],
+    filled: {} as Record<string, { label: string; value: string; kind: string; source: "user" | "profile" | "answer_bank"; needs_review: boolean; answer_id?: number }>,
+    filledBatch: [] as Array<{ kind: "fill" | "upload"; label: string; command_id: string }>,
     waits: 0,
+  };
+
+  const flushFilledSummary = (): string => {
+    const summary = formatFilledSummary(st.filledBatch);
+    st.filledBatch = [];
+    return summary;
   };
 
   const canUpload = (obs: any, el: any): "resume" | "cover_letter" | null => {
@@ -267,7 +409,7 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
   return async function step(body: any): Promise<any> {
     st.revision += 1;
     const obs = normalizeObservation(body?.observation ?? { url: "", elements: [] });
-    const base = { session_id: st.session, revision: st.revision, guarded_commands: true, agent_engine: "rules_led", want_screenshot: false };
+    const base = { session_id: st.session, revision: st.revision, guarded_commands: true, agent_engine: "rules_led", want_screenshot: false, filled: Object.values(st.filled) };
 
     // 1. Record outcomes of previous turn's actions.
     if (Array.isArray(body?.results) && st.lastActions.length) {
@@ -277,9 +419,15 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
         const el = obs.elements.find((e: any) => e.ref === act.ref);
         const id = el ? identityOf(obs, el) : act.identity;
         const ok = r.ok !== false && r.result?.verified !== false;
-        if (!ok && id) st.attempted.set(id, (st.attempted.get(id) ?? 0) + 1);
+        if (ok) {
+          if (id && act.fillMeta) st.filled[id] = act.fillMeta;
+        } else {
+          if (id) st.attempted.set(id, (st.attempted.get(id) ?? 0) + 1);
+          st.filledBatch = st.filledBatch.filter((e: any) => e.command_id !== act.command_id);
+        }
       }
       st.lastActions = [];
+      base.filled = Object.values(st.filled);
     }
 
     // 2. Process user reply / skip / continue if we were waiting on a question.
@@ -337,7 +485,14 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
         const raw = buildActionForAnswer(el, pendingReply.answer, obs);
         if (raw) {
           const action = { ...raw, observation_id: obs.observation_id, command_id: crypto.randomUUID() };
-          st.lastActions = [{ ...action, identity: identityOf(obs, el) }];
+          const fillMeta = {
+            label: cleanFieldName(el).slice(0, 500),
+            value: String(pendingReply.answer).slice(0, 1000),
+            kind: fieldKindOf(el),
+            source: "user" as const,
+            needs_review: false,
+          };
+          st.lastActions = [{ ...action, identity: identityOf(obs, el), fillMeta }];
           return { ...base, status: "continue", actions: [action], message: "" };
         }
       }
@@ -372,24 +527,56 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
       if ((st.attempted.get(id) ?? 0) >= MAX_FIELD_ATTEMPTS) continue;
 
       let raw: any = null;
+      let fillMeta: any = null;
       if (el.role === "file") {
         const file = canUpload(obs, el);
         if (file) raw = { type: "upload", ref: el.ref, file, label: file === "cover_letter" ? "Upload cover letter" : "Upload resume" };
       } else if (["textbox", "textarea", "select", "combobox", "spinbutton", "radio", "checkbox"].includes(el.role) || isChoice) {
-        const answer = matchProfileRule(el, profile, job, hasPhoneCountryField);
-        if (answer) raw = buildActionForAnswer(el, answer, obs);
+        const profileAnswer = matchProfileRule(el, profile, job, hasPhoneCountryField);
+        let savedHit = profileAnswer ? null : matchSavedAnswer(el, profile);
+        if (!profileAnswer && !savedHit && options.lookupSaved) {
+          const rawLabel = fieldLabel(el);
+          const l = rawLabel.toLowerCase();
+          const ctx = `${el.section ?? ""} ${rawLabel}`.toLowerCase();
+          if (rawLabel && !CONSENT_OR_LEGAL.test(l) && !/\breference\b/.test(ctx)) {
+            const lk = normalizeText(rawLabel);
+            if (lk) {
+              if (!st.lookedUp.has(lk)) {
+                st.lookedUp.set(lk, await options.lookupSaved(rawLabel).catch(() => null));
+              }
+              savedHit = st.lookedUp.get(lk) ?? null;
+            }
+          }
+        }
+        const answer = profileAnswer ?? savedHit?.answer ?? null;
+        if (answer) {
+          raw = buildActionForAnswer(el, answer, obs);
+          if (raw) {
+            fillMeta = {
+              label: cleanFieldName(el).slice(0, 500),
+              value: String(answer).slice(0, 1000),
+              kind: fieldKindOf(el),
+              source: profileAnswer ? ("profile" as const) : ("answer_bank" as const),
+              needs_review: false,
+              ...(!profileAnswer && savedHit?.answer_id !== undefined ? { answer_id: savedHit.answer_id } : {}),
+            };
+          }
+        }
       }
 
       if (!raw) continue;
       const action = { ...raw, observation_id: obs.observation_id, command_id: crypto.randomUUID() };
       actions.push(action);
-      tracked.push({ ...action, identity: id });
+      tracked.push({ ...action, identity: id, ...(fillMeta ? { fillMeta } : {}) });
+      st.filledBatch.push(action.type === "upload"
+        ? { kind: "upload", label: action.file === "cover_letter" ? "your cover letter" : "your resume", command_id: action.command_id }
+        : { kind: "fill", label: cleanFieldName(el), command_id: action.command_id });
       if (action.type === "upload") break;
     }
 
     if (actions.length) {
       st.lastActions = tracked;
-      return { ...base, status: "continue", actions, message: "Filled known profile fields." };
+      return { ...base, status: "continue", actions, message: "" };
     }
 
     // 6. Pass 2: ask the user one question at a time for remaining required (then enabled optional) fields.
@@ -410,12 +597,13 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
       const choices = isChoice
         ? choiceGroup(obs.elements, el).map((m: any) => m.name).filter(Boolean)
         : Array.isArray(el.options) ? el.options : [];
+      const summary = flushFilledSummary();
       st.pending = { kind: "ask", ref: el.ref, question: label, label };
       return {
         ...base,
         status: "ask_user",
         actions: [],
-        message: label,
+        message: summary || label,
         question: { kind: "question", ref: el.ref, text: label, label, role: el.role, choices, optional: !field.required },
       };
     }
@@ -429,13 +617,15 @@ export function ruleAgent(profile: any, job: any, options: { fillOptional?: bool
         const navKey = `${obs.url}|${el.ref}|${el.name}`;
         if (st.navClicks.has(navKey)) continue;
         st.navClicks.add(navKey);
+        const summary = flushFilledSummary();
         const action = { type: "click", ref: el.ref, label: `Click ${el.name}`, observation_id: obs.observation_id, command_id: crypto.randomUUID() };
         st.lastActions = [{ ...action, identity: identityOf(obs, el) }];
-        return { ...base, status: "continue", actions: [action], message: `Continuing to the next step (${el.name}).` };
+        return { ...base, status: "continue", actions: [action], message: summary ? `${summary} Continuing to the next step (${el.name}).` : `Continuing to the next step (${el.name}).` };
       }
     }
 
     // 8. Pass 4: ready for review (never submits).
-    return { ...base, status: "ready_for_review", actions: [], message: "Please review and submit your application." };
+    const summary = flushFilledSummary();
+    return { ...base, status: "ready_for_review", actions: [], message: summary ? `${summary} Please review and submit your application.` : "Please review and submit your application." };
   };
 }

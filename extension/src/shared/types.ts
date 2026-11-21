@@ -31,6 +31,7 @@ export interface ExtensionSettings {
   extensionEngine: ExtensionEngine;
   agentVision: boolean;
   fillOptional: boolean;
+  saveLearnedAnswers: boolean;
   autoApply?: boolean;
   connectionType?: string;
   [key: string]: unknown;
