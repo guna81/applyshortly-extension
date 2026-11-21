@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ApplyShortly Form Assisstant · Settings</title>
+  <title>ApplyShortly Form Assistant · Settings</title>
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="options.css">
   <script src="theme.js"></script>
@@ -32,6 +32,19 @@
       </div>
       <button id="retest" type="button" hidden>Try again</button>
     </div>
+
+    <section class="card settings-card" id="profileSetupCard" hidden>
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">NEXT STEP</span>
+          <h2 id="profileSetupTitle">Set up your profile</h2>
+          <p id="profileSetupDetail" class="section-description">Upload your resume and confirm your basic details so the extension can autofill applications.</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="setupProfileBtn" type="button" class="primary">Upload resume &amp; set up profile</button>
+      </div>
+    </section>
 
     <section class="card settings-card" id="account">
       <div class="section-heading"><div><span class="eyebrow">YOUR ACCOUNT</span><h2>Connection</h2><p class="section-description">Connect your profile to fill applications.</p></div></div>

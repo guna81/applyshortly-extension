@@ -26,7 +26,11 @@ function setConn(kind, text) {
 
 async function openTab(url) {
   const u = new URL(url);
-  const path = u.pathname === "/applications" && u.searchParams.has("add") ? u.pathname + u.search : u.pathname;
+  const path =
+    (u.pathname === "/applications" && u.searchParams.has("add")) ||
+    (u.pathname === "/profile" && u.searchParams.get("from") === "extension")
+      ? u.pathname + u.search
+      : u.pathname;
   const result = await chrome.runtime.sendMessage({ type: "openWebsite", path });
   if (!result?.ok) { setConn("bad", result?.error || "Could not open ApplyShortly."); return; }
   window.close();
@@ -125,35 +129,63 @@ async function render(s, { notFound = false } = {}) {
   );
   $("foot").hidden = false;
 
-  if (!fillable) {
+  if (s.hasProfile === false) {
     return show(el("div", { class: "card" },
-      el("b", {}, "Open a job application to get started"),
-      el("p", { class: "muted" }, "Then click this icon again."),
-      button("Go to Applications", () => openTab(`${s.baseUrl}/applications`), "block"),
+      el("b", {}, "Set up your profile first"),
+      el("p", { class: "muted" }, "Upload your resume and confirm your basic details so the extension can autofill applications."),
+      button("Upload resume & set up profile", () => openTab(`${s.baseUrl}/profile?from=extension`), "primary block"),
     ));
+  }
+
+  const profileNotice = (s.resumeReady === false || s.contactReady === false)
+    ? el("div", { class: "card" },
+        el("b", {}, "Finish your profile for better autofill"),
+        el("p", { class: "muted" }, [
+          s.resumeReady === false ? "Resume not uploaded" : null,
+          s.contactReady === false ? "Contact details incomplete" : null,
+        ].filter(Boolean).join(" · ") + "."),
+        button("Complete profile", () => openTab(`${s.baseUrl}/profile?from=extension`), "block"),
+      )
+    : null;
+
+  if (!fillable) {
+    return show(
+      profileNotice,
+      el("div", { class: "card" },
+        el("b", {}, "Open a job application to get started"),
+        el("p", { class: "muted" }, "Then click this icon again."),
+        button("Go to Applications", () => openTab(`${s.baseUrl}/applications`), "block"),
+      ),
+    );
   }
 
   if (s.app) {
     const sent = !["saved", "queued", "filling", "ready_for_review"].includes(s.app.status);
-    return show(el("div", { class: "card" },
-      el("div", { class: "eyebrow" }, "This page is in ApplyShortly"),
-      el("b", { class: "title" }, s.app.title || "Application"),
-      el("div", { class: "muted" }, s.app.company_name ?? ""),
-      s.app.status ? el("span", { class: "pill" }, "● " + s.app.status.replace(/_/g, " ")) : null,
-      sent ? el("p", { class: "hint good" }, "✓ Already applied.") : null,
-      sent ? button("Fill again", (e) => void start(false, e.currentTarget), "block") : button("Start applying", (e) => void start(false, e.currentTarget), "primary block"),
-    ));
+    return show(
+      profileNotice,
+      el("div", { class: "card" },
+        el("div", { class: "eyebrow" }, "This page is in ApplyShortly"),
+        el("b", { class: "title" }, s.app.title || "Application"),
+        el("div", { class: "muted" }, s.app.company_name ?? ""),
+        s.app.status ? el("span", { class: "pill" }, "● " + s.app.status.replace(/_/g, " ")) : null,
+        sent ? el("p", { class: "hint good" }, "✓ Already applied.") : null,
+        sent ? button("Fill again", (e) => void start(false, e.currentTarget), "block") : button("Start applying", (e) => void start(false, e.currentTarget), "primary block"),
+      ),
+    );
   }
 
   let host = "";
   try { host = new URL(tab.url).hostname.replace(/^www\./, ""); } catch { /* keep empty */ }
-  return show(el("div", { class: "card" },
-    el("div", { class: "eyebrow" }, host || "This page"),
-    el("b", { class: "title" }, notFound ? "Not in ApplyShortly yet" : "Fill this page"),
-    el("p", { class: "muted" }, "Start the agent here, or add this job to ApplyShortly to track it."),
-    button("Start applying", (e) => void start(true, e.currentTarget), "primary block"),
-    button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/applications?${new URLSearchParams({ add: "1", url: tab.url })}`), "block"),
-  ));
+  return show(
+    profileNotice,
+    el("div", { class: "card" },
+      el("div", { class: "eyebrow" }, host || "This page"),
+      el("b", { class: "title" }, notFound ? "Not in ApplyShortly yet" : "Fill this page"),
+      el("p", { class: "muted" }, "Start the agent here, or add this job to ApplyShortly to track it."),
+      button("Start applying", (e) => void start(true, e.currentTarget), "primary block"),
+      button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/applications?${new URLSearchParams({ add: "1", url: tab.url })}`), "block"),
+    ),
+  );
 }
 
 for (const key of ["autoApply", "aiDrafts", "fillOptional"]) {

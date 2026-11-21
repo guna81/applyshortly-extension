@@ -5,6 +5,9 @@ export interface ExtensionAccount {
   plan: "free" | "pro" | "premium";
   billing_enabled: boolean;
   ai: { mode: "platform" | "personal"; provider: "gemini" | "anthropic" | "openai" | null; configured: { provider: "gemini" | "anthropic" | "openai"; model: string }[] };
+  has_profile?: boolean;
+  contact_ready?: boolean;
+  resume_ready?: boolean;
 }
 
 // Typed client for the Job Hunt extension bridge (/api/extension/*).

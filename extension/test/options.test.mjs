@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
-async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false } = {}) {
+async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false, hasProfile = true, contactReady = true, resumeReady = true } = {}) {
   const dom = new JSDOM(readFileSync(new URL('../src/ui/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
   const calls = [];
   let connected = signedIn;
@@ -22,7 +22,7 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
         let data;
         switch (message.type) {
           case 'connectionSettings': data = { configured: connected }; break;
-          case 'test': data = connected ? { connected, configured: true, connectionType: 'automatic', name: 'Fixture', email: 'fixture@example.com', plan: 'pro', credits: 42, billingEnabled, ai } : { configured: false }; break;
+          case 'test': data = connected ? { connected, configured: true, connectionType: 'automatic', name: 'Fixture', email: 'fixture@example.com', plan: 'pro', credits: 42, billingEnabled, ai, hasProfile, contactReady, resumeReady } : { configured: false }; break;
           case 'browserSignIn': connected = autoConnect || message.interactive; data = { state: connected ? 'connected' : 'signin_required' }; break;
           case 'saveCustomAI': custom = { enabled: true, baseUrl: message.baseUrl, model: message.model, supportsTools: message.supportsTools, supportsVision: message.supportsVision }; data = true; break;
           case 'selectAI': ai = { ...ai, mode: message.mode, provider: message.provider ?? null }; data = ai; break;
@@ -295,6 +295,19 @@ test('the appearance choice is saved for every extension page', async () => {
     select.dispatchEvent(new h.window.Event('change'));
     await h.flush();
     assert.equal(h.stored.theme, 'dark');
+  } finally {
+    h.close();
+  }
+});
+
+test('connected user without a profile sees profile setup card and opens /profile?from=extension', async () => {
+  const h = await setup({ signedIn: true, hasProfile: false, contactReady: false, resumeReady: false });
+  try {
+    assert.equal(h.document.querySelector('#profileSetupCard').hidden, false);
+    assert.match(h.document.querySelector('#connDetail').textContent, /Finish setting up your profile/);
+    h.document.querySelector('#setupProfileBtn').click();
+    await h.flush();
+    assert.ok(h.calls.some((item) => item.type === 'openWebsite' && item.path === '/profile?from=extension'));
   } finally {
     h.close();
   }

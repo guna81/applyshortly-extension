@@ -44,7 +44,7 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     selectAI(body) { calls.push({ selectedAI: body }); return { ...body, configured: [] }; }
     saveAIProvider(provider, body) { calls.push({ savedProvider: provider, body }); return { mode: "platform", configured: [{ provider, model: body.model }] }; }
     deleteAIProvider(provider) { calls.push({ deletedProvider: provider }); return { mode: "personal", provider, configured: [] }; }
-    account() { if (accountRevoked) throw new BridgeError(401, 'Revoked'); return { name: 'Fixture', email: 'fixture@example.com', credits: 30, plan: "pro", billing_enabled: true, ai: { mode: 'platform' } }; }
+    account() { if (accountRevoked) throw new BridgeError(401, 'Revoked'); return { name: 'Fixture', email: 'fixture@example.com', credits: 30, plan: "pro", billing_enabled: true, ai: { mode: 'platform' }, has_profile: !noProfile, contact_ready: !noProfile, resume_ready: !noProfile }; }
     profile() { if (noProfile) throw new BridgeError(404, 'Profile not created yet'); return { full_name: 'Fixture' }; }
     application(id) { if (blocked) throw new BridgeError(409, 'Verify the previous submission'); return { id }; }
     claimAutoApply(id, code) { calls.push({ claim: { id, code } }); return { auto_submit: claimed }; }
@@ -252,7 +252,7 @@ test('a missing profile is marked for the panel, which may open only the profile
   h.local.connectionType = 'automatic';
   assert.equal((await h.send({ type: 'openProfile', path: '/billing' }, h.content)).ok, true);
   const tab = h.calls.find((call) => call.url?.includes('/extension-session#'));
-  assert.equal(new URLSearchParams(new URL(tab.url).hash.slice(1)).get('next'), '/profile');
+  assert.equal(new URLSearchParams(new URL(tab.url).hash.slice(1)).get('next'), '/profile?from=extension');
   assert.equal((await h.send({ type: 'openWebsite', path: '/profile' }, h.content)).ok, false);
 });
 
@@ -870,4 +870,17 @@ test('disableCreditFallback disables automatic credit fallback via storage or pr
   const pageHarness = harness({ engine: 'ai_led' });
   assert.equal((await pageHarness.send({ type: 'agentStart', appId: null, disableCreditFallback: true }, pageHarness.content)).ok, true);
   assert.equal(typeof pageHarness.agentInstances[0].fallbackStep, 'function');
+});
+
+test('status reports profile readiness and openProfile opens /profile?from=extension', async () => {
+  const h = harness({ noProfile: true });
+  const res = await h.send({ type: 'status' }, h.ui);
+  assert.equal(res.ok, true);
+  assert.equal(res.data.hasProfile, false);
+  assert.equal(res.data.contactReady, false);
+  assert.equal(res.data.resumeReady, false);
+
+  const opened = await h.send({ type: 'openProfile' }, h.content);
+  assert.equal(opened.ok, true);
+  assert.ok(h.calls.some((c) => typeof c.url === 'string' && c.url.endsWith('/profile?from=extension')));
 });

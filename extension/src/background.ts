@@ -250,7 +250,7 @@ async function status(tabId?: number, url?: string) {
     if (!app && url && /^https?:/.test(url)) app = await b.lookup(url);
     const custom = await getCustomAI();
     const customAI = custom?.enabled ? { model: custom.model, baseUrl: custom.baseUrl } : null;
-    return { connectionType: s.connectionType ?? "manual", extensionEngine: s.extensionEngine, customAI, configured: true, connected: true, baseUrl: s.baseUrl, name: account.name ?? account.email, email: account.email, credits: account.credits, plan: account.plan, billingEnabled: account.billing_enabled, ai: account.ai, tab, app, aiDrafts: s.aiDrafts };
+    return { connectionType: s.connectionType ?? "manual", extensionEngine: s.extensionEngine, customAI, configured: true, connected: true, baseUrl: s.baseUrl, name: account.name ?? account.email, email: account.email, credits: account.credits, plan: account.plan, billingEnabled: account.billing_enabled, ai: account.ai, hasProfile: account.has_profile, contactReady: account.contact_ready, resumeReady: account.resume_ready, tab, app, aiDrafts: s.aiDrafts };
   } catch (err: any) {
     if (err?.status === 401) await clearConnection();
     return { configured: true, connected: false, baseUrl: s.baseUrl, error: err?.message, status: err?.status };
@@ -393,7 +393,7 @@ async function websiteSession(signedIn) {
 
 // Fixed destinations, plus the Applications add-job form prefilled with an http(s) job URL.
 function isWebsitePath(path) {
-  if (["/dashboard", "/applications", "/profile", "/settings", "/settings#extension-ai"].includes(path)) return true;
+  if (["/dashboard", "/applications", "/profile", "/profile?from=extension", "/settings", "/settings#extension-ai"].includes(path)) return true;
   if (typeof path !== "string" || !path.startsWith("/applications?")) return false;
   const q = new URLSearchParams(path.slice("/applications?".length));
   if ([...q.keys()].some((k) => k !== "add" && k !== "url") || q.get("add") !== "1") return false;
@@ -956,7 +956,7 @@ const handlers = {
   agentControl: (msg: any, sender: any) => agentControl(fromPage(sender) ? sender.tab.id : msg.tabId, msg.action, msg.text),
   agentStatus: (msg: any, sender: any) => agentStatus(fromPage(sender) ? sender.tab.id : msg.tabId),
   openOptions: () => chrome.runtime.openOptionsPage(),
-  openProfile: () => openWebsite("/profile"),
+  openProfile: () => openWebsite("/profile?from=extension"),
   test: async () => {
     profileCache = null;
     return status(undefined, undefined);
