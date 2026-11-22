@@ -570,9 +570,10 @@
     if (key === "Escape" && !pickerOpen(ref)) return false;
     const role = el.getAttribute("role");
     if (key === "Enter" && !["combobox", "listbox", "option"].includes(role) && el.tagName !== "SELECT") return false;
-    // Enter in an input whose list is closed reaches the form: react-select lets it through, and
-    // the browser submits (on Greenhouse every empty required field turned red). Only into an open list.
-    if (key === "Enter" && el.tagName === "INPUT" && !listShown(el)) return false;
+    // Enter in an input whose list is closed or has no selectable options reaches the form:
+    // react-select lets it through, and the browser submits (on Greenhouse every empty required
+    // field turns red). Only allow Enter into an open list with at least one selectable option.
+    if (key === "Enter" && el.tagName === "INPUT" && (!listShown(el) || !hasSelectableOption(ref, el))) return false;
     if (clickable(ref)) return false;
     el.focus?.();
     return document.activeElement === el || el.getRootNode()?.activeElement === el;
@@ -960,6 +961,16 @@
     return ownedLists(el).some((list) => isVisible(list, true));
   }
 
+  /** Whether an open picker actually has at least one selectable option (not "No options" / loading). */
+  function hasSelectableOption(ref, el = find(ref)) {
+    if (!el) return false;
+    const owned = ownedLists(el);
+    if (owned.length) {
+      return owned.some((list) => Boolean(list.querySelector('[role="option"], option, li[data-value], .pac-item')));
+    }
+    return visibleOptions(ref, false).length > 0;
+  }
+
   function pickerOpen(ref, checkLayout = true, boundOnly = false) {
     const el = find(ref);
     if (!el) return false;
@@ -1102,6 +1113,7 @@
    */
   function keyCommitStart(ref, answer) {
     if (!showsChoice(typedText(ref), answer)) return { ok: false, before: "" };
+    if (!hasSelectableOption(ref)) return { ok: false, before: "" };
     const first = firstOptionMatches(ref, answer);
     if (first?.known && !first.matches) return { ok: false, before: "" };
     return { ok: true, before: committedValue(ref, true) ?? "" };

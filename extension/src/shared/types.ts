@@ -21,7 +21,7 @@ export type {
   FieldReport,
 };
 
-export type ExtensionEngine = "ai_led" | "rules_led";
+export type ExtensionEngine = "auto" | "ai_led" | "rules_led";
 
 export interface ExtensionSettings {
   baseUrl: string;

@@ -16,7 +16,7 @@ function el(tag, attrs = {}, ...children) {
 const button = (label, onclick, cls = "") => el("button", { type: "button", class: cls, onclick }, label);
 
 function show(...nodes) {
-  $("view").replaceChildren(...nodes);
+  $("view").replaceChildren(...nodes.flat(Infinity).filter((n) => n != null && n !== false));
 }
 
 function setConn(kind, text) {
@@ -74,7 +74,6 @@ async function status() {
 async function render(s, { notFound = false } = {}) {
   $("prefs").hidden = true;
   $("foot").hidden = true;
-  $("setup").hidden = true;
 
   if (!s.configured) {
     setConn("off", "Not connected");
@@ -102,26 +101,24 @@ async function render(s, { notFound = false } = {}) {
     ));
   }
 
-  setConn("good", "Connected");
-  $("conn").title = s.name ?? "";
-  const saved = await chrome.storage.local.get(["autoApply", "aiDrafts", "fillOptional"]);
-  $("autoApply").checked = saved.autoApply === true;
-  $("aiDrafts").checked = saved.aiDrafts != null ? saved.aiDrafts === true : Boolean(s.aiDrafts);
-  $("fillOptional").checked = saved.fillOptional !== false;
-  $("prefs").hidden = false;
-  $("connText").textContent += s.ai?.mode === "personal" ? ` · Re-enter AI key in extension settings` : ` · ${s.credits ?? 0} credits`;
-  const engine = s.extensionEngine === "rules_led" ? "Rule based" : "Agent based";
   let provider = "ApplyShortly AI";
   if (s.customAI) {
     let host = "";
     try { host = new URL(s.customAI.baseUrl).hostname.replace(/^(api|generativelanguage)\./, ""); } catch { /* keep empty */ }
-    provider = `${s.customAI.model || "Custom"}${host ? ` · ${host}` : ""}`;
+    provider = `${s.customAI.model || "Custom"}${host ? ` (${host})` : ""}`;
   }
-  $("setup").replaceChildren(
-    el("div", { title: "Form assistant engine" }, el("small", {}, "Engine:"), el("b", {}, engine)),
-    el("div", { title: "AI provider" }, el("small", {}, "AI:"), el("b", {}, provider)),
-  );
-  $("setup").hidden = false;
+  const connSummary = s.ai?.mode === "personal"
+    ? "Re-enter AI key in extension settings"
+    : `${provider} · ${s.credits ?? 0} credits`;
+  setConn("good", connSummary);
+  $("conn").title = [s.name, connSummary].filter(Boolean).join(" — ");
+  const saved = await chrome.storage.local.get(["autoApply", "aiDrafts", "fillOptional", "extensionEngine"]);
+  $("autoApply").checked = saved.autoApply === true;
+  $("aiDrafts").checked = saved.aiDrafts != null ? saved.aiDrafts === true : Boolean(s.aiDrafts);
+  $("fillOptional").checked = saved.fillOptional !== false;
+  $("prefs").hidden = false;
+  const currentEngine = normEngine(saved.extensionEngine ?? s.extensionEngine);
+  syncEngineUI(currentEngine);
   const key = await shortcut();
   $("foot").replaceChildren(
     el("a", { href: "#", onclick: (e) => { e.preventDefault(); openTab(`${s.baseUrl}/applications`); } }, "Open ApplyShortly"),
@@ -187,6 +184,37 @@ async function render(s, { notFound = false } = {}) {
     ),
   );
 }
+
+const normEngine = (v: any) => (v === "ai_led" || v === "rules_led" ? v : "auto");
+const ENGINE_HINTS: Record<string, string> = {
+  auto: "Rule fills first, then Agent reviews",
+  ai_led: "AI-led from start to finish",
+  rules_led: "Deterministic fill, no AI credits",
+};
+
+function syncEngineUI(engine: string) {
+  const val = normEngine(engine);
+  const seg = $("engineSeg");
+  if (seg) {
+    for (const b of seg.querySelectorAll("button[data-engine]")) {
+      b.setAttribute("aria-checked", b.dataset.engine === val ? "true" : "false");
+    }
+  }
+  const hint = $("engineHint");
+  if (hint) hint.textContent = ENGINE_HINTS[val];
+}
+
+for (const b of $("engineSeg")?.querySelectorAll("button[data-engine]") ?? []) {
+  b.addEventListener("click", async () => {
+    const next = normEngine(b.dataset.engine);
+    syncEngineUI(next);
+    await chrome.storage.local.set({ extensionEngine: next });
+  });
+}
+
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area === "local" && "extensionEngine" in changes) syncEngineUI(changes.extensionEngine.newValue);
+});
 
 for (const key of ["autoApply", "aiDrafts", "fillOptional"]) {
   $(key).addEventListener("change", async (e: any) => {

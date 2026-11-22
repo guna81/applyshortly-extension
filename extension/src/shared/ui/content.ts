@@ -308,7 +308,7 @@
         if (!quiet) await report("opened");
       }
       if (!quiet && state.ctx.agentAvailable) { panel.idle(); return true; }
-      if (!quiet && state.ctx.agentEngine === "ai_led") {
+      if (!quiet && ["ai_led", "auto"].includes(state.ctx.agentEngine)) {
         state = null;
         throw new Error("The Agent based form assistant is unavailable. Check your connection or AI provider and retry.");
       }
@@ -465,23 +465,12 @@
   }
 
   let shownLog: string[] = []; // the agent's log lines already narrated in the chat
-  let shownFilledCount = 0;
 
   /** Each agent step message appears in its own chat bubble (skipping exact back-to-back duplicates). */
   function pushStep(text) {
     const tail = chat.lines.at(-1);
     if (tail?.step && tail.text === text) return;
     chat.lines.push({ role: "assistant", local: true, step: true, text });
-  }
-
-  function narrateFills(next: any) {
-    const filled = Array.isArray(next?.filled) ? next.filled : [];
-    if (filled.length <= shownFilledCount) return false;
-    const fresh = filled.slice(shownFilledCount);
-    shownFilledCount = filled.length;
-    const items = fresh.map((f: any) => (f && f.label && f.value ? `${f.label}: ${f.value}` : f?.label || String(f)));
-    chat.lines.push({ role: "assistant", local: true, filled: items });
-    return true;
   }
 
   /** Every new line the agent logs joins the chat, folded into one bubble per run of steps. */
@@ -506,13 +495,11 @@
 
   /** Brings the agent's progress into the chat: every step it takes, its questions, and what happened when it stopped. */
   async function agentChanged(previous, next) {
+    // Both Rule and Agent engines speak in unified natural-language bubbles via `log`.
     const logNew = narrate(next);
-    // The agent-based assistant speaks for itself; do not turn its structured
-    // fill data into a separate, code-generated checklist in the conversation.
-    const fillNew = next.agent_engine === "ai_led" ? false : narrateFills(next);
     const key = (a) => (a?.status === "waiting" ? `waiting:${a.question?.kind}:${a.question?.text}` : a?.status);
     if (key(previous) === key(next)) {
-      panel.agent(Boolean(logNew || fillNew));
+      panel.agent(Boolean(logNew));
       return;
     }
     if (next.status === "waiting") {
@@ -539,7 +526,7 @@
     // Done driving: read the page as it is now, so the chat can follow up and Submit knows the state.
     const gone = next.status === "failed" && next.failure_code === "posting_gone";
     if (state) state.postingGone = gone;
-    const lead = gone ? `${next.message || "This job posting is closed or has been removed."} There is no application form to fill, so I've stopped.` : next.status === "ready" ? ([next.message, next.captchaPending ? "Complete any CAPTCHA the site requires, then submit the application on the page." : ""].filter(Boolean).join(" ")) : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
+    const lead = gone ? `${next.message || "This job posting is closed or has been removed."} There is no application form to fill, so I've stopped.` : next.status === "ready" ? ([next.message, next.captchaPending && !/\bcaptcha\b/i.test(String(next.message ?? "")) ? "Complete any CAPTCHA the site requires, then submit the application on the page." : ""].filter(Boolean).join(" ")) : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
     // The agent also logged its message as a step; the hand-off below says it, so don't show it twice.
     const tail = chat.lines.at(-1);
     if (tail?.step && next.message && lead.includes(next.message)) {
@@ -993,7 +980,9 @@
   async function boot() {
     let hello;
     try {
-      hello = await send({ type: "hello", url: location.href });
+      const nav = performance?.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
+      const reloaded = nav?.type === "reload";
+      hello = await send({ type: "hello", url: location.href, reloaded });
     } catch {
       return; // extension reloaded or not configured; stay quiet on unrelated pages
     }

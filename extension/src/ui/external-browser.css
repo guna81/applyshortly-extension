@@ -10,7 +10,6 @@
 .assistant #state { font-size: 18px; letter-spacing: -.02em; }
 .assistant .conn-card small { margin-top: 2px; }
 .assistant button { min-height: 40px; font-size: 13px; font-weight: 600; }
-.assistant #stop { color: var(--muted); }
 .assistant .connection-message:empty { display: none; }
 .assistant .connection-message { margin: 14px 0 0; font-size: 13px; }
 .assistant .permissions { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; }

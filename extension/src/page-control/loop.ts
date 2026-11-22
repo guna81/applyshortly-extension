@@ -34,6 +34,7 @@ const WAIT_FOR_POLL_MS = 250;
 const REPEAT_LIMIT = 3;
 const RECENT_STATES = 10;
 const CALL_LIMIT = 40;
+const LOCAL_CALL_LIMIT = 80;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -41,15 +42,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export class ProgressGuard {
   states: string[] = [];
   calls: number = 0;
+  localCalls: number = 0;
   failures: string[] = [];
   failureDetails: any[] = [];
   failedLastTurn: boolean = false;
   reading: boolean = false;
+  localRule: boolean = false;
 
   constructor() { this.reset(); }
-  reset() { this.states = []; this.calls = 0; this.failures = []; this.failureDetails = []; this.failedLastTurn = false; this.reading = false; }
+  reset() { this.states = []; this.calls = 0; this.localCalls = 0; this.failures = []; this.failureDetails = []; this.failedLastTurn = false; this.reading = false; this.localRule = false; }
   /** The step just taken only looked (a screenshot, review, options): the same page after it is no stall. */
   noteReading(reading) { this.reading = Boolean(reading); }
+  /** The step just taken was a local 0-LLM rule step: keep stall checks, but do not burn the LLM call budget. */
+  noteLocalRule(local) { this.localRule = Boolean(local); }
   /** Labels of the actions that failed in the latest step ([] when all stuck). A stall with failures is a field the agent cannot fill. */
   /** `details`: for each failed action its label, the text it tried and the error, so a hand-off can say why it failed. */
   noteFailures(labels, details = []) {
@@ -73,11 +78,15 @@ export class ProgressGuard {
     this.failedLastTurn = false;
     this.states.push(state);
     this.states = this.states.slice(-RECENT_STATES);
+    const isLocalRule = this.localRule;
+    this.localRule = false;
     if (this.calls >= CALL_LIMIT) return `The agent reached its ${CALL_LIMIT}-call safety limit.`;
+    if (this.localCalls >= LOCAL_CALL_LIMIT) return `The rule assistant reached its ${LOCAL_CALL_LIMIT}-step safety limit.`;
     if (this.states.filter((previous) => previous === state).length >= REPEAT_LIMIT) {
       return "The page keeps coming back to the same state without progress.";
     }
-    this.calls += 1;
+    if (isLocalRule) this.localCalls += 1;
+    else this.calls += 1;
     return null;
   }
 }
@@ -323,7 +332,7 @@ async function typeInto(driver, target, frames, text, adaptive = false, modelDri
 }
 
 /** Native selects directly; custom dropdowns and typeaheads by opening, typing and picking. */
-async function choose(driver, target, frames, answer, adaptive = false, modelDriven = false) {
+async function choose(driver, target, frames, answer, adaptive = false, modelDriven = false, fastFail = false) {
   const ruleMatch = !modelDriven;
   const keepSearch = modelDriven && target.popup && target.role === "textbox";
   const native = await driver.call(target.frame, "selectNative", target.local, answer, ruleMatch);
@@ -369,7 +378,8 @@ async function choose(driver, target, frames, answer, adaptive = false, modelDri
   if (!match.ok) {
     // Role-less typeaheads (older react-select): the filtered list's first entry is highlighted,
     // so ArrowDown + Enter commits it; keep it only if the widget then shows the answer.
-    const keyed = modelDriven ? { committed: "", verified: false, undone: true } : await commitByKeys(driver, target, answer);
+    // In Auto mode's fast rule pass (fastFail), never press Enter blindly — leave unmatched comboboxes for Agent.
+    const keyed = (modelDriven || fastFail) ? { committed: "", verified: false, undone: true } : await commitByKeys(driver, target, answer);
     if (keyed.verified) return { matched: answer, ...keyed };
     // Keep the search and its choices visible so the model can select the site's exact label.
     if (!keepSearch) await closePicker(driver, target);
@@ -500,7 +510,7 @@ export async function questionChoices(driver, refs, frames, observation, questio
 }
 
 /** Carries out one vetted action; returns the result the platform sees next step. */
-export async function execute(driver, refs, frames, action, files, modelDriven = false) {
+export async function execute(driver, refs, frames, action, files, modelDriven = false, fastFail = false) {
   const target = action.ref ? refs.get(action.ref) : null;
   if (action.ref && !target) throw new Error("That element is no longer on the page.");
   switch (action.type) {
@@ -547,12 +557,12 @@ export async function execute(driver, refs, frames, action, files, modelDriven =
     }
 
     case "select": {
-      const first = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id), modelDriven);
-      if (first.verified || modelDriven) return first;
+      const first = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id), modelDriven, fastFail);
+      if (first.verified || modelDriven || fastFail) return first;
       // The first pick often lands late or races the menu opening: look once more, then try once
       // more. Choosing the same option again is harmless if the first had already taken.
       try {
-        const second = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id), modelDriven);
+        const second = await choose(driver, target, frames, action.text ?? "", Boolean(action.command_id), modelDriven, fastFail);
         return second.verified || !first.committed ? second : first;
       } catch { return first; }
     }
@@ -1042,6 +1052,11 @@ export class Agent {
         this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code, ...(res.debug ? { debug: res.debug } : {}) };
         // The agent's own words, once: the hand-off at "ready" is said by the panel, and a question's text is the question card itself.
         // Only what the agent itself wrote (its message with each step, or with a question), never a line made up by this code.
+        if (Array.isArray(res.pre_messages)) {
+          for (const line of res.pre_messages) {
+            if (line && !echoes(line, res.question?.text)) this.say(String(line));
+          }
+        }
         if (res.message && res.status !== "ready_for_review" && !echoes(res.message, res.question?.text)) this.say(res.message);
         for (const [index, action] of (res.actions ?? []).entries()) {
           if (this.stopped || this.paused || controlRevision !== this.controlRevision) break;
@@ -1067,7 +1082,7 @@ export class Agent {
             } else {
               // Same document, same control (not edited by the user, not replaced), not a password.
               await this.runner.guard(action);
-              outcome = await withDeadline(executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files, res.agent_engine === "ai_led")), STEP_DEADLINE_MS, `doing ${action.label || action.type}`);
+              outcome = await withDeadline(executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files, res.agent_engine === "ai_led", Boolean(res.local_rule_step))), STEP_DEADLINE_MS, `doing ${action.label || action.type}`);
             }
 
             if (outcome && typeof outcome === "object" && outcome.via === "activateOption") this.recovered("activate_option", action.label);
@@ -1091,6 +1106,7 @@ export class Agent {
           ? res.actions.every((a) => ["review", "options", "observe", "read_page", "wait"].includes(a.type))
           : Boolean(res.want_screenshot);
         this.progressGuard.noteReading(looks && results.every((r) => r.ok));
+        this.progressGuard.noteLocalRule(Boolean(res.local_rule_step));
         // The field's name, not the verb the action's label starts with ("Filled Phone" → "Phone").
         {
           const failed = results.filter((r) => !r.ok).map((r) => ({

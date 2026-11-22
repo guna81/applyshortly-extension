@@ -1135,6 +1135,12 @@
   function chooseDialOption(options, answer) {
     const code = String(answer).replace(/\D/g, "");
     const listed = options.filter((o) => normalise(o.text).split(" ").includes(code) && /\+/.test(o.text));
+    if (listed.length > 1) {
+      for (const name of countriesFor(String(answer).trim())) {
+        const hit = listed.find((o) => ` ${normalise(o.text)} `.includes(` ${normalise(name)} `));
+        if (hit) return hit;
+      }
+    }
     if (listed.length) return listed[0];
     for (const name of countriesFor(String(answer).trim())) {
       const hit = options.find((o) => ` ${normalise(o.text)} `.includes(` ${normalise(name)} `));

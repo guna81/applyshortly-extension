@@ -315,7 +315,7 @@ typeahead dropdowns, forms inside frames, single-page apps that change step with
 page), the chat carries on by driving the tab itself after **Fill this form**, and says so first.
 Inside, this is the form agent (`src/agent/`); to you it is the same chat.
 
-- It works in the tab you started it in, one tab at a time, step by step: it reads the page
+- It works independently in each tab you start it in, step by step: it reads the page
   (every frame, open shadow roots, the open dialog only when one is up), asks your ApplyShortly
   server what to do next, then clicks and types with real input events and looks again.
 - Answers your profile and answer bank cover are typed without any AI call. AI is used only to

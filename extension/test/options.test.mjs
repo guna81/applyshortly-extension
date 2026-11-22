@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
-async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false, hasProfile = true, contactReady = true, resumeReady = true } = {}) {
+async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false, hasProfile = true, contactReady = true, resumeReady = true, externalBrowserEnabled = false } = {}) {
   const dom = new JSDOM(readFileSync(new URL('../src/ui/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
   const calls = [];
   let connected = signedIn;
@@ -30,6 +30,7 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
           case 'disableCustomAI': custom = { ...custom, enabled: false }; data = true; break;
           case 'deleteAIProvider': ai.configured = []; data = ai; break;
           case 'disconnect': connected = false; data = true; break;
+          case 'externalBrowser': data = { enabled: externalBrowserEnabled, connected: false }; break;
           default: data = true;
         }
         return { ok: true, data };
@@ -259,11 +260,11 @@ test('a connection made in the background shows without reloading', async () => 
   } finally { h.close(); }
 });
 
-test('extension has its own engine selector, defaulting to Agent based form assistant', async () => {
+test('extension has its own engine selector, defaulting to Auto (Rule + Agent hybrid)', async () => {
   const h = await setup();
   try {
     const select = h.document.querySelector('#extensionEngine');
-    assert.equal(select.value, 'ai_led');
+    assert.equal(select.value, 'auto');
     select.value = 'rules_led';
     select.dispatchEvent(new h.window.Event('change'));
     await h.flush();
@@ -325,5 +326,35 @@ test('connected user without a profile sees profile setup card and opens /profil
     assert.ok(h.calls.some((item) => item.type === 'openWebsite' && item.path === '/profile?from=extension'));
   } finally {
     h.close();
+  }
+});
+
+test('extensionEngine select stays in sync with chrome.storage.onChanged updates', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const select = h.document.querySelector('#extensionEngine');
+    assert.equal(select.value, 'auto');
+    h.storageChanged({ extensionEngine: { newValue: 'rules_led' } });
+    assert.equal(select.value, 'rules_led');
+    h.storageChanged({ extensionEngine: { newValue: 'ai_led' } });
+    assert.equal(select.value, 'ai_led');
+  } finally {
+    h.close();
+  }
+});
+
+test('connected assistant card is hidden when external browser control is disabled and shown when enabled', async () => {
+  const disabled = await setup({ signedIn: true, externalBrowserEnabled: false });
+  try {
+    assert.equal(disabled.document.querySelector('#assistant-link').hidden, true);
+  } finally {
+    disabled.close();
+  }
+
+  const enabled = await setup({ signedIn: true, externalBrowserEnabled: true });
+  try {
+    assert.equal(enabled.document.querySelector('#assistant-link').hidden, false);
+  } finally {
+    enabled.close();
   }
 });

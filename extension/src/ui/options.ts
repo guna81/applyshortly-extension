@@ -123,7 +123,7 @@ async function test() {
 async function load() {
   const s = await send("connectionSettings");
   $("token").value = "";
-  $("extensionEngine").value = s.extensionEngine === "rules_led" ? "rules_led" : "ai_led";
+  $("extensionEngine").value = ["auto", "ai_led", "rules_led"].includes(s.extensionEngine) ? s.extensionEngine : "auto";
   $("agentVision").checked = s.agentVision !== false;
   $("autoApply").checked = s.autoApply === true;
   $("fillOptional").checked = s.fillOptional !== false;
@@ -135,6 +135,10 @@ async function load() {
     const cmd = (await chrome.commands.getAll()).find((c) => c.name === "autofill");
     if (cmd?.shortcut) $("shortcutHint").textContent = ` or press ${cmd.shortcut}`;
   } catch { /* No keyboard shortcut available. */ }
+  try {
+    const ext = await send("externalBrowser", { action: "status" });
+    if ($("assistant-link")) $("assistant-link").hidden = ext?.enabled === false;
+  } catch { /* Keep assistant link hidden when status is unavailable. */ }
   await connect();
   const custom = await send("customAISettings");
   if (custom?.enabled) {
@@ -251,7 +255,12 @@ $("aiFunding").addEventListener("change", () => {
 $("retest").addEventListener("click", () => void connect());
 // The background follows website sign-in and sign-out; show the result here as it happens.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !("token" in changes)) return;
+  if (area !== "local") return;
+  if ("extensionEngine" in changes && $("extensionEngine")) {
+    const v = changes.extensionEngine.newValue;
+    $("extensionEngine").value = v === "ai_led" || v === "rules_led" ? v : "auto";
+  }
+  if (!("token" in changes)) return;
   if (changes.token.newValue) $("pairingMsg").textContent = ""; // e.g. a stale "Logged out."
   void test();
 });
@@ -264,7 +273,49 @@ $("reveal").addEventListener("click", () => {
   $("token").type = hidden ? "text" : "password";
   $("reveal").title = hidden ? "Hide key" : "Show key";
   $("reveal").setAttribute("aria-label", $("reveal").title);
+  $("reveal").setAttribute("aria-pressed", String(hidden));
+  const eye = $("reveal").querySelector(".icon-eye");
+  const eyeOff = $("reveal").querySelector(".icon-eye-off");
+  if (eye) eye.toggleAttribute("hidden", hidden);
+  if (eyeOff) eyeOff.toggleAttribute("hidden", !hidden);
 });
+(() => {
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(".section-nav a[href^='#']"));
+  if (!links.length) return;
+  const setActive = (id: string) => {
+    for (const link of links) {
+      const match = link.getAttribute("href") === `#${id}`;
+      link.classList.toggle("active", match);
+      if (match) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    }
+  };
+  const initialId = (location.hash && links.some((l) => l.getAttribute("href") === location.hash))
+    ? location.hash.slice(1)
+    : (links[0].getAttribute("href")?.slice(1) || "");
+  if (initialId) setActive(initialId);
+  for (const link of links) {
+    link.addEventListener("click", () => {
+      const id = link.getAttribute("href")?.slice(1);
+      if (id) setActive(id);
+    });
+  }
+  if (typeof IntersectionObserver === "function") {
+    const sections = links
+      .map((l) => document.getElementById(l.getAttribute("href")?.slice(1) || ""))
+      .filter((el): el is HTMLElement => Boolean(el));
+    const visible = new Set<string>();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add(entry.target.id);
+        else visible.delete(entry.target.id);
+      }
+      const firstVisible = sections.find((s) => visible.has(s.id));
+      if (firstVisible) setActive(firstVisible.id);
+    }, { rootMargin: "-10% 0px -65% 0px", threshold: 0 });
+    for (const section of sections) observer.observe(section);
+  }
+})();
 $("extensionEngine").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ extensionEngine: /** @type {HTMLSelectElement} */ (event.target).value });
   $("prefMsg").textContent = "Saved for new extension sessions";

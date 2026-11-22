@@ -49,16 +49,27 @@ small { display: block; font-size: 12px; font-weight: 400; }
 button {
   font: inherit; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line);
   background: var(--bg); color: var(--fg); cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s, filter .15s;
 }
 button:hover:not(:disabled) { background: var(--hover); }
 button:disabled { opacity: .6; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+button.danger {
+  background: color-mix(in srgb, var(--bad-soft) 55%, var(--bg));
+  border-color: color-mix(in srgb, var(--bad) 32%, var(--line));
+  color: var(--bad);
+}
+button.danger:hover:not(:disabled) {
+  background: var(--bad-soft);
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+}
+button.danger:focus-visible { outline-color: var(--bad); }
 button.block { display: block; width: 100%; margin-top: 8px; }
 button.icon { border: 0; background: transparent; width: 36px; height: 36px; padding: 0; border-radius: 8px; color: var(--muted); font-size: 16px; display: inline-grid; place-items: center; }
 button.icon svg { width: 18px; height: 18px; }
 button.icon:hover { background: var(--soft); color: var(--fg); }
-button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .mark {
   flex: none; width: 32px; height: 32px; display: block;
@@ -147,15 +158,13 @@ input.switch:checked::after { transform: translateX(16px); }
 /* First-run steps on the "Connect" card */
 .first-run { margin: 0 0 10px; padding-left: 20px; font-size: 12.5px; display: grid; gap: 2px; }
 
-/* toolbar popup */
-code, kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); padding: 1px 5px; border-radius: 5px; }
-kbd { border: 1px solid var(--line); }
 /* popup */
 .popup { width: 340px; font-size: 13.5px; }
 .popup .bar-head { display: flex; gap: 10px; align-items: center; padding: 10px 10px 10px 12px; border-bottom: 1px solid var(--line); }
 .popup .bar-head b { display: block; }
 .popup .bar-head .mark { border-radius: 8px; }
-.popup .conn { display: flex; gap: 8px; align-items: center; color: var(--muted); white-space: nowrap; margin-top: 2px; }
+.popup .conn { display: flex; gap: 8px; align-items: center; color: var(--muted); white-space: nowrap; margin-top: 2px; min-width: 0; }
+.popup .conn #connText { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .popup .bar-head .grow { min-width: 0; }
 .popup main { padding: 10px 12px; }
 .popup .card { padding: 12px; }
@@ -169,25 +178,35 @@ kbd { border: 1px solid var(--line); }
 .popup .choice .d { display: block; margin-top: 1px; font-size: 12px; line-height: 1.4; font-weight: 400; color: var(--muted); }
 .popup .choice.primary .d { color: inherit; opacity: .85; }
 .popup button.ghost { border-color: transparent; background: transparent; color: var(--accent); }
-.popup .prefs { margin: 0 12px 12px; border-radius: 12px; background: var(--soft); overflow: hidden; }
+.popup .prefs { margin: 0 12px 12px; border-radius: 12px; background: var(--soft); }
 .popup .prefs-title { padding: 10px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
 .popup .prefs .switch-row { align-items: center; padding: 10px 14px; font-size: 13.5px; line-height: 1.3; }
+.popup .prefs .switch-row:last-child { border-radius: 0 0 12px 12px; }
 .popup .prefs .switch-row:hover { background: var(--hover); }
 .popup .prefs .lbl b { display: block; font-weight: 500; }
 .popup .prefs .lbl small { color: var(--muted); font-size: 11.5px; margin-top: 2px; line-height: 1.35; }
 .popup .prefs input.switch { margin: 0; }
 .popup .prefs .switch-row { border-top: 1px solid var(--line); }
-.popup .prefs .prefs-title + .switch-row { border-top: 0; }
+.popup .prefs .prefs-title + .switch-row,
+.popup .prefs .prefs-title + .engine-row { border-top: 0; }
+.popup .prefs .engine-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; font-size: 13.5px; line-height: 1.3; }
+.popup .seg { position: relative; display: inline-flex; flex: none; padding: 2px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); gap: 2px; }
+.popup .seg button { font: inherit; font-size: 11.5px; font-weight: 500; border: 0; border-radius: 6px; padding: 4px 8px; background: transparent; color: var(--muted); cursor: pointer; line-height: 1.25; }
+.popup .seg button:hover:not([aria-checked="true"]) { color: var(--fg); background: var(--hover); }
+.popup .seg button[aria-checked="true"] { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.popup .seg button[data-tip]::after {
+  content: attr(data-tip); position: absolute; right: 0; bottom: calc(100% + 7px); z-index: 20;
+  width: max-content; max-width: 240px; padding: 6px 9px; border-radius: 7px;
+  background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 400; line-height: 1.35;
+  text-align: left; white-space: normal; pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.22); opacity: 0; transform: translateY(3px);
+  transition: opacity .1s ease, transform .1s ease;
+}
+.popup .seg button[data-tip]:hover::after,
+.popup .seg button[data-tip]:focus-visible::after { opacity: 1; transform: translateY(0); }
 .popup .prefs small { font-size: 11.5px; margin-top: 2px; }
 .popup .foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; }
 .popup .assist { margin: 0 12px 10px; }
 .popup .assist .row-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 .popup .assist .badge { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--warn); color: #fff; }
 .popup .assist a { font-size: 12px; }
-
-.popup .setup { display: flex; align-items: center; gap: 6px; padding: 8px 12px 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
-.popup .setup[hidden] { display: none; }
-.popup .setup > div { display: contents; }
-.popup .setup small { font-size: 12px; }
-.popup .setup b { font-weight: 600; color: inherit; overflow: hidden; text-overflow: ellipsis; }
-.popup .setup > div + div::before { content: "·"; margin: 0 2px; }

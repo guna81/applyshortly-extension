@@ -513,6 +513,21 @@ test("Enter goes only into an open list: on a closed picker it would submit the 
   assert.equal(A.prepareKey(byName(obs, "State").ref, "Enter"), true); // a native select doesn't submit
 });
 
+test("Enter and keyCommitStart refuse when react-select is expanded with 'No options' (prevents Greenhouse form submit/red required warnings)", () => {
+  const { A, doc, observe } = page(`<form>
+      <label for="loc">Location (City)</label>
+      <input id="loc" role="combobox" aria-expanded="true" aria-controls="loc-list" value="Bengaluru, India">
+      <div id="loc-list" role="listbox"><div class="select__menu-notice">No options</div></div>
+    </form>`);
+  const obs = observe();
+  const loc = byName(obs, "Location (City)").ref;
+  assert.equal(A.prepareKey(loc, "Enter"), false);
+  assert.equal(A.keyCommitStart(loc, "Bengaluru, India").ok, false);
+  doc.getElementById("loc-list").innerHTML = `<div role="option">Bengaluru, Karnataka, India</div>`;
+  assert.equal(A.prepareKey(loc, "Enter"), true);
+  assert.equal(A.keyCommitStart(loc, "Bengaluru, India").ok, true);
+});
+
 test("hasText finds visible text for wait_for, never the panel's own text", () => {
   const { A, doc } = page(`<p>Uploading…</p><jobhunt-autofill-panel>Upload complete</jobhunt-autofill-panel>`);
   assert.equal(A.hasText("upload complete", false), false);

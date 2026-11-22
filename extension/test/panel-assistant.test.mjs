@@ -1712,3 +1712,87 @@ test("consecutive agent step messages render as separate chat bubbles", async ()
   assert.deepEqual(texts, ["Filled your name and email.", "Attaching your resume."]);
   page.win.close();
 });
+
+test("Rule and Agent engines share the same natural-language bubble style without a separate checklist, and CAPTCHA closing text is not duplicated", async () => {
+  const page = panelPage(() => null, {
+    context: () => ({ agentAvailable: true, agentEngine: "auto", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+
+  // During rule fills, structured `filled` data does not spawn a separate green-tick checklist.
+  page.message({
+    type: "agentUpdate", status: "running", agent_engine: "rules_led", appId: 5,
+    log: [],
+    filled: [{ label: "Full name", value: "Guna P" }, { label: "Email", value: "guna@example.com" }],
+  });
+  await tick(20);
+  assert.equal(page.shadow().querySelector(".said .filled"), null);
+
+  // On handoff to Agent, both the Rule summary and the Agent's message appear in uniform .bubble.assistant bubbles.
+  page.message({
+    type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5,
+    log: [
+      "Filled Full name and Email, and attached your resume.",
+      "I selected the remote location and added your portfolio link.",
+    ],
+    filled: [{ label: "Full name", value: "Guna P" }, { label: "Email", value: "guna@example.com" }],
+  });
+  await until(() => page.shadow().querySelectorAll(".bubble.assistant").length === 2, "two unified bubbles");
+  assert.equal(page.shadow().querySelector(".said .filled"), null);
+  assert.deepEqual(
+    [...page.shadow().querySelectorAll(".bubble.assistant")].map((b) => b.textContent),
+    [
+      "Filled Full name and Email, and attached your resume.",
+      "I selected the remote location and added your portfolio link.",
+    ],
+  );
+
+  // When ready_for_review message already mentions CAPTCHA, do not append a duplicate CAPTCHA sentence.
+  page.message({
+    type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5,
+    captchaPending: true,
+    log: [
+      "Filled Full name and Email, and attached your resume.",
+      "I selected the remote location and added your portfolio link.",
+    ],
+    message: "Please review the application, complete any CAPTCHA, and submit it yourself.",
+    filled: [{ label: "Full name", value: "Guna P" }, { label: "Email", value: "guna@example.com" }],
+  });
+  await until(() => page.shadow().querySelectorAll(".bubble.assistant").length === 3, "ready bubble");
+  const closing = [...page.shadow().querySelectorAll(".bubble.assistant")].at(-1).textContent;
+  assert.equal(closing, "Please review the application, complete any CAPTCHA, and submit it yourself.");
+  page.win.close();
+});
+
+test("boot reports reloaded=true on a page refresh so background stops stale agent runs", async () => {
+  const dom = new JSDOM(`<!doctype html><body>${FORM}</body>`, { url: "https://jobs.example/apply", runScripts: "outside-only", pretendToBeVisual: true });
+  const win = dom.window;
+  win.CSS = { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
+  win.Element.prototype.getClientRects = () => [{}];
+  win.performance.getEntriesByType = (kind) => (kind === "navigation" ? [{ type: "reload" }] : []);
+  const sent = [];
+  win.chrome = {
+    storage: { onChanged: { addListener: () => {} }, local: { get: async () => ({}), set: async () => {} } },
+    runtime: {
+      id: "fixture",
+      lastError: undefined,
+      sendMessage: (msg, cb) => {
+        sent.push(plain(msg));
+        const res = { ok: true, data: { appId: null, mode: "idle" } };
+        if (cb) cb(res);
+        return Promise.resolve(res);
+      },
+      onMessage: { addListener: () => {} },
+    },
+  };
+  for (const file of ["page-control/phone.js", "rule-based/profile-answer.js", "rule-based/answers.js", "page-control/dom.js", "shared/ui/panel-model.js", "shared/ui/panel-view.js", "shared/ui/content.js"]) {
+    win.eval(src(file));
+  }
+  await tick(20);
+  const hello = sent.find((m) => m.type === "hello");
+  assert.ok(hello, "boot sent hello");
+  assert.equal(hello.reloaded, true);
+  assert.equal(sent.some((m) => m.type === "agentStatus"), false);
+  win.close();
+});
