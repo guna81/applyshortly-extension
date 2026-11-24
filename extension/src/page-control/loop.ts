@@ -902,6 +902,19 @@ export class Agent {
           continue;
         }
 
+        // A live count from what the agent just saw, so the panel's bar moves while the agent works
+        // (including before the first planning step returns).
+        try {
+          const { fields } = scanFields(observation);
+          const next = {
+            field_total: fields.length,
+            field_answered: fields.filter((f) => { const v = String(f.value ?? "").trim(); return v && v !== "false"; }).length,
+          };
+          const changed = !this.progress || this.progress.field_total !== next.field_total || this.progress.field_answered !== next.field_answered;
+          this.progress = next;
+          if (changed) this.emit();
+        } catch { /* the count is a nicety; never fail a step over it */ }
+
         // Fill accessible application fields first. Only a challenge without an accessible
         // form blocks the run here; embedded widgets are left for the user at submission.
         const documentKey = observation.document_id ?? observation.url;
@@ -1044,11 +1057,6 @@ export class Agent {
         focusQuery = res.focus_query || "";
         wantScreenshot = Boolean(res.want_screenshot);
         annotateScreenshot = Boolean(res.annotate_screenshot);
-        // A live count from what the agent just saw, so the panel's bar moves while the agent works.
-        try {
-          const { fields } = scanFields(observation);
-          this.progress = { field_total: fields.length, field_answered: fields.filter((f) => { const v = String(f.value ?? "").trim(); return v && v !== "false"; }).length };
-        } catch { /* the count is a nicety; never fail a step over it */ }
         this.last = { agent_engine: res.agent_engine, question: res.question, filled: res.filled, unresolved: res.unresolved, message: res.message, failure_code: res.failure_code, ...(res.debug ? { debug: res.debug } : {}) };
         // The agent's own words, once: the hand-off at "ready" is said by the panel, and a question's text is the question card itself.
         // Only what the agent itself wrote (its message with each step, or with a question), never a line made up by this code.

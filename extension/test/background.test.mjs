@@ -11,7 +11,6 @@ import { TOOL_CATALOG } from "../src/agent-based/tools.js";
 // Changed 2026-11-17: background.js now imports modelBody (src/shared/model-turn.js); the harness strips imports, so it is supplied here.
 import { modelBody } from "../src/shared/model-turn.js";
 import { completeTools } from "../src/shared/custom-ai.js";
-import { externalBrowser } from "../src/shared/external-browser.js";
 import { autoApplyUrl } from '../src/shared/bridge.js';
 import { webcrypto } from 'node:crypto';
 
@@ -86,8 +85,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     commands: { onCommand: { addListener() {} } }, scripting: {},
     action: { setBadgeText: async (value) => { calls.push({ badge: value }); }, setBadgeBackgroundColor: async (value) => { calls.push({ badgeColor: value }); } },
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, formAgent, ruleAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, ruleAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, endpoint, complete, canDraft, customAssist, formAgent, ruleAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, ruleAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -694,15 +693,6 @@ test('restarting the same tab stops and awaits its ready controller before attac
   assert.equal(h.agentInstances[1].stopped, false);
   assert.equal(h.agentInstances.length, 3);
 });
-
-test('employer pages cannot connect, approve or control the external browser', async () => {
-  const h = harness();
-  for (const action of ['connect', 'decision', 'reviewAnswers', 'stop']) {
-    const result = await h.send({ type: 'externalBrowser', action }, h.content);
-    assert.equal(result.ok, false);
-  }
-});
-
 
 test('rule suggestion refuses drafting even with a custom provider', async () => {
   const h = harness();

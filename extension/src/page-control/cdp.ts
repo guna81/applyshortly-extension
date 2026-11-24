@@ -112,14 +112,51 @@ export interface LabelOverlay {
   bounds: [number, number, number, number];
 }
 
+export interface CdpTabInfo {
+  id?: number;
+  openerTabId?: number;
+  url?: string;
+  title?: string;
+}
+
+export interface CdpDebuggee {
+  tabId?: number;
+  sessionId?: string;
+}
+
+export interface CdpApi {
+  debugger: {
+    attach: (target: CdpDebuggee, requiredVersion: string) => Promise<void>;
+    detach: (target: CdpDebuggee) => Promise<void>;
+    sendCommand: (target: CdpDebuggee, method: string, params?: Record<string, any>) => Promise<any>;
+    onEvent: {
+      addListener: (cb: (source: CdpDebuggee, method: string, params?: any) => void) => void;
+      removeListener: (cb: (source: CdpDebuggee, method: string, params?: any) => void) => void;
+    };
+    onDetach: {
+      addListener: (cb: (source: CdpDebuggee, reason: string) => void) => void;
+      removeListener: (cb: (source: CdpDebuggee, reason: string) => void) => void;
+    };
+  };
+  tabs?: {
+    onCreated?: {
+      addListener: (cb: (tab: CdpTabInfo) => void) => void;
+      removeListener: (cb: (tab: CdpTabInfo) => void) => void;
+    };
+    get?: (tabId: number) => Promise<CdpTabInfo>;
+    update?: (tabId: number, props: Record<string, any>) => Promise<any>;
+    query?: (queryInfo: Record<string, any>) => Promise<CdpTabInfo[]>;
+  };
+}
+
 export class TabDriver {
   tabId: number;
   sources: string | string[];
-  api: typeof chrome;
+  api: CdpApi;
   sessions: Map<string, any>; // OOPIF sessionId → targetInfo
   worlds: Map<string, number>; // "session:frame" → executionContextId
   attached: boolean;
-  candidateTabs: Map<number, chrome.tabs.Tab>;
+  candidateTabs: Map<number, CdpTabInfo>;
   axRefs: Map<number, string>;
   lastInteractionAt: number;
   onTabChanged: ((tabId: number, url?: string) => Promise<void> | void) | null;
@@ -133,11 +170,11 @@ export class TabDriver {
     network: Array<{ status: number; method: string; url: string; error?: string }>;
   };
   requests: Map<string, { method: string; url: string }>;
-  handleCreated: (tab: chrome.tabs.Tab) => void;
+  handleCreated: (tab: CdpTabInfo) => void;
   onDetached: ((reason: string) => void) | null;
   observedTabs?: Map<number, string>;
 
-  constructor(tabId: number, sources: string, api = globalThis.chrome) {
+  constructor(tabId: number, sources: string | string[], api: CdpApi = (globalThis as any).chrome) {
     this.tabId = tabId;
     this.sources = sources;
     this.api = api;
@@ -186,7 +223,7 @@ export class TabDriver {
     await this.api.debugger.detach({ tabId: this.tabId }).catch(() => {});
   }
 
-  handleEvent(source: chrome.debugger.Debuggee, method: string, params?: any): void {
+  handleEvent(source: CdpDebuggee, method: string, params?: any): void {
     if (source.tabId !== this.tabId) return;
     if (method === "Target.attachedToTarget" && params.targetInfo?.type === "iframe") {
       this.sessions.set(params.sessionId, params.targetInfo);
@@ -256,7 +293,7 @@ export class TabDriver {
     };
   }
 
-  handleDetach(source: chrome.debugger.Debuggee, reason: string): void {
+  handleDetach(source: CdpDebuggee, reason: string): void {
     if (source.tabId !== this.tabId || !this.attached) return;
     this.attached = false;
     this.api.debugger.onEvent.removeListener(this.handleEvent);

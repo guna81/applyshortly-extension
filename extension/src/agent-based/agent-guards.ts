@@ -139,7 +139,14 @@ export function createGuards({ profile, job }: { profile: any; job?: any; allowD
       const standing = profile.preferences?.auto_consent === true && el.role === "checkbox" && action.checked === true && ACKNOWLEDGEMENT.test(text) && !NOT_ACKNOWLEDGEMENT.test(text);
       const said = (option || (el.role === "checkbox" && el.group)) && groupKey(obs, el) ? state.groupAnswers[groupKey(obs, el)] : undefined;
       const userChose = said !== undefined && namesOption(optionsOf(obs.elements, el), said, el);
-      if ((CONSENT.test(text) || NOT_ACKNOWLEDGEMENT.test(text) || LEGAL_FACT.test(text)) && !standing && !userChose && !profileBacked(el.group || el.name, el.name)) return refuse(ASK_CONSENT);
+      const userConfirmed =
+        el.role === "checkbox" &&
+        !el.group &&
+        answered !== undefined &&
+        (action.checked
+          ? /^(?:yes|y|true|agree|i agree|accept|ok|okay|sure|confirm|check|checked|tick)\b/i.test(answered.trim())
+          : /^(?:no|n|false|disagree|decline|uncheck|unchecked)\b/i.test(answered.trim()));
+      if ((CONSENT.test(text) || NOT_ACKNOWLEDGEMENT.test(text) || LEGAL_FACT.test(text)) && !standing && !userChose && !userConfirmed && !profileBacked(el.group || el.name, el.name)) return refuse(ASK_CONSENT);
       const otherChosen = option && el.group && obs.elements.some((m: any) => isChoiceOption(m) && m.group === el.group && m.ref !== el.ref && choiceState(m) === true);
       if (el.user_edited || otherChosen || (!mine && el.checked && !action.checked)) return refuse("The agent will not overwrite an existing answer.");
       if (mine && el.checked && action.checked) return refuse("That is already chosen.");

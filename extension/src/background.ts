@@ -7,7 +7,6 @@ import { formAgent } from "./agent-based/form-agent.js";
 import { ruleAgent } from "./rule-based/rule-agent.js";
 import { TOOL_CATALOG } from "./agent-based/tools.js";
 import { modelBody } from "./shared/model-turn.js";
-import { externalBrowser } from "./shared/external-browser.js";
 import { Agent } from "./page-control/loop.js";
 import { TabDriver } from "./page-control/cdp.js";
 import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./shared/bridge.js";
@@ -160,7 +159,6 @@ async function clearTab(tabId) {
 chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
 async function hello(tabId, url, reloaded = false) {
-  if (externalController.ownsTab(tabId)) return { appId: null, mode: "idle" };
   const origin = new URL(url).origin;
   const agent = agents.get(tabId);
   if (agent && !agent.stopped) {
@@ -205,7 +203,6 @@ async function claimAutoApply(appId, url) {
 
 /** Toolbar icon, shortcut or the panel → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
 async function start(tabId, url, allowUntracked, autoSubmit = false) {
-  await externalController.stop();
   const origin = new URL(url).origin;
   const current = await getTab(tabId);
   const existing = autofillIdFromUrl(url) ?? (current?.origin === origin ? current.appId : null);
@@ -315,7 +312,6 @@ async function pairingPoll() {
 }
 
 async function clearConnection() {
-  await externalController.stop();
   await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue", "browserDiagnosticQueue", "customAI"]);
   await chrome.storage.session.clear();
   profileCache = null;
@@ -452,7 +448,6 @@ async function autopilotWindow() {
 
 /** One poll: watches the window that is open, or opens one for the next job that is due. */
 async function autopilotPoll() {
-  if (externalController.status().connected) return false;
   if (autopilotPolling) return false;
   autopilotPolling = true;
   try {
@@ -595,7 +590,6 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false, 
   const revision = customProviderRevision;
   if (modelDriven && customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
   const custom = modelDriven ? await getCustomAI() : null;
-  await externalController.stop();
   const previous = agents.get(tabId);
   if (previous?.tabId === tabId) {
     // A restart is silent: the old run's closing lines must not appear in the new run's chat.
@@ -737,82 +731,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 /** A content script on a web page, as opposed to an extension page (which can also be a tab). */
 const fromPage = (sender) => Boolean(sender.tab) && /^https?:/.test(sender.url ?? "");
 
-/** Feature toggle: External Assistant Browser Control is temporarily disabled. */
-const EXTERNAL_BROWSER_FEATURE_ENABLED = false;
-
-const externalController = externalBrowser({
-  enabled: EXTERNAL_BROWSER_FEATURE_ENABLED,
-  settings,
-  store: { get: (key) => chrome.storage.local.get(key), set: (value) => chrome.storage.local.set(value) },
-  hasAccess: (origins) => chrome.permissions.contains({ origins }),
-  report: async (application_id: any, event: any, url: any) => (await bridge()).report({ application_id, event, url } as any),
-  sources: async () => Promise.all(AGENT_PAGE_SCRIPTS.map(async (path) =>
-    (await fetch(chrome.runtime.getURL(path))).text())),
-  resume: async () => {
-    const p = await profile();
-    return p.resume_url ? (await bridge()).resume(p.resume_url) : null;
-  },
-});
-
-// If disabled, ensure any lingering state or connections are severed immediately.
-if (!EXTERNAL_BROWSER_FEATURE_ENABLED) {
-  void externalController.stop();
-  void chrome.storage.local.remove("externalBrowser").catch(() => {});
-}
-
-// The assistant's steps are shown in the page's own ApplyShortly panel, not in a new window.
-// Pushed to the tab it works in whenever they change (and once more when it lets go).
-let pushedKey = "";
-let pushedTab = null;
-async function pushAssistantSteps() {
-  if (!EXTERNAL_BROWSER_FEATURE_ENABLED) return;
-  const status = externalController.status();
-  const tabId = externalController.workingTab();
-  const active = Boolean(status.connected && tabId != null);
-  const target = active ? tabId : pushedTab;
-  if (target == null) return;
-  const steps = status.activity.slice(-14).map(({ id, text, state }) => ({ id, text, state }));
-  const notes = externalController.notes();
-  const assistantName = status.batches.find((b) => ["active", "paused", "needs_verification"].includes(b.state))?.assistant;
-  const key = JSON.stringify([target, active, status.paused, steps, notes, assistantName, status.submissionState]);
-  if (key === pushedKey) return;
-  pushedKey = key;
-  pushedTab = active ? tabId : null;
-  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes, assistantName, submissionState: status.submissionState }, { frameId: 0 }).catch(() => {});
-}
-if (EXTERNAL_BROWSER_FEATURE_ENABLED && typeof setInterval === "function") {
-  setInterval(() => { void pushAssistantSteps(); }, 1000);
-}
+// Clear any lingering legacy externalBrowser key from older installs.
+void chrome.storage.local.remove("externalBrowser").catch(() => {});
 
 const handlers = {
-  assistantControl: async (msg, sender) => {
-    if (!EXTERNAL_BROWSER_FEATURE_ENABLED) throw new Error("External assistant control is currently disabled.");
-    // Only the tab the assistant is working in may pause or stop it.
-    if (!sender.tab || !externalController.ownsTab(sender.tab.id)) throw new Error("This tab isn't being driven by an assistant.");
-    if (msg.action === "pause") return externalController.pauseForUser();
-    if (msg.action === "continue") return externalController.continueAfterUser();
-    if (msg.action === "stop") { await externalController.stop(); return true; }
-    if (msg.action === "note") { await externalController.sendNote(msg.text); void pushAssistantSteps(); return true; }
-    throw new Error("Unknown assistant action.");
-  },
-  externalBrowser: async (msg) => {
-    if (!EXTERNAL_BROWSER_FEATURE_ENABLED) {
-      if (msg.action === "status") return externalController.status();
-      if (msg.action === "stop") { await externalController.stop(); return true; }
-      throw new Error("External assistant control is currently disabled.");
-    }
-    if (msg.action === "connect") return externalController.connect();
-    if (msg.action === "autoApprove") return externalController.setAutoApprove(msg.on === true);
-    if (msg.action === "standing") return externalController.setStanding(msg.on === true);
-    if (msg.action === "approveNavigation") return externalController.approveNavigation();
-    if (msg.action === "reviewAnswers") return externalController.reviewAnswers();
-    if (msg.action === "status") return externalController.status();
-    if (msg.action === "decision") return externalController.decision(msg.batchId, msg.approve === true);
-    if (msg.action === "pause") return externalController.pauseForUser();
-    if (msg.action === "continue") return externalController.continueAfterUser();
-    if (msg.action === "stop") { await externalController.stop(); return true; }
-    throw new Error("Unknown browser action.");
-  },
   browserSignIn: async (msg) => browserSignIn(await platformOrigin(), msg.interactive !== false),
   customAISettings: async () => {
     const custom = await getCustomAI();
@@ -1001,14 +923,14 @@ const clip = (value: any, max: number) => (typeof value === "string" ? value.tri
 /** The page's job for drafting on an untracked page, trimmed to the API's limits; none without a title. */
 
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied"]);
 
 async function dispatch(msg: any, sender: any) {
   await storageReady;
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/ui/options.html", "src/ui/popup.html", "src/ui/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/ui/options.html", "src/ui/popup.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
@@ -1042,7 +964,3 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
 
 // The browser reconnects by itself once the user has connected it (a browser start, an
 // extension reload or a service-worker restart); Stop turns that off.
-if (EXTERNAL_BROWSER_FEATURE_ENABLED) {
-  chrome.runtime.onStartup?.addListener(() => { void externalController.resumeIfWanted(); });
-  void externalController.resumeIfWanted().catch(() => {});
-}

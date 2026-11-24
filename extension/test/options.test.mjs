@@ -342,19 +342,3 @@ test('extensionEngine select stays in sync with chrome.storage.onChanged updates
     h.close();
   }
 });
-
-test('connected assistant card is hidden when external browser control is disabled and shown when enabled', async () => {
-  const disabled = await setup({ signedIn: true, externalBrowserEnabled: false });
-  try {
-    assert.equal(disabled.document.querySelector('#assistant-link').hidden, true);
-  } finally {
-    disabled.close();
-  }
-
-  const enabled = await setup({ signedIn: true, externalBrowserEnabled: true });
-  try {
-    assert.equal(enabled.document.querySelector('#assistant-link').hidden, false);
-  } finally {
-    enabled.close();
-  }
-});

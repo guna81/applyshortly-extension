@@ -1,4 +1,3 @@
-import { activityList, attention } from "../shared/external-activity.js";
 const $ = (id: string): any => document.getElementById(id);
 const P = globalThis.JobHuntPanel;
 
@@ -223,39 +222,3 @@ for (const key of ["autoApply", "aiDrafts", "fillOptional"]) {
 }
 
 await render(await status());
-
-const controlUrl = chrome.runtime.getURL("src/ui/external-browser.html");
-const openControl = (e) => { e?.preventDefault(); void chrome.tabs.create({ url: controlUrl }); window.close(); };
-
-/** The connected assistant's live steps. Quiet link when nothing is connected. */
-async function renderAssistant() {
-  const box = $("assist");
-  if (!box) return false;
-  let data = null;
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "externalBrowser", action: "status" });
-    data = res?.ok ? res.data : null;
-  } catch { data = null; }
-  if (data?.enabled === false) {
-    box.hidden = true;
-    box.replaceChildren();
-    return false;
-  }
-  box.hidden = false;
-  if (!data?.connected) {
-    box.replaceChildren(el("a", { href: controlUrl, onclick: openControl }, "Let your assistant fill applications"));
-    return true;
-  }
-  const waiting = attention(data);
-  box.replaceChildren(
-    el("div", { class: "row-head" },
-      el("b", {}, "Assistant activity"),
-      waiting ? el("span", { class: "badge" }, "Needs you") : el("span", { class: "muted" }, "Connected")),
-    activityList(data.activity ?? [], 6),
-    el("a", { href: controlUrl, onclick: openControl }, waiting ? "Review and approve" : "Open full view"),
-  );
-  return true;
-}
-if (await renderAssistant()) {
-  setInterval(renderAssistant, 1500);
-}

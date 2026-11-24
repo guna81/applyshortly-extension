@@ -135,10 +135,6 @@ async function load() {
     const cmd = (await chrome.commands.getAll()).find((c) => c.name === "autofill");
     if (cmd?.shortcut) $("shortcutHint").textContent = ` or press ${cmd.shortcut}`;
   } catch { /* No keyboard shortcut available. */ }
-  try {
-    const ext = await send("externalBrowser", { action: "status" });
-    if ($("assistant-link")) $("assistant-link").hidden = ext?.enabled === false;
-  } catch { /* Keep assistant link hidden when status is unavailable. */ }
   await connect();
   const custom = await send("customAISettings");
   if (custom?.enabled) {
