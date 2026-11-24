@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 
-async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false, hasProfile = true, contactReady = true, resumeReady = true, externalBrowserEnabled = false } = {}) {
+async function setup({ signedIn = false, billingEnabled = true, autoConnect = false, customEnabled = false, hasProfile = true, contactReady = true, resumeReady = true } = {}) {
   const dom = new JSDOM(readFileSync(new URL('../src/ui/options.html', import.meta.url), 'utf8'), { runScripts: 'outside-only' });
   const calls = [];
   let connected = signedIn;
@@ -30,7 +30,6 @@ async function setup({ signedIn = false, billingEnabled = true, autoConnect = fa
           case 'disableCustomAI': custom = { ...custom, enabled: false }; data = true; break;
           case 'deleteAIProvider': ai.configured = []; data = ai; break;
           case 'disconnect': connected = false; data = true; break;
-          case 'externalBrowser': data = { enabled: externalBrowserEnabled, connected: false }; break;
           default: data = true;
         }
         return { ok: true, data };
@@ -260,7 +259,7 @@ test('a connection made in the background shows without reloading', async () => 
   } finally { h.close(); }
 });
 
-test('extension has its own engine selector, defaulting to Auto (Rule + Agent hybrid)', async () => {
+test('extension has its own engine selector, defaulting to Auto', async () => {
   const h = await setup();
   try {
     const select = h.document.querySelector('#extensionEngine');

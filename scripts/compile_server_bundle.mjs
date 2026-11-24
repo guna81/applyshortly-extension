@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Compiles the shared form agent core into a standalone Node 22 ESM bundle
-// plus the isolated-world page scripts (profile-answer.js, dom.js, page.js)
+// plus the isolated-world page scripts (phone.js, dom.js, page.js)
 // for consumption by apply-assistant/browser-runner.
 import { build } from "esbuild";
 import { mkdirSync } from "node:fs";

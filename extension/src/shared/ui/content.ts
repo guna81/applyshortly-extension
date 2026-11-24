@@ -963,12 +963,6 @@
       sendResponse({ ok: true });
       return;
     }
-    if (msg?.type === "assistantUpdate") {
-      // The connected assistant is filling this page: show its steps in this panel.
-      panel.assistant({ submissionState: msg.submissionState, assistantName: typeof msg.assistantName === "string" ? msg.assistantName : null, active: msg.active === true, paused: msg.paused === true, steps: Array.isArray(msg.steps) ? msg.steps : [], notes: Array.isArray(msg.notes) ? msg.notes : [] });
-      sendResponse({ ok: true });
-      return;
-    }
     if (msg?.type === "run") {
       // Same application: keep what's been filled and answered; another one starts over.
       if (state && state.appId !== (msg.appId ?? null)) { state = null; chat = newChat(); }

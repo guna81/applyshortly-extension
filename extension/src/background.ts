@@ -573,7 +573,11 @@ async function agentReport(appId: any, event: string, res: any, url: any) {
       source: f.source,
       needs_review: f.needs_review,
     }));
-    body.unresolved_fields = (res.unresolved ?? []).map((label: string) => ({ label, reason: "No answer yet" }));
+    body.unresolved_fields = (res.unresolved ?? []).map((item: any) =>
+      typeof item === "string"
+        ? { label: item, reason: "No answer yet" }
+        : { label: String(item?.label || "the open field"), required: Boolean(item?.required), reason: "No answer yet" },
+    );
   } else if (event === "failed") {
     body.failure_code = res.failure_code ?? "unknown";
     body.note = String(res.message ?? "").slice(0, 1000) || null;

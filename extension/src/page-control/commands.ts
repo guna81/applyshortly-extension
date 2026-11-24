@@ -1,5 +1,4 @@
-// The verified command layer shared by every controller: the platform's Agent based form assistant engine (loop.js) and a
-// host assistant over the relay (external-browser.js). A controller decides what to do; this runs it
+// The verified command layer shared by the form agent loop (loop.js). A controller decides what to do; this runs it
 // against the page, checks the page is still what was observed, and reports what the page shows after.
 import { observeTab, execute, questionChoices, comboView } from "./loop.js";
 
@@ -81,6 +80,12 @@ export function driftOf(result, field, el, elements) {
 }
 
 const FORM_ROLES = new Set(["textbox", "textarea", "combobox", "select", "checkbox", "radio", "file", "switch", "slider", "spinbutton"]);
+const BARE_DIAL_PREFIX = /^\+\s*\(?\d{1,4}\)?\s*$/;
+
+/** A tel input holding only a country dial-code prefix (e.g. "+91", "+44") has no phone number yet. */
+export function isBarePhonePrefix(el: any): boolean {
+  return el?.input_type === "tel" && BARE_DIAL_PREFIX.test(String(el?.value ?? "").trim());
+}
 
 /** Radios, checkboxes and press-to-choose buttons that share a question form one group. */
 const groupKind = (e) => (e.role === "radio" || e.role === "checkbox" ? e.role : isChoiceOption(e) ? "choice" : null);
@@ -105,6 +110,7 @@ export function scanFields(observation) {
       return group.some(chosen);
     }
     if (e.role === "switch") return chosen(e);
+    if (isBarePhonePrefix(e)) return false;
     return String(e.value ?? "").trim() !== "";
   };
   const seenGroups = new Set();

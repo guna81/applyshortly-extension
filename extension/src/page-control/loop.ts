@@ -905,10 +905,11 @@ export class Agent {
         // A live count from what the agent just saw, so the panel's bar moves while the agent works
         // (including before the first planning step returns).
         try {
-          const { fields } = scanFields(observation);
+          const { fields, missing } = scanFields(observation);
+          const missingRefs = new Set(missing.map((m) => m.ref));
           const next = {
             field_total: fields.length,
-            field_answered: fields.filter((f) => { const v = String(f.value ?? "").trim(); return v && v !== "false"; }).length,
+            field_answered: fields.filter((f) => { const v = String(f.value ?? "").trim(); return v && v !== "false" && !missingRefs.has(f.ref); }).length,
           };
           const changed = !this.progress || this.progress.field_total !== next.field_total || this.progress.field_answered !== next.field_answered;
           this.progress = next;

@@ -1258,68 +1258,6 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   page.win.close();
 });
 
-test("the connected assistant's steps open in this same panel, with Pause for me and Continue", async () => {
-  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
-  page.handlers.assistantControl = () => true;
-  // Nothing was started here: the first update opens the panel by itself.
-  assert.equal(page.shadow(), undefined);
-  page.message({ type: "assistantUpdate", active: true, paused: false, steps: [
-    { id: "1", text: "Typing into “First Name” (1 of 15)", state: "done" },
-    { id: "2", text: "Choosing an option in “City” (2 of 15)", state: "running" },
-  ] });
-  await until(() => /Your assistant is filling this form/.test(page.shadow()?.textContent ?? ""), "assistant headline");
-  const text = page.shadow().textContent;
-  assert.match(text, /Typing into “First Name” \(1 of 15\)/);
-  assert.match(text, /Choosing an option in “City” \(2 of 15\)/);
-  assert.equal(page.shadow().querySelector(".composer-input"), null, "no chat box while the assistant drives");
-  const button = (label) => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === label);
-  button("Pause for me").click();
-  await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "pause"), "pause sent");
-  page.message({ type: "assistantUpdate", active: true, paused: true, steps: [{ id: "3", text: "You paused the assistant. Edit the form freely", state: "warn" }] });
-  await until(() => /Paused: the form is yours/.test(page.shadow().textContent), "paused headline");
-  button("Continue").click();
-  await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "continue"), "continue sent");
-  page.message({ type: "assistantUpdate", active: false, paused: false, steps: [{ id: "4", text: "Released the application tab", state: "done" }] });
-  await until(() => /Browser control stopped/.test(page.shadow().textContent), "finished headline");
-  assert.equal(button("Pause for me"), undefined, "no controls once it has finished");
-  page.win.close();
-});
-
-test("the user can message the connected assistant from the panel and sees when it was read", async () => {
-  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
-  let refuse = null;
-  page.handlers.assistantControl = (msg) => { if (refuse) throw new Error(refuse); return true; };
-  const update = (extra = {}) => page.message({ type: "assistantUpdate", active: true, paused: false, steps: [{ id: "1", text: "Typing into “First Name” (1 of 15)", state: "running" }], notes: [], ...extra });
-  update();
-  await until(() => page.shadow()?.querySelector(".note-input"), "message box");
-  assert.equal(page.shadow().querySelector(".composer-input"), null, "the agent chat box stays hidden");
-  const input = () => page.shadow().querySelector(".note-input");
-  input().value = "Use my work email please";
-  input().dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  update({ steps: [{ id: "2", text: "Choosing an option in “City” (2 of 15)", state: "running" }] }); // a re-render keeps what was typed
-  assert.equal(input().value, "Use my work email please");
-  input().dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  const note = await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "note"), "note sent");
-  assert.equal(note.text, "Use my work email please");
-  assert.equal(input().value, "", "the box is cleared once sent");
-  update({ notes: [{ id: "n1", text: "Use my work email please", read: false }] });
-  await until(() => /You: Use my work email please/.test(page.shadow().textContent) && /Waiting for your assistant to read this/.test(page.shadow().textContent), "waiting line");
-  update({ notes: [{ id: "n1", text: "Use my work email please", read: true }] });
-  await until(() => /Your assistant read this/.test(page.shadow().textContent), "read receipt");
-  // A refused message comes back into the box with the reason.
-  refuse = "Your assistant has no approved application open right now.";
-  input().value = "Second try";
-  input().dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  input().dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await until(() => /no approved application/.test(page.shadow().textContent), "refusal shown");
-  assert.equal(input().value, "Second try");
-  // Once the assistant has finished there is nobody to write to.
-  update({ active: false });
-  await until(() => /Browser control stopped/.test(page.shadow().textContent), "finished");
-  assert.equal(input(), null);
-  page.win.close();
-});
-
 test("browser manual handoff sends page questions back to the browser controller", async () => {
   const page = panelPage(() => { throw new Error("text-only assistant must not receive the question"); }, { form: STEP_FORM });
   page.start();
@@ -1500,19 +1438,6 @@ test("the panel stays above and inside a site's modal dialog, and returns when i
   modal.remove();
   await until(() => host.isConnected && host.parentNode === doc.documentElement, "panel restored after removal");
   page.win.close();
-});
-
-
-test("external assistant panel names the controller and never treats an uncertain submission as finished", async () => {
-  const page = panelPage(() => ({}), { form: STEP_FORM });
-  try {
-    page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "needs_verification", steps: [] });
-    await until(() => /Submission needs verification/.test(page.shadow()?.textContent ?? ""), "uncertain outcome");
-    assert.match(page.shadow().textContent, /Do not submit again/);
-    assert(!page.shadow().textContent.includes("then submit it yourself"));
-    page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "submitted", steps: [] });
-    await until(() => /The employer confirmed receipt/.test(page.shadow().textContent), "confirmed outcome");
-  } finally { page.win.close(); }
 });
 
 test("the panel explains a provider fallback while keeping method details secondary", async () => {

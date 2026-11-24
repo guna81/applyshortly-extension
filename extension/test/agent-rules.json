@@ -18,6 +18,14 @@
       "tick": true
     },
     {
+      "label": "I consent to data storage and handling",
+      "tick": true
+    },
+    {
+      "label": "I agree to the storage of your personal data",
+      "tick": true
+    },
+    {
       "label": "I acknowledge the privacy notice",
       "tick": true
     },

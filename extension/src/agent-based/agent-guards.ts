@@ -6,7 +6,7 @@
 import { AGENT_RULES } from "../shared/agent-rules.js";
 import { candidateContext } from "../shared/candidate-context.js";
 import { factMatches, profileFact } from "../shared/profile-facts.js";
-import { choiceState, isChoiceOption, namesOption, optionsOf, scanFields } from "../page-control/commands.js";
+import { choiceState, isBarePhonePrefix, isChoiceOption, namesOption, optionsOf, scanFields } from "../page-control/commands.js";
 
 const FORM_ROLES = ["textbox", "textarea", "select", "combobox", "radio", "checkbox", "file"];
 const SAFE_KEYS = /^(?:Tab|Escape|Space|Backspace|Enter|Arrow(?:Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/;
@@ -51,7 +51,7 @@ export function createGuards({ profile, job }: { profile: any; job?: any; allowD
   const profileBacked = (question: any, option: any) => factMatches(profileFact(question, profile, job), option);
   const grouped = (el: any) => isChoiceOption(el) || (el.role === "checkbox" && Boolean(el.group));
   const chosenIn = (obs: any, el: any) => obs.elements.some((m: any) => grouped(m) && (el.group ? m.group === el.group && m.frame === el.frame && m.section === el.section : m.ref === el.ref) && choiceState(m) === true);
-  const empty = (el: any) => !el.disabled && !el.user_edited && (["checkbox", "radio"].includes(el.role) ? !el.checked : !String(el.value ?? "").trim() || PLACEHOLDER.test(String(el.value).trim()));
+  const empty = (el: any) => !el.disabled && !el.user_edited && (["checkbox", "radio"].includes(el.role) ? !el.checked : !String(el.value ?? "").trim() || PLACEHOLDER.test(String(el.value).trim()) || isBarePhonePrefix(el));
   const hasFile = (file: any) => (file === "resume" ? Boolean(candidate.has_resume_file) : file === "cover_letter" ? Boolean(job?.cover_letter) : false);
   const anyFileAvailable = () => Boolean(candidate.has_resume_file || job?.cover_letter);
 
@@ -129,7 +129,7 @@ export function createGuards({ profile, job }: { profile: any; job?: any; allowD
       const name = `${el.group ?? ""} ${el.name ?? ""}`;
       const userSaidIt = answered !== undefined && answered.trim().toLowerCase() === action.text.trim().toLowerCase();
       if ((CONSENT.test(String(el.name ?? "")) || CITIZENSHIP.test(String(el.name ?? "")) || LEGAL_FACT.test(name)) && !userSaidIt && !profileBacked(el.name, action.text)) return refuse(ASK_CONSENT);
-      const holds = String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim());
+      const holds = String(el.value ?? "").trim() && !PLACEHOLDER.test(String(el.value).trim()) && !isBarePhonePrefix(el);
       if (el.user_edited || (!mine && holds && !(action.type === "select" && (el.expanded === true || ["select", "combobox"].includes(el.role))))) return refuse("The agent will not overwrite an existing answer.");
     }
     if (action.type === "check") {

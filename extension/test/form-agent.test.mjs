@@ -703,3 +703,38 @@ test("model-driven type with picker_open or search_pending reports ok without is
   assert.equal(plan2.status, "continue");
   assert.equal(plan2.actions[0].type, "select");
 });
+
+test("bare phone dial-code prefix (+91) is treated as empty for type_text, ask_user, and done", async () => {
+  const tel = () => el("e1", "textbox", "Phone", { input_type: "tel", value: "+91", required: true });
+
+  // 1. type_text is allowed instead of being refused as overwriting an existing answer
+  const typed = scripted({ tool_calls: [call("type_text", { ref: "e1", text: "+91 6381868258" })] });
+  const typePlan = await make(typed.request)(body(observation([tel()])));
+  assert.equal(typePlan.status, "continue");
+  assert.equal(typePlan.actions[0].type, "type");
+  assert.equal(typePlan.actions[0].ref, "e1");
+
+  // 2. done is refused while a required phone field only has "+91", and ask_user is allowed on it
+  const blockedDone = scripted(
+    { tool_calls: [call("done", { summary: "Done." })] },
+    { tool_calls: [call("ask_user", { ref: "e1", question: "Please enter your phone number.", actions: ["on_page"] })] },
+  );
+  const askPlan = await make(blockedDone.request)(body(observation([tel()])));
+  assert.equal(askPlan.status, "ask_user");
+  assert.match(blockedDone.seen[1].look.results[0].content, /Required fields are still unanswered/);
+});
+
+test("ready_for_review unresolved entries preserve each field's required flag", async () => {
+  const { request } = scripted({ tool_calls: [call("done", { summary: "Review and submit." })] });
+  const obs = observation([
+    el("e1", "textbox", "Name", { value: "Guna P", required: true }),
+    el("e2", "textbox", "Referral", { value: "", required: false }),
+    el("e3", "textbox", "Photograph", { value: "", required: false }),
+  ]);
+  const plan = await make(request)(body(obs));
+  assert.equal(plan.status, "ready_for_review");
+  assert.deepEqual(plan.unresolved, [
+    { label: "Referral", required: false },
+    { label: "Photograph", required: false },
+  ]);
+});

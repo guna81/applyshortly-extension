@@ -14,7 +14,7 @@ function findTsFiles(dir) {
       const full = join(dir, entry);
       if (statSync(full).isDirectory()) {
         results.push(...findTsFiles(full));
-      } else if (full.endsWith(".ts") && !full.endsWith("agent-rules.ts")) {
+      } else if (full.endsWith(".ts") && !full.endsWith("agent-rules.ts") && !full.endsWith("server-entry.ts")) {
         results.push(full);
       }
     }

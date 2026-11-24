@@ -463,8 +463,11 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     const response: any = { ...base, filled: Object.values(st.filled), status: plan.status, message: cut(plan.message, 1000), actions: plan.actions ?? [], question: plan.question ?? null };
     if (plan.question) { response.question = { kind: plan.question.kind, text: cut(plan.question.text, 1000), ref: plan.question.ref ?? null, optional: Boolean(plan.question.optional), ...(plan.question.actions ? { actions: plan.question.actions } : {}) }; }
     if (response.status === "ready_for_review") {
-      response.unresolved = scanFields(obs).fields.filter((f: any) => f.role !== "file" || f.required)
-        .filter((f: any) => !String(f.value ?? "").trim() || f.value === "false" || ("error" in f && f.error)).map((f: any) => f.name || "the open field");
+      const scanned = scanFields(obs);
+      const missingRefs = new Set(scanned.missing.map((m: any) => m.ref));
+      response.unresolved = scanned.fields.filter((f: any) => f.role !== "file" || f.required)
+        .filter((f: any) => missingRefs.has(f.ref) || !String(f.value ?? "").trim() || f.value === "false" || ("error" in f && f.error))
+        .map((f: any) => ({ label: f.name || "the open field", required: Boolean(f.required) }));
     }
     note("plan", { status: response.status, actions: response.actions.map((a: any) => ({ type: a.type, ref: a.ref })) });
     try { options.onState?.(clone(st)); } catch { /* saving is best effort */ }

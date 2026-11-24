@@ -661,6 +661,35 @@
     return !named || PICK_PLACEHOLDER.test(named) || EMPTY_OPTION.test(named) ? "" : named;
   }
 
+  /**
+   * Selected option text from a combobox's owned or sibling listbox, or its `title`, when the
+   * trigger itself has no visible text (icon/flag-only pickers like react-international-phone).
+   */
+  function listboxOrTitleValue(el, field) {
+    const lists = [...ownedLists(el)];
+    const parent = el.parentElement;
+    if (!lists.length && parent && parent.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"], select').length === 1) {
+      for (const list of parent.querySelectorAll(':scope > [role="listbox"], :scope > * > [role="listbox"]')) {
+        if (!el.contains(list)) lists.push(list);
+      }
+    }
+    const root = rootOf(el);
+    for (const list of lists) {
+      const activeId = list.getAttribute("aria-activedescendant");
+      const opt = list.querySelector('[role="option"][aria-selected="true"]')
+        || (activeId ? byId(root, activeId) : null);
+      if (!opt || opt.getAttribute("role") !== "option") continue;
+      const text = cleanLabel(opt.getAttribute("aria-label") || opt.textContent);
+      if (text && !PICK_PLACEHOLDER.test(text) && !EMPTY_OPTION.test(text) && normalise(text) !== normalise(field.label ?? "")) {
+        return text;
+      }
+    }
+    const title = cleanLabel(el.getAttribute("title") ?? "");
+    if (!title || PICK_PLACEHOLDER.test(title) || EMPTY_OPTION.test(title)) return "";
+    const labels = [field.label, field.explicitLabel, el.getAttribute("aria-label")].filter(Boolean).map(normalise);
+    return labels.includes(normalise(title)) ? "" : title;
+  }
+
   function dropdownValue(field, options = {}) {
     const el = field.el;
     if (el.matches("input")) return inputDropdownValue(el, options);
@@ -675,8 +704,9 @@
     if (el.matches(".mat-mdc-select-empty, .mat-select-empty") || el.querySelector(".mat-mdc-select-placeholder, .mat-select-placeholder")) return "";
     const valueText = el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text");
     const shown = cleanLabel(valueText ? visibleText(valueText) : visibleText(el));
+    if (!shown) return listboxOrTitleValue(el, field);
     const same = normalise(shown) === normalise(field.label ?? "");
-    return !shown || same || EMPTY_OPTION.test(shown) ? "" : shown;
+    return same || EMPTY_OPTION.test(shown) ? "" : shown;
   }
 
   const INLINE = new Set(["B", "I", "EM", "STRONG", "SMALL", "SPAN", "SVG", "IMG", "BR"]);
