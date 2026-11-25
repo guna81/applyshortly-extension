@@ -18,9 +18,10 @@ Run this checklist before merging to `main` or publishing a new Chrome Web Store
 Run these in the sibling platform checkout (`../apply-assistant`) with `EXTENSION_REPO` pointing here:
 
 - [ ] Sync compiled page scripts if `profile-answer.ts`, `dom.ts`, or `page.ts` changed (`make extension-sync-page`).
+- [ ] Rebuild the server `browser-runner` agent bundle if shared agent or `page-control/` code changed (`node scripts/compile_server_bundle.mjs ../apply-assistant/browser-runner/agent-bundle`), then run `npm run build && npm test` in `../apply-assistant/browser-runner`.
 - [ ] Refresh `extension.lock.json` (`python3 scripts/extension_checkout.py --lock`) and confirm platform backend CI (`make ci-backend`) passes.
-- [ ] Run **Tier 1 synthetic** testbed (all local fixtures) with both engines (`rules_led` and `ai_led`) — confirm **0 safety failures** and **no regressions**.
-- [ ] Run **Tier 2 live regression** testbed with both engines (`rules_led` and `ai_led`) — confirm **0 safety failures**, **0 provider errors**, and **no regressions**.
+- [ ] Run **Tier 1 synthetic** testbed (all local fixtures, `--surface extension`) — confirm **0 safety failures** and **no regressions**.
+- [ ] Run **Tier 2 live regression** (`Live regression — 5 forms`) on **both surfaces** (`--surface extension` and `--surface in_app` against the rebuilt `browser-runner`) with `--engine auto --model real` (plus `rules_led` / `ai_led` when changing engine-specific code) — confirm **5/5 passed**, **0 safety failures**, **0 repeated questions**, **0 provider errors**, and **no regressions**.
 - [ ] *(When changing `page-control/` or widget handling)* Run the platform Chromium browser fixtures (`make ci-browser`).
 
 ## 3. Merge and publish order

@@ -21,8 +21,9 @@ Before release, run the private platform's Chromium fixtures with `EXTENSION_REP
 to this checkout. Its `scripts/ci.sh backend` validates integration and contract compatibility
 against disposable data. Unit checks alone do not validate browser integration or live ATS support.
 Before every production release (merging to `main`, deploying, or publishing to the store), also
-run the platform's form-agent testbed (`tools/form-agent-testbed/`) with **both** engines
-(`rules_led` and `ai_led`) and confirm 0 safety failures and no regressions.
+run the platform's form-agent testbed (`tools/form-agent-testbed/`) in `auto` mode on **both**
+surfaces (this extension and the platform's in-app browser-runner) and confirm 0 safety failures
+and no regressions. Run `rules_led` or `ai_led` alone only to troubleshoot which engine part fails.
 Coordinate backend/API changes and refresh the platform's integration lock after validation.
 
 ## Fictional screenshots
