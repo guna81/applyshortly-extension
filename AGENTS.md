@@ -56,8 +56,9 @@ becomes a Tier 0 fixture that fails (`todo` until fixed). Rebuild with `python3 
 testbed does it for you). Report numbers as measured on those forms, not as general accuracy.
 
 **Pre-production gate (every release):** Before merging/pushing to `main`, deploying to production, or publishing a new extension package,
-run the platform testbed (`apply-assistant/tools/form-agent-testbed/`) on the live regression set with **both** engines (`rules_led` and `ai_led`)
-and verify 0 safety failures and no regressions.
+run the platform testbed (`apply-assistant/tools/form-agent-testbed/`) on the live regression set in `auto` mode on **both** surfaces (this
+extension and the platform's in-app browser-runner) and verify 0 safety failures and no regressions. Run `rules_led` or `ai_led` alone only when
+the user asks, to troubleshoot which engine part fails.
 
 ## Two engines, one agent each, no versions (rule for every contributor and coding agent)
 
