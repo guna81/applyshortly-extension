@@ -123,6 +123,51 @@
     return passwordShown || LOGIN_URL.test(pathname ?? "");
   }
 
+  const RESUME_FIELD = /\b(resume|r[eé]sum[eé]|cv|curriculum vitae|cover letter)\b/i;
+  const JOB_FIELD = /\b(linkedin|github|portfolio|work authorization|authorized to work|sponsorship|visa|notice period|expected salary|desired salary|current salary|compensation|years of experience|current company|current title|willing to relocate|relocation|how did you hear|referred by|start date|availability|pronouns|veteran|disability|eeo|equal opportunity)\b/i;
+  const CONTACT_FIELD = /\b(first name|last name|full name|your name|email|e-mail|phone|mobile|telephone)\b/i;
+  const JOB_CONTEXT = /\b(apply|application|job|jobs|career|careers|position|role|candidate|hiring|recruit|opening|vacancy)\b/i;
+  const APPLY_SUBMIT = /\b(submit application|apply now|apply for|submit your application|complete application|send application)\b/i;
+  const PAYMENT_FIELD = /\b(credit card|card number|cvv|cvc|expir(?:y|ation)|billing address|shipping address|promo code|coupon)\b/i;
+
+  /**
+   * Heuristic check for whether a page currently displays a job application form,
+   * used only when the user enables the optional floating "Start applying" launcher.
+   * Purely local — no network or AI calls.
+   */
+  function looksLikeApplicationForm({
+    fields = [],
+    pathname = "",
+    title = "",
+    hasSubmit = false,
+    passwordShown = false,
+    submitText = "",
+    pageHeading = "",
+  }: any = {}): boolean {
+    if (loginWall(pathname, Boolean(passwordShown))) return false;
+    if (!Array.isArray(fields) || !fields.length) return false;
+    const labels = fields.map((f: any) => String(f?.label ?? ""));
+    if (labels.some((l) => PAYMENT_FIELD.test(l))) return false;
+
+    const contextText = `${pathname} ${title} ${pageHeading} ${submitText}`;
+    const hasJobContext = JOB_CONTEXT.test(contextText);
+    const hasResumeUpload = fields.some((f: any) => (f?.kind === "file" || f?.kind === "picker") && RESUME_FIELD.test(String(f?.label ?? "")));
+    const hasAnyUpload = fields.some((f: any) => f?.kind === "file" || f?.kind === "picker");
+
+    if (hasResumeUpload) return true;
+    if (fields.length >= 2 && hasAnyUpload && hasJobContext) return true;
+    if (fields.length >= 2 && APPLY_SUBMIT.test(String(submitText ?? ""))) return true;
+
+    const jobFields = labels.filter((l) => JOB_FIELD.test(l)).length;
+    if (fields.length >= 2 && jobFields >= 1) return true;
+
+    const contactFields = labels.filter((l) => CONTACT_FIELD.test(l)).length;
+    if (fields.length >= 2 && contactFields >= 2 && hasJobContext) return true;
+    if (fields.length >= 3 && hasSubmit && hasJobContext) return true;
+
+    return false;
+  }
+
   /** Turns an error from the background worker into words and the one action that fixes it. */
   function friendlyError(message: any, status: any, baseUrl: any, code: any) {
     const msg = String(message ?? "");
@@ -440,7 +485,7 @@
   }
 
   (globalThis as any).JobHuntPanel = {
-    summarize, autoApplyBlockers, readinessNote, loginWall, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
+    summarize, autoApplyBlockers, readinessNote, loginWall, looksLikeApplicationForm, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
     groundedDraft, nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isPlainAnswer, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

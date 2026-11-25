@@ -1027,3 +1027,35 @@ test("Google Forms ARIA checkbox list groups options under the heading and detec
   assert.equal(fields[0].required, true);
   assert.deepEqual(plain(fields[0].options.map((o) => o.text)), ["Basics of AI", "Generative AI"]);
 });
+
+test("Material UI inputs with empty <label>, sibling <p> caption, and generic 'Enter' placeholder extract label and required flag", () => {
+  const { doc, F } = page(`<div class="MuiBox-root">
+    <div class="MuiGrid-root">
+      <p class="sc-caption">First Name*</p>
+      <div class="MuiFormControl-root">
+        <label class="sc-empty"></label>
+        <div class="MuiInputBase-root"><input type="text" name="talent.firstName" placeholder="Enter"></div>
+      </div>
+    </div>
+    <div class="MuiGrid-root">
+      <p class="sc-caption">Email*</p>
+      <div class="MuiFormControl-root">
+        <label class="sc-empty"></label>
+        <div class="MuiInputBase-root"><input type="text" name="talent.email" placeholder="Enter"></div>
+      </div>
+    </div>
+    <div class="MuiGrid-root">
+      <p class="sc-caption">Portfolio URL</p>
+      <div class="MuiFormControl-root">
+        <label class="sc-empty"></label>
+        <div class="MuiInputBase-root"><input type="text" name="portfolio" placeholder="Enter"></div>
+      </div>
+    </div>
+  </div>`);
+  const fields = F.collectFields(doc, { checkLayout: false });
+  assert.deepEqual(plain(fields.map((f) => ({ label: f.label, required: f.required }))), [
+    { label: "First Name", required: true },
+    { label: "Email", required: true },
+    { label: "Portfolio URL", required: false },
+  ]);
+});

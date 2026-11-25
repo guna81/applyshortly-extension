@@ -245,3 +245,81 @@ test("ruleAgent matches question_variants, falls back to lookupSaved, and propag
   assert.equal(done.filled.find((f) => f.answer_id === 42)?.source, "answer_bank");
   assert.equal(done.filled.find((f) => f.answer_id === 99)?.source, "answer_bank");
 });
+
+test("ruleAgent never stuffs profile values into Yes/No questions, skill-specific experience, or long essay prompts, and uses raw dial code for async phone country selectors", async () => {
+  const lookups = [];
+  const profile = {
+    ...PROFILE,
+    links: [...PROFILE.links, { label: "GitHub", url: "https://github.example.test/alex-testperson" }],
+    answers: [
+      { id: 7, question_pattern: "What is your current location?", answer: "Austin, TX" },
+    ],
+  };
+  const step = ruleAgent(profile, null, {
+    handoffOnly: true,
+    lookupSaved: async (q) => { lookups.push(q); return { answer: "Should not be called in handoffOnly" }; },
+  });
+  const fields = [
+    { ref: "0.1", role: "combobox", name: "Country", section: "Phone", popup: true, value: "", required: false },
+    { ref: "0.2", role: "textbox", name: "Phone", section: "Phone", value: "", required: false },
+    { ref: "0.3", role: "combobox", name: "Are you subject to any employment agreements and/or post-employment restrictions with your current employer or a past employer?", popup: true, value: "", required: true },
+    { ref: "0.4", role: "combobox", name: "Are you currently location in either Canada, UK or Poland?", popup: true, value: "", required: true },
+    { ref: "0.5", role: "textarea", name: "Tell us about something you've built on top of our tools, in the last few years. Share a public link if you have one (GitHub, a demo, a write-up).", value: "", required: true },
+    { ref: "0.6", role: "textbox", name: "How many years of experience do you have working with Python?", value: "", required: true },
+  ];
+
+  // Step 1: Country under Phone section uses raw dial code ("+1") so async comboboxes match "United States (+1)" or "USA (+1)".
+  const r1 = await step(obs(fields));
+  assert.equal(r1.status, "continue");
+  assert.equal(r1.actions[0].ref, "0.1");
+  assert.equal(r1.actions[0].text, "+1");
+  fields[0].value = "+1";
+
+  // Step 2: Phone strips leading +1 because Country (under Phone section) is present.
+  const r2 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r2.status, "continue");
+  assert.equal(r2.actions[0].ref, "0.2");
+  assert.equal(r2.actions[0].text, "555 010 0199");
+  fields[1].value = "555 010 0199";
+
+  // Step 3: Hands off immediately without attempting 0.3, 0.4, 0.5, or 0.6, and without calling lookupSaved in handoffOnly mode.
+  const r3 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r3.status, "handoff");
+  assert.deepEqual(r3.handoff.failedFields, []);
+  assert.equal(r3.handoff.missingRequiredCount, 4);
+  assert.equal(lookups.length, 0);
+});
+
+test("ruleAgent handles split Total experience (years + 0..11 months) and maxlength-constrained Contact number", async () => {
+  const step = ruleAgent({ ...PROFILE, total_experience_years: 6 }, null, { handoffOnly: true });
+  const fields = [
+    { ref: "0.1", role: "textbox", name: "Contact number :", maxlength: 10, value: "", required: true },
+    { ref: "0.2", role: "select", name: "Total experience", options: Array.from({ length: 51 }, (_, i) => String(i)), value: "", required: true },
+    { ref: "0.3", role: "select", name: "Total experience", options: Array.from({ length: 12 }, (_, i) => String(i)), value: "", required: true },
+  ];
+  const r1 = await step(obs(fields));
+  assert.equal(r1.actions[0].text, "5550100199");
+  fields[0].value = r1.actions[0].text;
+
+  const r2 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r2.actions[0].text, "6");
+  fields[1].value = r2.actions[0].text;
+
+  const r3 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r3.actions[0].text, "0");
+  fields[2].value = r3.actions[0].text;
+
+  const r4 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r4.status, "handoff");
+});
+
+test("ruleAgent does not click an Apply button when application fields are already on the page", async () => {
+  const step = ruleAgent(PROFILE, null);
+  const res = await step(obs([
+    { ref: "0.1", role: "textbox", name: "First Name", value: "Alex", required: true },
+    { ref: "0.2", role: "button", name: "Apply" },
+    { ref: "0.3", role: "button", name: "Submit application", submit_like: true },
+  ]));
+  assert.equal(res.status, "ready_for_review");
+  assert.deepEqual(res.actions, []);
+});

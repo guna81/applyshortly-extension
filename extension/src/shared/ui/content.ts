@@ -308,7 +308,7 @@
         if (!quiet) await report("opened");
       }
       if (!quiet && state.ctx.agentAvailable) { panel.idle(); return true; }
-      if (!quiet && state.ctx.agentEngine === "ai_led") {
+      if (!quiet && ["ai_led", "auto"].includes(state.ctx.agentEngine)) {
         state = null;
         throw new Error("The Agent based form assistant is unavailable. Check your connection or AI provider and retry.");
       }
@@ -465,23 +465,12 @@
   }
 
   let shownLog: string[] = []; // the agent's log lines already narrated in the chat
-  let shownFilledCount = 0;
 
   /** Each agent step message appears in its own chat bubble (skipping exact back-to-back duplicates). */
   function pushStep(text) {
     const tail = chat.lines.at(-1);
     if (tail?.step && tail.text === text) return;
     chat.lines.push({ role: "assistant", local: true, step: true, text });
-  }
-
-  function narrateFills(next: any) {
-    const filled = Array.isArray(next?.filled) ? next.filled : [];
-    if (filled.length <= shownFilledCount) return false;
-    const fresh = filled.slice(shownFilledCount);
-    shownFilledCount = filled.length;
-    const items = fresh.map((f: any) => (f && f.label && f.value ? `${f.label}: ${f.value}` : f?.label || String(f)));
-    chat.lines.push({ role: "assistant", local: true, filled: items });
-    return true;
   }
 
   /** Every new line the agent logs joins the chat, folded into one bubble per run of steps. */
@@ -506,13 +495,11 @@
 
   /** Brings the agent's progress into the chat: every step it takes, its questions, and what happened when it stopped. */
   async function agentChanged(previous, next) {
+    // Both Rule and Agent engines speak in unified natural-language bubbles via `log`.
     const logNew = narrate(next);
-    // The agent-based assistant speaks for itself; do not turn its structured
-    // fill data into a separate, code-generated checklist in the conversation.
-    const fillNew = next.agent_engine === "ai_led" ? false : narrateFills(next);
     const key = (a) => (a?.status === "waiting" ? `waiting:${a.question?.kind}:${a.question?.text}` : a?.status);
     if (key(previous) === key(next)) {
-      panel.agent(Boolean(logNew || fillNew));
+      panel.agent(Boolean(logNew));
       return;
     }
     if (next.status === "waiting") {
@@ -539,7 +526,7 @@
     // Done driving: read the page as it is now, so the chat can follow up and Submit knows the state.
     const gone = next.status === "failed" && next.failure_code === "posting_gone";
     if (state) state.postingGone = gone;
-    const lead = gone ? `${next.message || "This job posting is closed or has been removed."} There is no application form to fill, so I've stopped.` : next.status === "ready" ? ([next.message, next.captchaPending ? "Complete any CAPTCHA the site requires, then submit the application on the page." : ""].filter(Boolean).join(" ")) : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
+    const lead = gone ? `${next.message || "This job posting is closed or has been removed."} There is no application form to fill, so I've stopped.` : next.status === "ready" ? ([next.message, next.captchaPending && !/\bcaptcha\b/i.test(String(next.message ?? "")) ? "Complete any CAPTCHA the site requires, then submit the application on the page." : ""].filter(Boolean).join(" ")) : `${next.message ?? "I stopped."} You can finish it on the page, or ask me to change an answer.`;
     // The agent also logged its message as a step; the hand-off below says it, so don't show it twice.
     const tail = chat.lines.at(-1);
     if (tail?.step && next.message && lead.includes(next.message)) {
@@ -880,8 +867,91 @@
     get pageCount() { return pageCount(); },
     AUTO_APPLY_DELAY_S,
     agentControl, askAssistant, autoApply, markSubmitted, outlineTarget, run: start, send,
+    launch: launchFromButton,
+    dismissLauncher() {
+      launcherDismissedUrl = location.href;
+      launcherShown = false;
+      stopAutoDetect();
+    },
   };
   const panel = globalThis.JobHuntPanelView.create(ctl);
+
+  // ------------------------------------------------------------------ optional form-detected launcher
+
+  let allowAutoDetect = false;
+  let autoShowLauncherOn = false;
+  let launcherShown = false;
+  let launcherDismissedUrl = "";
+  let detectObserver: MutationObserver | null = null;
+  let detectTimer: any = null;
+
+  function stopAutoDetect() {
+    if (detectObserver) { detectObserver.disconnect(); detectObserver = null; }
+    if (detectTimer) { clearTimeout(detectTimer); detectTimer = null; }
+  }
+
+  function pageApplicationCheck() {
+    try {
+      const fields = F.collectFields(document);
+      const submitBtn = F.findSubmitButton(document, fields, { includeDisabled: true });
+      const submitText = submitBtn ? F.cleanLabel(submitBtn.getAttribute("aria-label") || (submitBtn.tagName === "INPUT" ? submitBtn.value : submitBtn.textContent)) : "";
+      const pageHeading = F.cleanLabel(document.querySelector("h1, h2")?.textContent ?? "");
+      const passwordShown = [...document.querySelectorAll("input[type=password]")].some((el) => !isHidden(el));
+      return P.looksLikeApplicationForm({
+        fields,
+        pathname: location.pathname,
+        title: document.title,
+        hasSubmit: Boolean(submitBtn),
+        passwordShown,
+        submitText,
+        pageHeading,
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  function maybeShowLauncher() {
+    if (!autoShowLauncherOn || !allowAutoDetect || state || agent || launcherShown || launcherDismissedUrl === location.href) return;
+    if (!pageApplicationCheck()) return;
+    launcherShown = true;
+    stopAutoDetect();
+    void panel.showLauncher();
+  }
+
+  function startAutoDetect() {
+    if (!autoShowLauncherOn || !allowAutoDetect || state || agent || launcherShown || launcherDismissedUrl === location.href) return;
+    maybeShowLauncher();
+    if (launcherShown) return;
+    if (!detectObserver) {
+      detectObserver = new MutationObserver(() => {
+        if (detectTimer) return;
+        detectTimer = setTimeout(() => {
+          detectTimer = null;
+          maybeShowLauncher();
+        }, 400);
+      });
+      detectObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    if (!detectTimer) {
+      detectTimer = setTimeout(() => {
+        detectTimer = null;
+        maybeShowLauncher();
+      }, 800);
+    }
+  }
+
+  async function launchFromButton() {
+    launcherDismissedUrl = location.href;
+    launcherShown = false;
+    stopAutoDetect();
+    panel.hideLauncher();
+    try {
+      await send({ type: "start", allowUntracked: true });
+    } catch {
+      await start(null, { show: true });
+    }
+  }
 
   // ------------------------------------------------------------------ lifecycle
 
@@ -941,6 +1011,16 @@
   try { void chrome.storage?.local?.get?.("autoApply")?.then?.((v) => { autoApplyOn = v?.autoApply === true; }); } catch { /* storage unavailable */ }
   chrome.storage?.onChanged?.addListener((changes, area) => {
     if (area !== "local") return;
+    if ("autoShowLauncher" in changes) {
+      autoShowLauncherOn = allowAutoDetect && changes.autoShowLauncher.newValue === true;
+      if (!autoShowLauncherOn) {
+        stopAutoDetect();
+        launcherShown = false;
+        panel.hideLauncher();
+      } else if (!state && !agent && launcherDismissedUrl !== location.href) {
+        startAutoDetect();
+      }
+    }
     if ("autoApply" in changes) {
       autoApplyOn = changes.autoApply.newValue === true;
       if (!autoApplyOn) return panel.cancelCountdown?.();
@@ -951,6 +1031,9 @@
   });
 
   async function start(appId: any, opts: any = {}) {
+    stopAutoDetect();
+    launcherShown = false;
+    panel.hideLauncher();
     panel.setRetry(appId);
     await panel.restore(opts);
     if (!(await run(appId)) || agentLive()) return;
@@ -976,12 +1059,6 @@
       sendResponse({ ok: true });
       return;
     }
-    if (msg?.type === "assistantUpdate") {
-      // The connected assistant is filling this page: show its steps in this panel.
-      panel.assistant({ submissionState: msg.submissionState, assistantName: typeof msg.assistantName === "string" ? msg.assistantName : null, active: msg.active === true, paused: msg.paused === true, steps: Array.isArray(msg.steps) ? msg.steps : [], notes: Array.isArray(msg.notes) ? msg.notes : [] });
-      sendResponse({ ok: true });
-      return;
-    }
     if (msg?.type === "run") {
       // Same application: keep what's been filled and answered; another one starts over.
       if (state && state.appId !== (msg.appId ?? null)) { state = null; chat = newChat(); }
@@ -993,11 +1070,18 @@
   async function boot() {
     let hello;
     try {
-      hello = await send({ type: "hello", url: location.href });
+      const nav = performance?.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
+      const reloaded = nav?.type === "reload";
+      hello = await send({ type: "hello", url: location.href, reloaded });
     } catch {
       return; // extension reloaded or not configured; stay quiet on unrelated pages
     }
-    if (hello.mode === "idle") return;
+    if (hello.mode === "idle") {
+      allowAutoDetect = hello.allowAutoDetect === true;
+      autoShowLauncherOn = allowAutoDetect && hello.autoShowLauncher === true;
+      if (autoShowLauncherOn) startAutoDetect();
+      return;
+    }
     if (hello.mode === "agent") {
       // A new page of a form the agent is filling: show its progress, don't autofill over it.
       handedOff = true;

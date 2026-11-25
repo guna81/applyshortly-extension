@@ -19,8 +19,8 @@ const FORM = `
     </fieldset>
   </form>`;
 
-function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), app = { title: "Engineer", company_name: "Acme" }, context } = {}) {
-  const dom = new JSDOM(`<!doctype html><body>${form}</body>`, { url: "https://jobs.example/apply", runScripts: "outside-only", pretendToBeVisual: true });
+function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), app = { title: "Engineer", company_name: "Acme" }, context, hello, url = "https://jobs.example/apply" } = {}) {
+  const dom = new JSDOM(`<!doctype html><body>${form}</body>`, { url, runScripts: "outside-only", pretendToBeVisual: true });
   const win = dom.window;
   win.CSS = { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
   win.Element.prototype.getClientRects = () => [{}];
@@ -32,7 +32,8 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
   const sent = [];
   let onMessage;
   const handlers = {
-    hello: () => ({ mode: "idle" }),
+    hello: hello ?? (() => ({ mode: "idle" })),
+    start: () => ({ found: true, appId: 5 }),
     context: context ?? (() => ({ profile: { full_name: "Ada Lovelace" }, app, aiDrafts: false })),
     resume: () => null,
     suggest: (msg) => suggest(msg),
@@ -1258,68 +1259,6 @@ test("Ashby positive receipt confirms only a new submission attempt, not a gener
   page.win.close();
 });
 
-test("the connected assistant's steps open in this same panel, with Pause for me and Continue", async () => {
-  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
-  page.handlers.assistantControl = () => true;
-  // Nothing was started here: the first update opens the panel by itself.
-  assert.equal(page.shadow(), undefined);
-  page.message({ type: "assistantUpdate", active: true, paused: false, steps: [
-    { id: "1", text: "Typing into “First Name” (1 of 15)", state: "done" },
-    { id: "2", text: "Choosing an option in “City” (2 of 15)", state: "running" },
-  ] });
-  await until(() => /Your assistant is filling this form/.test(page.shadow()?.textContent ?? ""), "assistant headline");
-  const text = page.shadow().textContent;
-  assert.match(text, /Typing into “First Name” \(1 of 15\)/);
-  assert.match(text, /Choosing an option in “City” \(2 of 15\)/);
-  assert.equal(page.shadow().querySelector(".composer-input"), null, "no chat box while the assistant drives");
-  const button = (label) => [...page.shadow().querySelectorAll("button")].find((b) => b.textContent === label);
-  button("Pause for me").click();
-  await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "pause"), "pause sent");
-  page.message({ type: "assistantUpdate", active: true, paused: true, steps: [{ id: "3", text: "You paused the assistant. Edit the form freely", state: "warn" }] });
-  await until(() => /Paused: the form is yours/.test(page.shadow().textContent), "paused headline");
-  button("Continue").click();
-  await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "continue"), "continue sent");
-  page.message({ type: "assistantUpdate", active: false, paused: false, steps: [{ id: "4", text: "Released the application tab", state: "done" }] });
-  await until(() => /Browser control stopped/.test(page.shadow().textContent), "finished headline");
-  assert.equal(button("Pause for me"), undefined, "no controls once it has finished");
-  page.win.close();
-});
-
-test("the user can message the connected assistant from the panel and sees when it was read", async () => {
-  const page = panelPage(() => { throw new Error("text assistant must not run"); }, { form: STEP_FORM });
-  let refuse = null;
-  page.handlers.assistantControl = (msg) => { if (refuse) throw new Error(refuse); return true; };
-  const update = (extra = {}) => page.message({ type: "assistantUpdate", active: true, paused: false, steps: [{ id: "1", text: "Typing into “First Name” (1 of 15)", state: "running" }], notes: [], ...extra });
-  update();
-  await until(() => page.shadow()?.querySelector(".note-input"), "message box");
-  assert.equal(page.shadow().querySelector(".composer-input"), null, "the agent chat box stays hidden");
-  const input = () => page.shadow().querySelector(".note-input");
-  input().value = "Use my work email please";
-  input().dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  update({ steps: [{ id: "2", text: "Choosing an option in “City” (2 of 15)", state: "running" }] }); // a re-render keeps what was typed
-  assert.equal(input().value, "Use my work email please");
-  input().dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  const note = await until(() => page.sent.find((m) => m.type === "assistantControl" && m.action === "note"), "note sent");
-  assert.equal(note.text, "Use my work email please");
-  assert.equal(input().value, "", "the box is cleared once sent");
-  update({ notes: [{ id: "n1", text: "Use my work email please", read: false }] });
-  await until(() => /You: Use my work email please/.test(page.shadow().textContent) && /Waiting for your assistant to read this/.test(page.shadow().textContent), "waiting line");
-  update({ notes: [{ id: "n1", text: "Use my work email please", read: true }] });
-  await until(() => /Your assistant read this/.test(page.shadow().textContent), "read receipt");
-  // A refused message comes back into the box with the reason.
-  refuse = "Your assistant has no approved application open right now.";
-  input().value = "Second try";
-  input().dispatchEvent(new page.win.Event("input", { bubbles: true }));
-  input().dispatchEvent(new page.win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await until(() => /no approved application/.test(page.shadow().textContent), "refusal shown");
-  assert.equal(input().value, "Second try");
-  // Once the assistant has finished there is nobody to write to.
-  update({ active: false });
-  await until(() => /Browser control stopped/.test(page.shadow().textContent), "finished");
-  assert.equal(input(), null);
-  page.win.close();
-});
-
 test("browser manual handoff sends page questions back to the browser controller", async () => {
   const page = panelPage(() => { throw new Error("text-only assistant must not receive the question"); }, { form: STEP_FORM });
   page.start();
@@ -1500,19 +1439,6 @@ test("the panel stays above and inside a site's modal dialog, and returns when i
   modal.remove();
   await until(() => host.isConnected && host.parentNode === doc.documentElement, "panel restored after removal");
   page.win.close();
-});
-
-
-test("external assistant panel names the controller and never treats an uncertain submission as finished", async () => {
-  const page = panelPage(() => ({}), { form: STEP_FORM });
-  try {
-    page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "needs_verification", steps: [] });
-    await until(() => /Submission needs verification/.test(page.shadow()?.textContent ?? ""), "uncertain outcome");
-    assert.match(page.shadow().textContent, /Do not submit again/);
-    assert(!page.shadow().textContent.includes("then submit it yourself"));
-    page.message({ type: "assistantUpdate", active: false, assistantName: "Claude", submissionState: "submitted", steps: [] });
-    await until(() => /The employer confirmed receipt/.test(page.shadow().textContent), "confirmed outcome");
-  } finally { page.win.close(); }
 });
 
 test("the panel explains a provider fallback while keeping method details secondary", async () => {
@@ -1711,4 +1637,145 @@ test("consecutive agent step messages render as separate chat bubbles", async ()
   const texts = [...page.shadow().querySelectorAll(".bubble.stepline")].map((b) => b.textContent);
   assert.deepEqual(texts, ["Filled your name and email.", "Attaching your resume."]);
   page.win.close();
+});
+
+test("Rule and Agent engines share the same natural-language bubble style without a separate checklist, and CAPTCHA closing text is not duplicated", async () => {
+  const page = panelPage(() => null, {
+    context: () => ({ agentAvailable: true, agentEngine: "auto", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+
+  // During rule fills, structured `filled` data does not spawn a separate green-tick checklist.
+  page.message({
+    type: "agentUpdate", status: "running", agent_engine: "rules_led", appId: 5,
+    log: [],
+    filled: [{ label: "Full name", value: "Guna P" }, { label: "Email", value: "guna@example.com" }],
+  });
+  await tick(20);
+  assert.equal(page.shadow().querySelector(".said .filled"), null);
+
+  // On handoff to Agent, both the Rule summary and the Agent's message appear in uniform .bubble.assistant bubbles.
+  page.message({
+    type: "agentUpdate", status: "running", agent_engine: "ai_led", appId: 5,
+    log: [
+      "Filled Full name and Email, and attached your resume.",
+      "I selected the remote location and added your portfolio link.",
+    ],
+    filled: [{ label: "Full name", value: "Guna P" }, { label: "Email", value: "guna@example.com" }],
+  });
+  await until(() => page.shadow().querySelectorAll(".bubble.assistant").length === 2, "two unified bubbles");
+  assert.equal(page.shadow().querySelector(".said .filled"), null);
+  assert.deepEqual(
+    [...page.shadow().querySelectorAll(".bubble.assistant")].map((b) => b.textContent),
+    [
+      "Filled Full name and Email, and attached your resume.",
+      "I selected the remote location and added your portfolio link.",
+    ],
+  );
+
+  // When ready_for_review message already mentions CAPTCHA, do not append a duplicate CAPTCHA sentence.
+  page.message({
+    type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5,
+    captchaPending: true,
+    log: [
+      "Filled Full name and Email, and attached your resume.",
+      "I selected the remote location and added your portfolio link.",
+    ],
+    message: "Please review the application, complete any CAPTCHA, and submit it yourself.",
+    filled: [{ label: "Full name", value: "Guna P" }, { label: "Email", value: "guna@example.com" }],
+  });
+  await until(() => page.shadow().querySelectorAll(".bubble.assistant").length === 3, "ready bubble");
+  const closing = [...page.shadow().querySelectorAll(".bubble.assistant")].at(-1).textContent;
+  assert.equal(closing, "Please review the application, complete any CAPTCHA, and submit it yourself.");
+  page.win.close();
+});
+
+test("boot reports reloaded=true on a page refresh so background stops stale agent runs", async () => {
+  const dom = new JSDOM(`<!doctype html><body>${FORM}</body>`, { url: "https://jobs.example/apply", runScripts: "outside-only", pretendToBeVisual: true });
+  const win = dom.window;
+  win.CSS = { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
+  win.Element.prototype.getClientRects = () => [{}];
+  win.performance.getEntriesByType = (kind) => (kind === "navigation" ? [{ type: "reload" }] : []);
+  const sent = [];
+  win.chrome = {
+    storage: { onChanged: { addListener: () => {} }, local: { get: async () => ({}), set: async () => {} } },
+    runtime: {
+      id: "fixture",
+      lastError: undefined,
+      sendMessage: (msg, cb) => {
+        sent.push(plain(msg));
+        const res = { ok: true, data: { appId: null, mode: "idle" } };
+        if (cb) cb(res);
+        return Promise.resolve(res);
+      },
+      onMessage: { addListener: () => {} },
+    },
+  };
+  for (const file of ["page-control/phone.js", "rule-based/profile-answer.js", "rule-based/answers.js", "page-control/dom.js", "shared/ui/panel-model.js", "shared/ui/panel-view.js", "shared/ui/content.js"]) {
+    win.eval(src(file));
+  }
+  await tick(20);
+  const hello = sent.find((m) => m.type === "hello");
+  assert.ok(hello, "boot sent hello");
+  assert.equal(hello.reloaded, true);
+  assert.equal(sent.some((m) => m.type === "agentStatus"), false);
+  win.close();
+});
+
+test("paused provider-outage message is shown once in chat without a duplicate status line", async () => {
+  const page = panelPage(() => null, {
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  const msg = "The AI provider is temporarily unavailable. Resume to retry the same request without repeating page actions.";
+  page.message({ type: "agentUpdate", status: "paused", agent_engine: "ai_led", appId: 5, log: [msg], message: msg });
+  await until(() => page.shadow().querySelector(".hero strong")?.textContent === "Paused", "paused header");
+  const bubbles = [...page.shadow().querySelectorAll(".bubble.assistant")].filter((b) => b.textContent.includes("temporarily unavailable"));
+  assert.equal(bubbles.length, 1);
+  assert.equal(page.shadow().querySelector(".thinking"), null);
+  page.win.close();
+});
+
+test("floating launcher stays hidden when autoShowLauncher is off, and appears on job forms when enabled", async () => {
+  const appForm = `
+    <form>
+      <label for="name">Full name</label><input id="name" required>
+      <label for="email">Email</label><input id="email" type="email" required>
+      <label for="resume">Resume</label><input id="resume" type="file">
+      <button type="submit">Submit application</button>
+    </form>`;
+
+  // Off by default: no floating launcher is mounted.
+  const off = panelPage(() => null, {
+    form: appForm,
+    hello: () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: false }),
+  });
+  await tick(40);
+  assert.equal(off.shadow(), undefined);
+  off.win.close();
+
+  // Enabled: floating "Start applying" button appears, and clicking it starts the extension.
+  const on = panelPage(() => null, {
+    form: appForm,
+    hello: () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: true }),
+  });
+  const goBtn = await until(() => on.shadow()?.querySelector(".launcher-go"), "floating launcher");
+  assert.match(goBtn.textContent, /Start applying/);
+  goBtn.click();
+  await until(() => on.sent.some((m) => m.type === "start" && m.allowUntracked === true), "start message");
+  assert.equal(on.win.document.querySelector("jobhunt-autofill-panel"), null);
+  on.win.close();
+
+  // Dismissing the floating button removes the host from the page; toggling the setting off also hides it.
+  const dismiss = panelPage(() => null, {
+    form: appForm,
+    hello: () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: true }),
+  });
+  const closeBtn = await until(() => dismiss.shadow()?.querySelector(".launcher-close"), "dismiss button");
+  closeBtn.click();
+  await tick(10);
+  assert.equal(dismiss.win.document.querySelector("jobhunt-autofill-panel"), null);
+  dismiss.win.close();
 });

@@ -32,6 +32,7 @@
       error: null,
       toast: null,
       minimized: false,
+      launcher: false,
       confirmSubmit: false,
       autoApply: false, // the two switches under the chat; kept in storage so the settings page and every tab agree
       aiDrafts: true,
@@ -75,8 +76,8 @@
         .p { border: 1px solid CanvasText; }
         .bar i { forced-color-adjust: none; }
       }
-      .p, .pill { pointer-events: auto; }
-      :host([data-applyshortly-executing]) .p, :host([data-applyshortly-executing]) .pill { pointer-events: none; }
+      .p, .pill, .launcher { pointer-events: auto; }
+      :host([data-applyshortly-executing]) .p, :host([data-applyshortly-executing]) .pill, :host([data-applyshortly-executing]) .launcher { pointer-events: none; }
       .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 380px;
         max-width: calc(100vw - 32px); height: min(680px, calc(100vh - 32px)); min-height: 0; max-height: calc(100vh - 32px); display: flex; flex-direction: column;
         background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
@@ -126,19 +127,6 @@
       .alog { list-style: none; margin: 0; padding: 0; font-size: 13px; }
       .alog li { padding: 4px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
       .alog li:last-child { color: var(--fg); }
-      /* The connected assistant's steps, in the same panel */
-      .xsteps li { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: start; }
-      .xsteps li .ic { text-align: center; font-weight: 700; color: var(--good); }
-      .xsteps li.error, .xsteps li.error .ic { color: var(--bad); }
-      .xsteps li.warn, .xsteps li.warn .ic { color: var(--warn); }
-      .xsteps li.running { color: var(--fg); font-weight: 600; }
-      .xsteps .spin { width: 12px; height: 12px; margin-top: 3px; }
-      /* What the user wrote to the connected assistant, and whether it has been read */
-      .notes { margin-top: 10px; }
-      .notes li { color: var(--fg); }
-      .notes small { display: block; color: var(--muted); font-size: 11px; }
-      .notes small.read { color: var(--good); }
-      .note-error { color: var(--bad); font-size: 12px; margin: 6px 2px 0; }
       details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
       .msg { margin: 4px 0 8px; padding: 12px; border-radius: 10px; }
       .msg.bad { background: var(--bad-soft); }
@@ -227,6 +215,17 @@
       .pill .mark { width: 26px; height: 26px; }
       .pill .badge { background: var(--badge-bad); color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
       .pill .badge.ok { background: var(--badge-ok); }
+      .launcher { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; display: flex; align-items: center; gap: 4px;
+        padding: 4px 6px 4px 4px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+        box-shadow: 0 10px 28px rgba(0,0,0,.20), 0 2px 6px rgba(0,0,0,.08); font: inherit; }
+      .launcher.enter { animation: in .18s ease-out; }
+      .launcher-go { display: flex; align-items: center; gap: 8px; border: 0; border-radius: 99px; padding: 4px 12px 4px 4px;
+        background: var(--accent); color: var(--accent-fg); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+      .launcher-go:hover { filter: brightness(1.08); }
+      .launcher-go .mark { width: 26px; height: 26px; }
+      .launcher-close { border: 0; background: transparent; color: var(--muted); width: 28px; height: 28px; border-radius: 99px;
+        font-size: 16px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+      .launcher-close:hover { background: var(--soft); color: var(--fg); }
     `;
 
     function el(tag: string, attrs: Record<string, any> = {}, ...children: any[]) {
@@ -313,7 +312,7 @@
       // turned pointer events off), raise it again and restore its own hit-testing. Otherwise it stays dead until a reload.
       const watchdog = setInterval(() => {
         if (!host?.isConnected || host.hasAttribute("data-applyshortly-executing")) return;
-        const box = root.querySelector(".p, .pill")?.getBoundingClientRect();
+        const box = root.querySelector(".p, .pill, .launcher")?.getBoundingClientRect();
         if (!box || !box.width) return;
         const x = Math.min(Math.max(box.left + box.width / 2, 0), innerWidth - 1), y = Math.min(Math.max(box.top + box.height / 2, 0), innerHeight - 1);
         if (document.elementFromPoint(x, y) === host) return;
@@ -481,77 +480,17 @@
       if (!ctl.agent || !agentBusy()) return null;
       const paused = ctl.agent.status === "paused";
       const steps = ctl.agent.log ?? [];
-      const why = /Paused to avoid|temporarily unavailable/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
+      if (paused) {
+        const last = steps.at(-1) ?? "";
+        const why = /Paused to avoid|temporarily unavailable/.test(last) ? last : "Paused.";
+        if (ctl.chat.lines.some((line) => line.text === why || line.parts?.includes(why))) return null;
+        return el("div", { class: "thinking", role: "status" }, why);
+      }
       const replied = ctl.chat.lines.some((line) => line.role === "user");
-      const text = paused ? why : replied ? "Applying your answer and checking the form…"
+      const text = replied ? "Applying your answer and checking the form…"
         : steps.length ? "Filling and checking the form…"
         : "Reading the form and matching your profile. The first fill may take a moment…";
-      return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), text);
-    }
-
-    const STEP_ICON = { done: "✓", error: "✕", warn: "!" };
-    function assistantNoteBox() {
-      const input = el("textarea", {
-        class: "note-input", rows: "1", "aria-label": "Message your assistant", maxlength: "500",
-        placeholder: "Message your assistant…",
-      }) as HTMLTextAreaElement;
-      input.value = view.noteDraft ?? "";
-      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
-      const send = async () => {
-        const text = input.value.trim();
-        if (!text) return;
-        view.noteDraft = ""; view.noteError = null; input.value = ""; grow();
-        try { await ctl.send({ type: "assistantControl", action: "note", text }); }
-        catch (error: any) { view.noteDraft = text; view.noteError = error?.message || "The message was not sent."; }
-        render();
-      };
-      input.addEventListener("input", () => { view.noteDraft = input.value; grow(); });
-      input.addEventListener("keydown", (e) => {
-        e.stopPropagation(); // keep the job site's own shortcuts out of the box
-        if (e.key === "Escape") { e.preventDefault(); setMinimized(true); }
-        else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
-      });
-      queueMicrotask(grow);
-      return el("div", { class: "composer" },
-        el("div", { class: "box" }, input,
-          btn(icon(SEND), () => void send(), "primary send", { "aria-label": "Send", title: "Send" })),
-        view.noteError ? el("div", { class: "note-error", role: "alert" }, view.noteError)
-          : el("small", { class: "hint" }, "Your assistant reads this with its next step. A message does not approve submission."));
-    }
-
-    function assistantSection(a) {
-      const control = (action) => void ctl.send({ type: "assistantControl", action }).catch(() => {});
-      const submitted = a.submissionState === "submitted";
-      const uncertain = a.submissionState === "needs_verification";
-      const hero = el("div", { class: "hero" },
-        el("strong", {}, uncertain ? "Submission needs verification" : submitted ? "Submitted" : a.paused ? "Paused: the form is yours" : a.active ? "Your assistant is filling this form…" : "Browser control stopped"),
-        el("div", { class: "meta" }, uncertain
-          ? "Check the employer’s confirmation and resolve the attempt in ApplyShortly. Do not submit again."
-          : submitted ? "The employer confirmed receipt of this application." : a.paused
-          ? "Edit anything you like. Click Continue and the assistant reads the page again before it goes on."
-          : a.active ? "Submission needs separate approval. Click Pause for me to edit the form yourself." : "Check the application status before continuing."));
-      const list = el("ul", { class: "alog xsteps", "aria-label": "Assistant steps" });
-      for (const step of (a.steps ?? []).slice(-14)) {
-        list.append(el("li", { class: step.state },
-          step.state === "running" ? el("span", { class: "spin" }) : el("span", { class: "ic" }, STEP_ICON[step.state] ?? ""),
-          el("span", {}, step.text)));
-      }
-      const sent = el("ul", { class: "alog notes", "aria-label": "Your messages" });
-      for (const item of (a.notes ?? []).slice(-6)) {
-        sent.append(el("li", {}, el("span", {}, `You: ${item.text}`),
-          el("small", { class: item.read ? "read" : "" }, item.read ? "✓ Your assistant read this" : "Waiting for your assistant to read this")));
-      }
-      const body = el("div", { class: "body", role: "log" },
-        (a.steps ?? []).length ? list : el("div", { class: "meta" }, "Waiting for the first step…"),
-        sent.children.length ? sent : null);
-      queueMicrotask(() => { body.scrollTop = body.scrollHeight; });
-      const foot = a.active
-        ? el("div", { class: "f" },
-          a.paused ? btn("Continue", () => control("continue"), "primary") : btn("Pause for me", () => control("pause"), ""),
-          el("span", { class: "grow" }),
-          btn("Stop", () => control("stop"), "ghost"))
-        : null;
-      return [hero, body, ...(a.active ? [assistantNoteBox()] : []), ...(foot ? [foot] : [])];
+      return el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), text);
     }
 
     function agentControls() {
@@ -685,15 +624,38 @@
 
       const wrap = el("div", { class: "wrap", "data-theme": view.theme === "light" || view.theme === "dark" ? view.theme : null });
 
+      if (view.launcher && !view.busy && !view.error && !ctl.state?.ctx && !ctl.submittedReported && !ctl.agent) {
+        wrap.append(el("div", {
+          class: root.querySelector(".launcher") ? "launcher" : "launcher enter",
+          role: "region",
+          "aria-label": "ApplyShortly form detected",
+        },
+          el("button", {
+            class: "launcher-go",
+            type: "button",
+            title: "Start filling this application with ApplyShortly",
+            onclick: () => { void ctl.launch?.(); },
+          }, el("span", { class: "mark", "aria-hidden": "true" }), "Start applying"),
+          el("button", {
+            class: "launcher-close",
+            type: "button",
+            title: "Dismiss",
+            "aria-label": "Dismiss ApplyShortly button",
+            onclick: () => { view.launcher = false; host?.remove(); ctl.dismissLauncher?.(); },
+          }, "×"),
+        ));
+        mount(wrap);
+        return;
+      }
+
       if (view.minimized) {
         const badge = ctl.submittedReported ? "Submitted ✓" : summary.todo ? `${summary.todo} to do` : "All set";
         wrap.append(el("button", {
           class: `${root.querySelector(".pill") ? "pill" : "pill enter"}${view.dock === "left" ? " left" : ""}`, type: "button", title: "Open ApplyShortly autofill",
           onclick: () => setMinimized(false),
         }, el("span", { class: "mark", "aria-hidden": "true" }), "ApplyShortly",
-          view.busy || (view.assistant?.active && !view.assistant.paused) ? el("span", { class: "spin" })
-            : view.assistant ? el("span", { class: "badge" }, view.assistant.paused ? "Paused" : "Done")
-              : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
+          view.busy ? el("span", { class: "spin" })
+            : el("span", { class: `badge ${summary.todo ? "" : "ok"}` }, badge)));
         mount(wrap);
         return;
       }
@@ -710,13 +672,6 @@
       p.append(head);
       applyPos(p);
       makeDraggable(p, head);
-      if (view.assistant) {
-        p.append(...assistantSection(view.assistant));
-        wrap.append(p);
-        mount(wrap);
-        refocus();
-        return;
-      }
       if (ctl.agent) {
         if (ctl.agent.filling_notice) p.append(el("div", { class: "sub", role: "status" }, ctl.agent.filling_notice));
       }
@@ -818,27 +773,31 @@
     return {
       render,
       toast,
-      busy(text) { Object.assign(view, { busy: text, error: null }); render(); },
+      busy(text) { Object.assign(view, { busy: text, error: null, launcher: false }); render(); },
       idle() { view.busy = null; render(); },
       fail(err) {
         view.busy = null;
+        view.launcher = false;
         view.error = P.friendlyError(err.message, err.status, ctl.state?.ctx?.baseUrl, err.code);
         render();
       },
-      setRetry(appId) { retryAppId = appId; },
-      /**
-       * The connected assistant's progress (the browser controller): its steps, a Pause for me /
-       * Continue button, and the panel opened on the first update.
-       */
-      assistant(update) {
-        const first = !view.assistant;
-        view.assistant = update;
-        if (!update.active) view.noteError = null;
-        if (first) Object.assign(view, { minimized: false, busy: null, error: null });
+      async showLauncher() {
+        try {
+          const saved = await chrome.storage.local.get("theme");
+          if (saved?.theme) view.theme = saved.theme;
+        } catch { /* keep system theme */ }
+        view.launcher = true;
         render();
       },
+      hideLauncher() {
+        if (!view.launcher) return;
+        view.launcher = false;
+        if (!ctl.state?.ctx && !ctl.agent && !view.busy && !view.error) host?.remove();
+      },
+      setRetry(appId) { retryAppId = appId; },
       /** Shows the agent's latest update. */
       agent(show) {
+        view.launcher = false;
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });
         render();
       },
@@ -895,6 +854,7 @@
             });
           }
         } catch { /* no storage: right side, full size, the page's colour scheme */ }
+        view.launcher = false;
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);
       },

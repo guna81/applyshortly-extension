@@ -15,16 +15,20 @@
     <button id="settings" class="icon" type="button" title="Settings" aria-label="Settings">⚙</button>
   </header>
 
-  <div id="setup" class="setup" hidden></div>
-
   <main id="view" aria-live="polite">
     <div class="loading"><span class="spin"></span>Checking this page…</div>
   </main>
 
-  <section id="assist" class="assist card" aria-live="polite" hidden></section>
-
   <section id="prefs" class="prefs" hidden>
     <div class="prefs-title">Preferences</div>
+    <div class="engine-row">
+      <span class="lbl"><b>Form engine</b><small id="engineHint">Rule fills first, then Agent reviews</small></span>
+      <div id="engineSeg" class="seg" role="radiogroup" aria-label="Form engine">
+        <button type="button" role="radio" data-engine="auto" aria-checked="true" data-tip="Fast &amp; accurate — rules fill known fields first, then Agent reviews and finishes">Auto</button>
+        <button type="button" role="radio" data-engine="ai_led" aria-checked="false" data-tip="Most accurate — AI-led from start to finish for complex or custom forms">Agent</button>
+        <button type="button" role="radio" data-engine="rules_led" aria-checked="false" data-tip="Fastest &amp; free — deterministic rule-based fill using 0 AI credits">Rule</button>
+      </div>
+    </div>
     <label class="switch-row">
       <span class="lbl"><b>Auto apply</b><small>Submits after a countdown you can cancel</small></span>
       <input id="autoApply" type="checkbox" class="switch">

@@ -69,7 +69,7 @@
 
   // What a form puts on a box instead of its question (Google Forms' long-text boxes carry
   // aria-label="Your answer"): never a label while the real question can still be found.
-  const GENERIC_LABEL = /^(?:(?:your|type your|enter your|write your) )?(?:answer|response|reply|text|value|input)s?\W*$|^(?:short|long) answer(?: text)?\W*$|^(?:type|enter|write) (?:here|text)\W*$/i;
+  const GENERIC_LABEL = /^(?:(?:your|type your|enter your|write your) )?(?:answer|response|reply|text|value|input)s?\W*$|^(?:short|long) answer(?: text)?\W*$|^(?:type|enter|write)(?: (?:here|text))?\W*$/i;
 
   // "mobilePhone.countryCode", "first_name", "candidate-email": a field name, not a question.
   const IDENTIFIER = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*|[._-][A-Za-z0-9]+)+(?:\[\d*\])?$/;
@@ -140,7 +140,11 @@
     // Breezy and similar: the question is a heading inside the list item that holds the box.
     const questionHeading = el.closest('li.question, .question')?.querySelector("h1, h2, h3, h4, h5, h6");
     if (questionHeading && cleanLabel(questionHeading.textContent)) return cleanLabel(questionHeading.textContent);
-    const named = cleanLabel(el.getAttribute("placeholder") || el.getAttribute("name") || "");
+    const above = textAbove(el);
+    if (above && !GENERIC_LABEL.test(above)) return above;
+    const placeholder = cleanLabel(el.getAttribute("placeholder") || "");
+    const name = cleanLabel(el.getAttribute("name") || "");
+    const named = placeholder && !GENERIC_LABEL.test(placeholder) ? placeholder : name || placeholder;
     // A generic name is still better than none (it keeps the box listed), after the aria text.
     return GENERIC_LABEL.test(named) && aria ? aria : named || aria;
   }
@@ -294,17 +298,18 @@
     return false;
   }
 
-  // A "*" ending the question's own <label>, when that label isn't tied to the box by for/id
+  // A "*" ending the question's own <label> or caption, when it isn't tied to the box by for/id
   // (the box sits in the label's sibling block, inside a wrapper that holds only this one box).
   function starredLabelAbove(el) {
     let wrapper = el.parentElement;
     for (let depth = 0; wrapper && depth < 4; depth += 1, wrapper = wrapper.parentElement) {
       if (wrapper.querySelectorAll("input:not([type=hidden]), textarea, select").length !== 1) continue;
       const label = wrapper.querySelector("label");
-      if (label && !label.contains(el)) return /\*\s*$/.test(label.textContent ?? "");
-      if (label) return false;
+      if (label && !label.contains(el) && cleanLabel(label.textContent)) return /\*\s*$/.test(label.textContent ?? "");
+      if (label && cleanLabel(label.textContent)) return false;
     }
-    return false;
+    const caption = captionAbove(el);
+    return Boolean(caption && /\*\s*$/.test(caption.el.textContent ?? ""));
   }
 
   function isVisible(el, checkLayout) {
@@ -597,17 +602,22 @@
    * caption beside the whole field wrapper), so this climbs until an ancestor holds another control.
    */
   const CONTROLS = "input, select, textarea, [role=combobox], [role=listbox]";
-  function textAbove(el) {
+  function captionAbove(el) {
     let node = el;
     for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
       for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
-        if (sib.querySelector(CONTROLS) || sib.matches(CONTROLS)) return "";
+        if (sib.querySelector(CONTROLS) || sib.matches(CONTROLS)) return null;
+        if (sib.matches("h1, nav, header, footer")) continue;
         const t = cleanLabel(sib.textContent);
-        if (t && t.length <= 150 && !PICK_PLACEHOLDER.test(t)) return t;
+        if (t && t.length <= 150 && !PICK_PLACEHOLDER.test(t)) return { el: sib, text: t };
       }
-      if ((node.parentElement?.querySelectorAll(CONTROLS).length ?? 0) > 1) return "";
+      if ((node.parentElement?.querySelectorAll(CONTROLS).length ?? 0) > 1) return null;
     }
-    return "";
+    return null;
+  }
+
+  function textAbove(el) {
+    return captionAbove(el)?.text ?? "";
   }
 
   /** What a dropdown currently shows as its answer; "" while nothing is chosen. */
@@ -661,6 +671,35 @@
     return !named || PICK_PLACEHOLDER.test(named) || EMPTY_OPTION.test(named) ? "" : named;
   }
 
+  /**
+   * Selected option text from a combobox's owned or sibling listbox, or its `title`, when the
+   * trigger itself has no visible text (icon/flag-only pickers like react-international-phone).
+   */
+  function listboxOrTitleValue(el, field) {
+    const lists = [...ownedLists(el)];
+    const parent = el.parentElement;
+    if (!lists.length && parent && parent.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"], select').length === 1) {
+      for (const list of parent.querySelectorAll(':scope > [role="listbox"], :scope > * > [role="listbox"]')) {
+        if (!el.contains(list)) lists.push(list);
+      }
+    }
+    const root = rootOf(el);
+    for (const list of lists) {
+      const activeId = list.getAttribute("aria-activedescendant");
+      const opt = list.querySelector('[role="option"][aria-selected="true"]')
+        || (activeId ? byId(root, activeId) : null);
+      if (!opt || opt.getAttribute("role") !== "option") continue;
+      const text = cleanLabel(opt.getAttribute("aria-label") || opt.textContent);
+      if (text && !PICK_PLACEHOLDER.test(text) && !EMPTY_OPTION.test(text) && normalise(text) !== normalise(field.label ?? "")) {
+        return text;
+      }
+    }
+    const title = cleanLabel(el.getAttribute("title") ?? "");
+    if (!title || PICK_PLACEHOLDER.test(title) || EMPTY_OPTION.test(title)) return "";
+    const labels = [field.label, field.explicitLabel, el.getAttribute("aria-label")].filter(Boolean).map(normalise);
+    return labels.includes(normalise(title)) ? "" : title;
+  }
+
   function dropdownValue(field, options = {}) {
     const el = field.el;
     if (el.matches("input")) return inputDropdownValue(el, options);
@@ -675,8 +714,9 @@
     if (el.matches(".mat-mdc-select-empty, .mat-select-empty") || el.querySelector(".mat-mdc-select-placeholder, .mat-select-placeholder")) return "";
     const valueText = el.querySelector(".mat-mdc-select-value-text, .mat-select-value-text");
     const shown = cleanLabel(valueText ? visibleText(valueText) : visibleText(el));
+    if (!shown) return listboxOrTitleValue(el, field);
     const same = normalise(shown) === normalise(field.label ?? "");
-    return !shown || same || EMPTY_OPTION.test(shown) ? "" : shown;
+    return same || EMPTY_OPTION.test(shown) ? "" : shown;
   }
 
   const INLINE = new Set(["B", "I", "EM", "STRONG", "SMALL", "SPAN", "SVG", "IMG", "BR"]);
@@ -1135,6 +1175,12 @@
   function chooseDialOption(options, answer) {
     const code = String(answer).replace(/\D/g, "");
     const listed = options.filter((o) => normalise(o.text).split(" ").includes(code) && /\+/.test(o.text));
+    if (listed.length > 1) {
+      for (const name of countriesFor(String(answer).trim())) {
+        const hit = listed.find((o) => ` ${normalise(o.text)} `.includes(` ${normalise(name)} `));
+        if (hit) return hit;
+      }
+    }
     if (listed.length) return listed[0];
     for (const name of countriesFor(String(answer).trim())) {
       const hit = options.find((o) => ` ${normalise(o.text)} `.includes(` ${normalise(name)} `));

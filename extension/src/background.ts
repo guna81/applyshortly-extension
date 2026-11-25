@@ -2,15 +2,15 @@
 // Content scripts and the extension pages talk to it with chrome.runtime messages ({type, ...}).
 
 import { endpoint, complete, completeTools, providerSupport } from "./shared/custom-ai.js";
+import { autoAgent } from "./auto-mode/auto-agent.js";
 import { formAgent } from "./agent-based/form-agent.js";
 import { ruleAgent } from "./rule-based/rule-agent.js";
 import { TOOL_CATALOG } from "./agent-based/tools.js";
 import { modelBody } from "./shared/model-turn.js";
-import { externalBrowser } from "./shared/external-browser.js";
 import { Agent } from "./page-control/loop.js";
 import { TabDriver } from "./page-control/cdp.js";
 import { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl } from "./shared/bridge.js";
-import type { ExtensionSettings } from "./shared/types.js";
+import type { ExtensionEngine, ExtensionSettings } from "./shared/types.js";
 
 // The panel's switches ("Fill optional fields", "Auto-draft open-ended answers", "Auto apply") can change while an agent runs: the planner reads them every turn.
 const liveSwitches: Record<"fillOptional" | "aiDrafts" | "autoApply", boolean | null> = { fillOptional: null, aiDrafts: null, autoApply: null };
@@ -26,7 +26,8 @@ try {
   });
 } catch { /* no storage events: the value at the start of the run stands */ }
 
-const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autoApply: false, autopilotWindows: true, extensionEngine: "ai_led", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
+const normalizeEngine = (value: unknown): ExtensionEngine => (value === "rules_led" || value === "ai_led" || value === "auto" ? value : "auto");
+const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autoApply: false, autoShowLauncher: false, autopilotWindows: true, extensionEngine: "auto", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/page-control/phone.js", "src/rule-based/profile-answer.js", "src/rule-based/answers.js", "src/page-control/dom.js", "src/shared/ui/panel-model.js", "src/shared/ui/panel-view.js", "src/shared/ui/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
@@ -56,7 +57,7 @@ async function platformOrigin() {
 
 async function settings(): Promise<ExtensionSettings> {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply", "disableCreditFallback"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply", "autoShowLauncher", "disableCreditFallback"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -65,7 +66,7 @@ async function settings(): Promise<ExtensionSettings> {
     await chrome.storage.local.set({ baseUrl });
     stored.token = "";
   }
-  return { ...DEFAULT_SETTINGS, ...stored, baseUrl };
+  return { ...DEFAULT_SETTINGS, ...stored, extensionEngine: normalizeEngine(stored.extensionEngine), baseUrl };
 }
 
 async function getCustomAI() {
@@ -157,12 +158,30 @@ async function clearTab(tabId) {
 
 chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
-async function hello(tabId, url) {
-  if (externalController.ownsTab(tabId)) return { appId: null, mode: "idle" };
+async function hello(tabId, url, reloaded = false) {
   const origin = new URL(url).origin;
+  const idle = async () => {
+    const s = await settings();
+    const allowAutoDetect = Boolean(s.token) && origin !== s.baseUrl;
+    return { appId: null, mode: "idle", allowAutoDetect, autoShowLauncher: allowAutoDetect && s.autoShowLauncher === true };
+  };
   const agent = agents.get(tabId);
-  // The agent drives this tab from here: the page's own autofill stays out of its way.
-  if (agent && !agent.stopped && !["ready", "failed"].includes(agent.status)) return { appId: agent.appId, mode: "agent" };
+  if (agent && !agent.stopped) {
+    if (reloaded) {
+      // A manual page reload resets the form's fields, so stop the stale agent run
+      // instead of replaying its old progress and chat prompt over a blank page.
+      agent.notify = async () => {};
+      agent.stop("The page was reloaded.");
+      setAttentionBadge(tabId, false);
+      void chrome.storage.session.remove(`agentState:${tabId}`).catch(() => {});
+      void Promise.resolve(agent.runPromise).finally(() => {
+        if (agents.get(tabId) === agent) agents.delete(tabId);
+      });
+      return idle();
+    }
+    // The agent drives this tab from here: the page's own autofill stays out of its way.
+    if (!["ready", "failed"].includes(agent.status)) return { appId: agent.appId, mode: "agent" };
+  }
   const id = autofillIdFromUrl(url);
   if (id !== null) {
     await setTab(tabId, { appId: id, origin, tracked: true });
@@ -172,7 +191,7 @@ async function hello(tabId, url) {
   }
   const current = await getTab(tabId);
   if (current && current.origin === origin) return { appId: current.appId, mode: "continue", attemptPending: current.attemptPending === true };
-  return { appId: null, mode: "idle" };
+  return idle();
 }
 
 /** The user clicked Apply in ApplyShortly, which opened this page with a one-time code: claimed,
@@ -189,7 +208,6 @@ async function claimAutoApply(appId, url) {
 
 /** Toolbar icon, shortcut or the panel → "Autofill this page" (or "Auto apply"): find the application for the page, or fill untracked. */
 async function start(tabId, url, allowUntracked, autoSubmit = false) {
-  await externalController.stop();
   const origin = new URL(url).origin;
   const current = await getTab(tabId);
   const existing = autofillIdFromUrl(url) ?? (current?.origin === origin ? current.appId : null);
@@ -227,10 +245,12 @@ async function context(appId, tabId, url, page) {
   }
   // No AI drafting in Autopilot's window: nobody is there to check what it writes.
   const unattended = tabId !== undefined && (await autopilotWindow())?.tabId === tabId;
-  const custom = !unattended && s.extensionEngine === "ai_led" ? await getCustomAI() : null;
+  const usesModel = s.extensionEngine === "ai_led" || s.extensionEngine === "auto";
+  const capabilityEngine = usesModel ? "ai_led" : "rules_led";
+  const custom = !unattended && usesModel ? await getCustomAI() : null;
   // Keep the selected engine visible even when the server cannot start its controller.
-  const capabilities = unattended ? null : await b.agentCapabilities(Boolean(custom?.enabled), s.extensionEngine).catch(() => null);
-  const acknowledged = capabilities?.extension_engine === s.extensionEngine && capabilities?.agent_engine === s.extensionEngine &&
+  const capabilities = unattended ? null : await b.agentCapabilities(Boolean(custom?.enabled), capabilityEngine).catch(() => null);
+  const acknowledged = capabilities?.extension_engine === capabilityEngine && capabilities?.agent_engine === capabilityEngine &&
     (!custom?.enabled || capabilities?.planner === "custom") &&
     capabilities?.guarded_commands === true;
   return { agentAvailable: acknowledged, agentEngine: unattended ? "rules_led" : s.extensionEngine, profile: p, app, aiDrafts: s.aiDrafts && !unattended, baseUrl: s.baseUrl };
@@ -297,7 +317,6 @@ async function pairingPoll() {
 }
 
 async function clearConnection() {
-  await externalController.stop();
   await chrome.storage.local.remove(["token", "connectionType", "outcomeQueue", "browserDiagnosticQueue", "customAI"]);
   await chrome.storage.session.clear();
   profileCache = null;
@@ -434,7 +453,6 @@ async function autopilotWindow() {
 
 /** One poll: watches the window that is open, or opens one for the next job that is due. */
 async function autopilotPoll() {
-  if (externalController.status().connected) return false;
   if (autopilotPolling) return false;
   autopilotPolling = true;
   try {
@@ -515,7 +533,7 @@ void ensureAutopilotAlarm();
 
 // ------------------------------------------------------------------ form agent
 
-// One agent at a time: it drives a tab the user started it in, never in the background.
+// One agent per tab: each drives a tab the user started it in, never in the background.
 const agents = new Map(); // tabId → Agent
 let agentSources = null;
 
@@ -560,7 +578,11 @@ async function agentReport(appId: any, event: string, res: any, url: any) {
       source: f.source,
       needs_review: f.needs_review,
     }));
-    body.unresolved_fields = (res.unresolved ?? []).map((label: string) => ({ label, reason: "No answer yet" }));
+    body.unresolved_fields = (res.unresolved ?? []).map((item: any) =>
+      typeof item === "string"
+        ? { label: item, reason: "No answer yet" }
+        : { label: String(item?.label || "the open field"), required: Boolean(item?.required), reason: "No answer yet" },
+    );
   } else if (event === "failed") {
     body.failure_code = res.failure_code ?? "unknown";
     body.note = String(res.message ?? "").slice(0, 1000) || null;
@@ -571,60 +593,71 @@ async function agentReport(appId: any, event: string, res: any, url: any) {
 /** Starts the agent in a tab: from an extension page (finds the application by URL) or the page's panel. */
 async function agentStart(tabId, url, appId, autoSubmit = false, debug = false, allowCreditFallback = true) {
   const owner = await settings();
-  const modelDriven = owner.extensionEngine === "ai_led";
+  const isAuto = owner.extensionEngine === "auto";
+  const modelDriven = owner.extensionEngine === "ai_led" || isAuto;
+  const capabilityEngine = modelDriven ? "ai_led" : "rules_led";
   const revision = customProviderRevision;
   if (modelDriven && customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
   const custom = modelDriven ? await getCustomAI() : null;
-  await externalController.stop();
-  // One job at a time. A run elsewhere that is only waiting on the user (a question, a pause, a
-  // filled form left for review) ends when the user starts a new one; it is not doing anything.
-  for (const previous of new Set(agents.values())) {
-    if (previous.tabId === tabId || previous.stopped) continue;
-    if (["waiting", "paused"].includes(previous.status) || previous.status === "ready") {
-      // Name the tab that took over, so a run that ends here without the user starting anything is traceable.
-      const starter = clip((await chrome.tabs.get(tabId).catch(() => null))?.title ?? "", 80);
-      previous.stop(`A new agent run started in another tab${starter ? ` (“${starter}”)` : ""}, so this one stopped. The form is yours to finish.`);
-      await previous.runPromise;
-    }
-  }
-  const busy = [...agents.values()].find((a) => a.tabId !== tabId && !a.stopped && !["ready", "failed"].includes(a.status));
-  if (busy) {
-    const title = clip((await chrome.tabs.get(busy.tabId).catch(() => null))?.title ?? "", 80);
-    throw new Error(`The agent is still filling ${title ? `"${title}"` : "a form"} in another tab. Let it finish or stop it there, then try again.`);
-  }
   const previous = agents.get(tabId);
-  // A restart is silent: the old run's closing lines must not appear in the new run's chat.
-  if (previous) previous.notify = async () => {};
-  previous?.stop("Restarted.");
-  if (previous) await previous.runPromise;
+  if (previous?.tabId === tabId) {
+    // A restart is silent: the old run's closing lines must not appear in the new run's chat.
+    previous.notify = async () => {};
+    previous.stop("Restarted.");
+    await previous.runPromise;
+  }
   const b = await bridge();
   const localFixture = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname);
   const app = appId != null ? await b.application(appId) : (localFixture ? null : (await b.lookup(url) ?? await b.trackApplication({ url: url.split("#")[0], title: clip((await chrome.tabs.get(tabId)).title, 300) })));
   const id = app?.id ?? null;
   const p = await profile();
   await setTab(tabId, { appId: id, origin: new URL(url).origin, tracked: id !== null });
-  const capabilities = await b.agentCapabilities(Boolean(custom?.enabled), owner.extensionEngine).catch((error) => {
+  const capabilities = await b.agentCapabilities(Boolean(custom?.enabled), capabilityEngine).catch((error) => {
     if (custom?.enabled) throw error;
     return null;
   });
-  if (capabilities?.extension_engine !== owner.extensionEngine) throw new Error("ApplyShortly needs an update to use the extension form engine setting.");
-  if (capabilities?.agent_engine !== owner.extensionEngine) throw new Error("The selected extension form engine is unavailable with this provider. Change the extension setting or provider.");
+  if (capabilities?.extension_engine !== capabilityEngine) throw new Error("ApplyShortly needs an update to use the extension form engine setting.");
+  if (capabilities?.agent_engine !== capabilityEngine) throw new Error("The selected extension form engine is unavailable with this provider. Change the extension setting or provider.");
   if (custom?.enabled && capabilities?.planner !== "custom") throw new Error("ApplyShortly needs an update before this custom provider can use the selected form engine.");
   if (capabilities.guarded_commands !== true) throw new Error("Update ApplyShortly before starting the form agent; this server does not support guarded commands.");
   if (!custom?.enabled && capabilities.agent_engine === "ai_led" && capabilities.local_planner !== true) throw new Error("Update ApplyShortly before starting the unified extension agent.");
   const sources = await pageSources();
   if (modelDriven && (customProviderChanging || revision !== customProviderRevision)) throw new Error("AI provider changed. Start a new form session.");
   const modelSession = crypto.randomUUID();
-  const createRuleStep = () => ruleAgent(p, app, {
+  const lookupSaved = async (question: string) => {
+    const hit = await b.suggestAnswer({ question, application_id: id, allow_generate: false }).catch(() => null);
+    if (hit?.source === "answer_bank" && typeof hit.answer === "string" && hit.answer.trim()) {
+      return { answer: hit.answer.trim(), ...(typeof hit.answer_id === "number" ? { answer_id: hit.answer_id } : {}) };
+    }
+    return null;
+  };
+  const createRuleStep = (handoffOnly = false) => ruleAgent(p, app, {
     get fillOptional() { return liveFillOptional(owner); },
-    lookupSaved: async (question: string) => {
-      const hit = await b.suggestAnswer({ question, application_id: id, allow_generate: false }).catch(() => null);
-      if (hit?.source === "answer_bank" && typeof hit.answer === "string" && hit.answer.trim()) {
-        return { answer: hit.answer.trim(), ...(typeof hit.answer_id === "number" ? { answer_id: hit.answer_id } : {}) };
-      }
-      return null;
-    },
+    lookupSaved,
+    handoffOnly,
   });
+  const createFormAgentStep = () => formAgent(custom, p, app, async (config, messages, maxTokens, look) => {
+    if (revision !== customProviderRevision || customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
+    // One agent for every provider: the same message history and tool results go to the platform gateway or to the user's own provider.
+    if (custom?.enabled) return completeTools(config, messages, maxTokens, { images: look?.images, tools: TOOL_CATALOG.filter((t) => !look?.tool_names || look.tool_names.includes(t.name)), history: look?.history ?? [], results: look?.results });
+    const current = await settings();
+    if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) throw new Error("Account changed. Start a new form session.");
+    const turn = { session_id: modelSession, application_id: id, request_id: crypto.randomUUID(), messages, max_output_tokens: maxTokens };
+    try {
+      return await b.agentModel(modelBody(turn, look));
+    } catch (error: any) {
+      // A platform from before the agent kept a message history rejects the new fields (422).
+      // Only when the rejected field is one of the new ones; any other 422 (a message too long, say) keeps its own text, which names the field.
+      if (error?.status === 422 && /\b(?:history|results|native_tools|allow_js|tool_names|images)\b.*(?:extra|not permitted|forbidden)/i.test(String(error?.message ?? ""))) throw new Error("Update ApplyShortly: this server does not support the form agent's message history yet.");
+      throw error;
+    }
+  }, undefined, owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, searchSavedAnswers: (query: string) => b.searchAnswers(query, 5), debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } });
+  const canUseAgent = async () => {
+    if (custom?.enabled) return true;
+    const account = await b.account().catch(() => null);
+    if (account?.billing_enabled === true && typeof account?.credits === "number" && account.credits <= 0) return false;
+    return true;
+  };
   const agent = new Agent({
     tabId,
     appId: id,
@@ -632,27 +665,15 @@ async function agentStart(tabId, url, appId, autoSubmit = false, debug = false, 
     startUrl: url,
 
     verifiedCommands: capabilities?.verified_commands === true,
-    step: capabilities.agent_engine === "ai_led" ? formAgent(custom, p, app, async (config, messages, maxTokens, look) => {
-      if (revision !== customProviderRevision || customProviderChanging) throw new Error("AI provider changed. Start a new form session.");
-      // One agent for every provider: the same message history and tool results go to the platform gateway or to the user's own provider.
-      if (custom?.enabled) return completeTools(config, messages, maxTokens, { images: look?.images, tools: TOOL_CATALOG.filter((t) => !look?.tool_names || look.tool_names.includes(t.name)), history: look?.history ?? [], results: look?.results });
-      const current = await settings();
-      if (current.token !== owner.token || current.baseUrl !== owner.baseUrl) throw new Error("Account changed. Start a new form session.");
-      const turn = { session_id: modelSession, application_id: id, request_id: crypto.randomUUID(), messages, max_output_tokens: maxTokens };
-      try {
-        return await b.agentModel(modelBody(turn, look));
-      } catch (error: any) {
-        // A platform from before the agent kept a message history rejects the new fields (422).
-        // Only when the rejected field is one of the new ones; any other 422 (a message too long, say) keeps its own text, which names the field.
-        if (error?.status === 422 && /\b(?:history|results|native_tools|allow_js|tool_names|images)\b.*(?:extra|not permitted|forbidden)/i.test(String(error?.message ?? ""))) throw new Error("Update ApplyShortly: this server does not support the form agent's message history yet.");
-        throw error;
-      }
-    }, undefined, owner.aiDrafts, undefined, { vision: owner.agentVision !== false, get fillOptional() { return liveFillOptional(owner); }, get allowDrafts() { return liveAiDrafts(owner); }, get autoApply() { return autoSubmit || liveAutoApply(owner); }, searchSavedAnswers: (query: string) => b.searchAnswers(query, 5), debug, onState: (state) => { void chrome.storage.session.set({ [`agentState:${tabId}`]: state }).catch(() => {}); } })
-      : createRuleStep(),
+    step: isAuto
+      ? autoAgent(() => createRuleStep(true), createFormAgentStep, () => createRuleStep(false), { canUseAgent })
+      : capabilities.agent_engine === "ai_led"
+        ? createFormAgentStep()
+        : createRuleStep(false),
     fallbackStep: capabilities.agent_engine === "ai_led" && !custom?.enabled && allowCreditFallback && owner.disableCreditFallback !== true
       ? () => {
         void chrome.storage.session.remove(`agentState:${tabId}`).catch(() => {});
-        return createRuleStep();
+        return createRuleStep(false);
       }
       : null,
     files: agentFiles(p, app),
@@ -719,82 +740,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 /** A content script on a web page, as opposed to an extension page (which can also be a tab). */
 const fromPage = (sender) => Boolean(sender.tab) && /^https?:/.test(sender.url ?? "");
 
-/** Feature toggle: External Assistant Browser Control is temporarily disabled. */
-const EXTERNAL_BROWSER_FEATURE_ENABLED = false;
-
-const externalController = externalBrowser({
-  enabled: EXTERNAL_BROWSER_FEATURE_ENABLED,
-  settings,
-  store: { get: (key) => chrome.storage.local.get(key), set: (value) => chrome.storage.local.set(value) },
-  hasAccess: (origins) => chrome.permissions.contains({ origins }),
-  report: async (application_id: any, event: any, url: any) => (await bridge()).report({ application_id, event, url } as any),
-  sources: async () => Promise.all(AGENT_PAGE_SCRIPTS.map(async (path) =>
-    (await fetch(chrome.runtime.getURL(path))).text())),
-  resume: async () => {
-    const p = await profile();
-    return p.resume_url ? (await bridge()).resume(p.resume_url) : null;
-  },
-});
-
-// If disabled, ensure any lingering state or connections are severed immediately.
-if (!EXTERNAL_BROWSER_FEATURE_ENABLED) {
-  void externalController.stop();
-  void chrome.storage.local.remove("externalBrowser").catch(() => {});
-}
-
-// The assistant's steps are shown in the page's own ApplyShortly panel, not in a new window.
-// Pushed to the tab it works in whenever they change (and once more when it lets go).
-let pushedKey = "";
-let pushedTab = null;
-async function pushAssistantSteps() {
-  if (!EXTERNAL_BROWSER_FEATURE_ENABLED) return;
-  const status = externalController.status();
-  const tabId = externalController.workingTab();
-  const active = Boolean(status.connected && tabId != null);
-  const target = active ? tabId : pushedTab;
-  if (target == null) return;
-  const steps = status.activity.slice(-14).map(({ id, text, state }) => ({ id, text, state }));
-  const notes = externalController.notes();
-  const assistantName = status.batches.find((b) => ["active", "paused", "needs_verification"].includes(b.state))?.assistant;
-  const key = JSON.stringify([target, active, status.paused, steps, notes, assistantName, status.submissionState]);
-  if (key === pushedKey) return;
-  pushedKey = key;
-  pushedTab = active ? tabId : null;
-  await chrome.tabs.sendMessage(target, { type: "assistantUpdate", active, paused: status.paused, steps, notes, assistantName, submissionState: status.submissionState }, { frameId: 0 }).catch(() => {});
-}
-if (EXTERNAL_BROWSER_FEATURE_ENABLED && typeof setInterval === "function") {
-  setInterval(() => { void pushAssistantSteps(); }, 1000);
-}
+// Clear any lingering legacy externalBrowser key from older installs.
+void chrome.storage.local.remove("externalBrowser").catch(() => {});
 
 const handlers = {
-  assistantControl: async (msg, sender) => {
-    if (!EXTERNAL_BROWSER_FEATURE_ENABLED) throw new Error("External assistant control is currently disabled.");
-    // Only the tab the assistant is working in may pause or stop it.
-    if (!sender.tab || !externalController.ownsTab(sender.tab.id)) throw new Error("This tab isn't being driven by an assistant.");
-    if (msg.action === "pause") return externalController.pauseForUser();
-    if (msg.action === "continue") return externalController.continueAfterUser();
-    if (msg.action === "stop") { await externalController.stop(); return true; }
-    if (msg.action === "note") { await externalController.sendNote(msg.text); void pushAssistantSteps(); return true; }
-    throw new Error("Unknown assistant action.");
-  },
-  externalBrowser: async (msg) => {
-    if (!EXTERNAL_BROWSER_FEATURE_ENABLED) {
-      if (msg.action === "status") return externalController.status();
-      if (msg.action === "stop") { await externalController.stop(); return true; }
-      throw new Error("External assistant control is currently disabled.");
-    }
-    if (msg.action === "connect") return externalController.connect();
-    if (msg.action === "autoApprove") return externalController.setAutoApprove(msg.on === true);
-    if (msg.action === "standing") return externalController.setStanding(msg.on === true);
-    if (msg.action === "approveNavigation") return externalController.approveNavigation();
-    if (msg.action === "reviewAnswers") return externalController.reviewAnswers();
-    if (msg.action === "status") return externalController.status();
-    if (msg.action === "decision") return externalController.decision(msg.batchId, msg.approve === true);
-    if (msg.action === "pause") return externalController.pauseForUser();
-    if (msg.action === "continue") return externalController.continueAfterUser();
-    if (msg.action === "stop") { await externalController.stop(); return true; }
-    throw new Error("Unknown browser action.");
-  },
   browserSignIn: async (msg) => browserSignIn(await platformOrigin(), msg.interactive !== false),
   customAISettings: async () => {
     const custom = await getCustomAI();
@@ -889,7 +838,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autoApply: s.autoApply === true, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autoApply: s.autoApply === true, autoShowLauncher: s.autoShowLauncher === true, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();
@@ -912,12 +861,17 @@ const handlers = {
     if (typeof msg.minimized === "boolean") await chrome.storage.local.set({ panelMinimized: msg.minimized });
     return Boolean((await chrome.storage.local.get("panelMinimized")).panelMinimized);
   },
-  hello: (msg, sender) => hello(sender.tab.id, msg.url),
+  hello: (msg, sender) => hello(sender.tab.id, msg.url, msg.reloaded === true),
   webSession: async (msg, sender) => {
     if (new URL(sender.url).origin !== await platformOrigin()) throw new Error("Message not permitted.");
     return websiteSession(msg.signedIn === true);
   },
-  start: (msg) => start(msg.tabId, msg.url, Boolean(msg.allowUntracked), msg.autoSubmit === true),
+  start: (msg, sender) => start(
+    fromPage(sender) ? sender.tab.id : msg.tabId,
+    fromPage(sender) ? sender.url : msg.url,
+    Boolean(msg.allowUntracked),
+    msg.autoSubmit === true,
+  ),
   context: (msg, sender) => context(msg.appId ?? null, sender.tab?.id, sender.url, msg.page),
   suggest: async (msg) => {
     const b = await bridge();
@@ -983,14 +937,14 @@ const clip = (value: any, max: number) => (typeof value === "string" ? value.tri
 /** The page's job for drafting on an untracked page, trimmed to the API's limits; none without a title. */
 
 
-const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied", "assistantControl"]);
+const CONTENT_MESSAGES = new Set(["hello", "context", "suggest", "assist", "resume", "report", "openOptions", "openProfile", "panelPreference", "webSession", "agentStart", "agentControl", "agentStatus", "autoApplied"]);
 
 async function dispatch(msg: any, sender: any) {
   await storageReady;
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/ui/options.html", "src/ui/popup.html", "src/ui/external-browser.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const extensionPage = ["src/ui/options.html", "src/ui/popup.html"].some((path) => sender.url === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {
@@ -1024,7 +978,3 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
 
 // The browser reconnects by itself once the user has connected it (a browser start, an
 // extension reload or a service-worker restart); Stop turns that off.
-if (EXTERNAL_BROWSER_FEATURE_ENABLED) {
-  chrome.runtime.onStartup?.addListener(() => { void externalController.resumeIfWanted(); });
-  void externalController.resumeIfWanted().catch(() => {});
-}

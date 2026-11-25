@@ -11,7 +11,6 @@ import { TOOL_CATALOG } from "../src/agent-based/tools.js";
 // Changed 2026-11-17: background.js now imports modelBody (src/shared/model-turn.js); the harness strips imports, so it is supplied here.
 import { modelBody } from "../src/shared/model-turn.js";
 import { completeTools } from "../src/shared/custom-ai.js";
-import { externalBrowser } from "../src/shared/external-browser.js";
 import { autoApplyUrl } from '../src/shared/bridge.js';
 import { webcrypto } from 'node:crypto';
 
@@ -86,8 +85,8 @@ function harness({ autofillId = null, autoCode = null, claimed = false, blocked 
     commands: { onCommand: { addListener() {} } }, scripting: {},
     action: { setBadgeText: async (value) => { calls.push({ badge: value }); }, setBadgeBackgroundColor: async (value) => { calls.push({ badgeColor: value }); } },
   };
-  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, externalBrowser, endpoint, complete, canDraft, customAssist, formAgent, ruleAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
-  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, ruleAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, externalBrowser, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
+  const source = readFileSync(new URL('../src/background.js', import.meta.url), 'utf8').replace(/^import .*;$/gm, '').replace(/^/, 'const { BridgeError, JobHuntBridge, autoApplyCodeFromUrl, autoApplyUrl, autofillIdFromUrl, Agent, TabDriver, endpoint, complete, canDraft, customAssist, formAgent, ruleAgent, TOOL_CATALOG, completeTools, candidateContext, modelBody, providerSupport } = fixtures;\n');
+  vm.runInNewContext(source, { chrome, setTimeout: (fn, ms) => timers.push({ fn, ms }), URL, URLSearchParams, Uint8Array, TextEncoder, btoa, crypto: webcrypto, Date, console, fixtures: { modelBody, formAgent, ruleAgent, TOOL_CATALOG, completeTools, endpoint, canDraft, candidateContext, providerSupport, customAssist: (config, input, profile) => customAssist(config, input, profile, async (config, messages) => { calls.push({ customRequest: { config, messages } }); return JSON.stringify({ reply: "Optional source is blank.", updates: [], done: true }); }), complete: async (config, messages) => { calls.push({ customRequest: { config, messages } }); return "Fixture draft"; }, BridgeError, JobHuntBridge, autoApplyUrl, autoApplyCodeFromUrl: () => autoCode, autofillIdFromUrl: () => autofillId, Agent: FakeAgent, TabDriver: class { constructor(tabId) { this.tabId = tabId; } } }, fetch: async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("platform.json")) return { ok: true, json: async () => ({ baseUrl: packagedOrigin }) };
     if (url.endsWith(".js")) return { ok: true, text: async () => `// ${url}` }; // the agent's page scripts
@@ -416,7 +415,7 @@ test('a declined silent check reports sign-in required without exchanging a code
   assert.equal((await forged.send({ type: 'browserSignIn', interactive: false })).ok, false);
 });
 
-test('the agent runs in the tab it was started from, one tab at a time, and takes the panel\'s controls', async () => {
+test('the agent runs per tab and takes the panel\'s controls independently', async () => {
   const h = harness();
   const started = await h.send({ type: 'agentStart', appId: null }, h.content);
   assert.equal(started.ok, true);
@@ -425,38 +424,63 @@ test('the agent runs in the tab it was started from, one tab at a time, and take
   assert.equal((await h.send({ type: 'hello', url: 'https://ats.example/step-2' }, h.content)).data.mode, 'agent');
 
   const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
+  const idle = { ...h.content, tab: { id: 14, url: 'https://example.com/other' } };
   const second = await h.send({ type: 'agentStart', appId: null }, other);
-  assert.equal(second.ok, false);
-  assert.match(second.error, /another tab/);
+  assert.equal(second.ok, true);
+  assert.equal(h.agentInstances.length, 2);
+  assert.equal(h.agentInstances[0].stopped, false);
+  assert.equal(h.agentInstances[1].stopped, false);
 
   assert.equal((await h.send({ type: 'agentControl', action: 'reply', text: ' 30 days ' }, h.content)).ok, true);
   assert.equal((await h.send({ type: 'agentControl', action: 'reply', text: '  ' }, h.content)).ok, false);
   assert.equal((await h.send({ type: 'agentControl', action: 'submit' }, h.content)).ok, false);
-  assert.equal((await h.send({ type: 'agentControl', action: 'skip' }, other)).ok, false); // not running there
+  assert.equal((await h.send({ type: 'agentControl', action: 'skip' }, idle)).ok, false); // not running there
   assert.equal((await h.send({ type: 'agentStatus' }, h.content)).data.status, 'running');
+  assert.equal((await h.send({ type: 'agentStatus' }, other)).data.status, 'running');
   assert.equal((await h.send({ type: 'agentControl', action: 'stop' }, h.content)).ok, true);
+  assert.equal(h.agentInstances[0].stopped, true);
+  assert.equal(h.agentInstances[1].stopped, false);
   assert.deepEqual(h.calls.filter((c) => c.agentReply || c === 'agentStop'), [{ agentReply: '30 days' }, 'agentStop']);
 });
 
-test('starting the agent ends a run in another tab that is only waiting on the user', async () => {
-  for (const status of ['waiting', 'paused']) {
+test('reloading the page stops an active agent run and returns idle instead of replaying stale chat state', async () => {
+  for (const status of ['running', 'waiting', 'paused', 'ready']) {
+    const h = harness();
+    await h.send({ type: 'agentStart', appId: null }, h.content);
+    const active = h.agentInstances[0];
+    active.status = status;
+    h.session['agentState:10'] = { messages: ['stale'] };
+
+    // A normal navigation keeps the agent active (except once ready).
+    const nav = await h.send({ type: 'hello', url: 'https://example.com/step-2', reloaded: false }, h.content);
+    assert.equal(nav.data.mode, status === 'ready' ? 'continue' : 'agent', status);
+    assert.equal(active.stopped, false, status);
+
+    // A manual page reload resets the form, so the stale agent stops silently and goes idle.
+    const reloaded = await h.send({ type: 'hello', url: 'https://example.com/apply', reloaded: true }, h.content);
+    assert.equal(reloaded.data.appId, null, status);
+    assert.equal(reloaded.data.mode, 'idle', status);
+    assert.equal(active.stopped, true, status);
+    assert.equal(h.session['agentState:10'], undefined, status);
+  }
+});
+
+test('starting the agent in another tab leaves existing runs active, while restarting the same tab stops only its previous run', async () => {
+  for (const status of ['running', 'waiting', 'paused', 'ready']) {
     const h = harness();
     await h.send({ type: 'agentStart', appId: null }, h.content);
     const first = h.agentInstances[0];
-    first.status = status; // a question, or the user paused it, then moved on to another job
+    first.status = status;
     const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
     assert.equal((await h.send({ type: 'agentStart', appId: null }, other)).ok, true, status);
-    assert.equal(first.stopped, true, status);
+    assert.equal(first.stopped, false, status);
     assert.equal(h.agentInstances.length, 2, status);
+    // Restarting tab 10 stops only tab 10's previous run; tab 12 keeps running.
+    assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true, status);
+    assert.equal(first.stopped, true, status);
+    assert.equal(h.agentInstances[1].stopped, false, status);
+    assert.equal(h.agentInstances.length, 3, status);
   }
-  // A run still filling is never cut off; the refusal names its tab.
-  const h = harness();
-  await h.send({ type: 'agentStart', appId: null }, h.content);
-  const other = { ...h.content, tab: { id: 12, url: 'https://example.com/apply' } };
-  const refused = await h.send({ type: 'agentStart', appId: null }, other);
-  assert.equal(refused.ok, false);
-  assert.match(refused.error, /still filling "Engineer at Acme" in another tab/);
-  assert.equal(h.agentInstances[0].stopped, false);
 });
 
 test('the agent refuses an application whose last submission is unconfirmed', async () => {
@@ -646,28 +670,29 @@ test('sign-out discards pending outcomes so another account cannot receive them'
   assert.equal(h.calls.filter((c) => c.report).length, 1);
 });
 
-test('starting another application stops a ready controller before attaching', async () => {
+test('restarting the same tab stops and awaits its ready controller before attaching, while another tab runs independently', async () => {
   const h = harness();
   assert.equal((await h.send({ type: 'agentStart', appId: null }, h.content)).ok, true);
   const previous = h.agentInstances[0];
   previous.status = 'ready';
   let detached = false;
-  previous.runPromise = Promise.resolve().then(() => { detached = true; });
-  const next = await h.send({ type: 'agentStart', tabId: 12, url: 'https://careers.example.test/another', appId: null });
-  assert.equal(next.ok, true);
+  let resolveRun;
+  previous.runPromise = new Promise((resolve) => { resolveRun = resolve; }).then(() => { detached = true; });
+  const origStop = previous.stop.bind(previous);
+  previous.stop = (...args) => { origStop(...args); resolveRun(); };
+  const other = await h.send({ type: 'agentStart', tabId: 12, url: 'https://careers.example.test/another', appId: null });
+  assert.equal(other.ok, true);
+  assert.equal(previous.stopped, false);
+  assert.equal(detached, false);
+  assert.equal(h.agentInstances.length, 2);
+
+  const restarted = await h.send({ type: 'agentStart', appId: null }, h.content);
+  assert.equal(restarted.ok, true);
   assert.equal(previous.stopped, true);
   assert.equal(detached, true);
-  assert.equal(h.agentInstances.length, 2);
+  assert.equal(h.agentInstances[1].stopped, false);
+  assert.equal(h.agentInstances.length, 3);
 });
-
-test('employer pages cannot connect, approve or control the external browser', async () => {
-  const h = harness();
-  for (const action of ['connect', 'decision', 'reviewAnswers', 'stop']) {
-    const result = await h.send({ type: 'externalBrowser', action }, h.content);
-    assert.equal(result.ok, false);
-  }
-});
-
 
 test('rule suggestion refuses drafting even with a custom provider', async () => {
   const h = harness();
@@ -781,12 +806,12 @@ test('disabling custom AI stops active custom agent', async () => {
   assert.equal(h.calls.some((call) => call.customRequest), false);
 });
 
-test('extension engine defaults to Agent based form assistant independently of the platform account setting', async () => {
+test('extension engine defaults to Auto independently of the platform account setting and negotiates ai_led capabilities', async () => {
   const h = harness({ engine: 'ai_led' });
   delete h.local.extensionEngine;
-  assert.equal((await h.send({ type: 'connectionSettings' })).data.extensionEngine, 'ai_led');
+  assert.equal((await h.send({ type: 'connectionSettings' })).data.extensionEngine, 'auto');
   const result = await h.send({ type: 'context', appId: null }, h.content);
-  assert.equal(result.data.agentEngine, 'ai_led');
+  assert.equal(result.data.agentEngine, 'auto');
   assert.equal(h.calls.find((call) => call.choice)?.choice, 'ai_led');
 });
 

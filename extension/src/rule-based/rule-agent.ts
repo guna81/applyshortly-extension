@@ -13,7 +13,8 @@ const FORBIDDEN_CLICK = /\b(?:submit|send|finish|complete application|sign.?in|l
 const COOKIE_DECLINE = /^(?:reject|decline|deny|refuse|opt[- ]?out)\b.*|\b(?:necessary|essential) (?:cookies )?only\b|\bonly (?:necessary|essential)\b/i;
 const PLACEHOLDER = /^(?:select|choose|pick|please select|--|none selected)[…\s.-]*$/i;
 const BOT_CHECK = /\b(?:not a (?:robot|bot)|i(?:'| a)?m human|i am human|verify (?:that )?you(?:'re| are) (?:a )?human|human verification)\b/i;
-const CONSENT_OR_LEGAL = /\b(?:consent|certify|declare|swear|truthful|agree|accept|confirm|privacy policy|terms|visa|sponsor|work (?:permit|authori[sz]ation)|authori[sz]ed to work|right to work|eligible to work|criminal|convict|felon|previously (?:employed|worked)|former(?:ly)? (?:employee|employed))\b/i;
+const CONSENT_OR_LEGAL = /\b(?:consent|certify|declare|swear|truthful|agree|accept|confirm|privacy policy|terms|visa|sponsor|work (?:permit|authori[sz]ation)|authori[sz]ed to work|right to work|eligible to work|criminal|convict|felon|previously (?:employed|worked)|former(?:ly)? (?:employee|employed)|employment agreements?|post-employment restrictions?|non-?compete|conflict of interest)\b/i;
+const YES_NO_QUESTION = /^\s*(?:are|do|does|did|have|has|had|will|would|can|could|should|is|were|was)\s+(?:you|there|this|it)\b/i;
 const DIAL_COUNTRIES: Record<string, string> = { "+1": "United States", "+44": "United Kingdom", "+91": "India", "+61": "Australia", "+49": "Germany", "+33": "France", "+65": "Singapore", "+81": "Japan", "+86": "China", "+55": "Brazil" };
 
 const normalizeObservation = (observation: any) => ({
@@ -52,7 +53,7 @@ const fieldLabel = (el: any): string => String(el?.group || el?.name || "").trim
 
 const cleanFieldName = (el: any): string => fieldLabel(el)
   .replace(/\s*\((?:required|optional)\)\s*$/i, "")
-  .replace(/[\s*:]+$/, "")
+  .replace(/[\s*:✱]+$/, "")
   .trim();
 
 const fieldKindOf = (el: any): string => {
@@ -107,6 +108,8 @@ function matchSavedAnswer(el: any, profile: any): { answer: string; answer_id?: 
   }
 
   // 2. High-confidence content-token overlap (deterministic, no LLM).
+  // Never fuzzy-match Yes/No questions (exact match above is still allowed).
+  if (YES_NO_QUESTION.test(l)) return null;
   const labelTokens = new Set(contentTokens(rawLabel));
   if (labelTokens.size < 2) return null;
 
@@ -114,20 +117,17 @@ function matchSavedAnswer(el: any, profile: any): { answer: string; answer_id?: 
   for (const entry of answers) {
     const ans = String(entry?.answer ?? "").trim();
     if (!ans) continue;
-    const tagTokens = Array.isArray(entry?.tags) ? entry.tags.flatMap((t: any) => contentTokens(t)) : [];
     for (const pat of patternsOf(entry)) {
-      const patTokens = new Set([...contentTokens(pat), ...tagTokens]);
+      const patTokens = new Set(contentTokens(pat));
       if (patTokens.size < 2) continue;
       let shared = 0;
       for (const tok of labelTokens) if (patTokens.has(tok)) shared += 1;
       if (shared < 2) continue;
       const union = labelTokens.size + patTokens.size - shared;
       const jaccard = shared / union;
-      const containment = shared / Math.min(labelTokens.size, patTokens.size);
-      if (jaccard >= 0.5 || containment >= 0.75) {
-        const score = jaccard + containment;
-        if (!best || score > best.score) {
-          best = { answer: ans, ...(typeof entry?.id === "number" ? { answer_id: entry.id } : {}), score };
+      if (jaccard >= 0.65) {
+        if (!best || jaccard > best.score) {
+          best = { answer: ans, ...(typeof entry?.id === "number" ? { answer_id: entry.id } : {}), score: jaccard };
         }
       }
     }
@@ -193,13 +193,32 @@ function matchProfileRule(el: any, profile: any, job: any, hasPhoneCountryField:
   const fact = profileFact(rawLabel, profile, job);
   if (fact) return fact;
 
+  // Yes/No questions must never be filled with non-boolean profile strings (company, location, URL, etc.).
+  const prefs = profile?.preferences ?? {};
+  if (YES_NO_QUESTION.test(l)) {
+    if (/\brelocat(?:e|ion)\b/.test(l) && typeof prefs.willing_to_relocate === "boolean") {
+      return prefs.willing_to_relocate ? "Yes" : "No";
+    }
+    return null;
+  }
+
+  // Long open-ended essay prompts (e.g. "Tell us about something you've built... (GitHub, a demo...)") must not trigger short-label profile rules.
+  if ((el.role === "textarea" && rawLabel.length > 60) || rawLabel.length > 105) {
+    return null;
+  }
+
   // Disambiguate company/school names before matching candidate's own name.
   const exp = latestExperience(profile);
   const edu = highestEducation(profile);
-  if (/\b(company|employer|organi[sz]ation)\b/.test(l) || (/\b(company|employer)\b/.test(section.toLowerCase()) && /\bname\b/.test(l))) {
+  const cleanL = cleanFieldName(el).toLowerCase();
+  if (/^(?:current\s+)?(?:company|employer|organi[sz]ation)(?:\s+name)?$/.test(cleanL)
+    || /\b(?:current\s+(?:company|employer|organi[sz]ation)|where are you currently working|full company name|company\s+name|employer\s+name)\b/.test(l)
+    || (/\b(company|employer)\b/.test(section.toLowerCase()) && /\bname\b/.test(l))) {
     return exp?.company ? String(exp.company) : null;
   }
-  if (/\b(school|university|college|institut(e|ion)|alma mater)\b/.test(l) || (/\b(education|school|university)\b/.test(section.toLowerCase()) && /\bname\b/.test(l))) {
+  if (/^(?:current\s+)?(?:school|university|college|institut(?:e|ion)|alma mater)(?:\s+name)?$/.test(cleanL)
+    || /\b(?:school|university|college|institut(?:e|ion))\s+name\b|\balma mater\b/.test(l)
+    || (/\b(education|school|university)\b/.test(section.toLowerCase()) && /\bname\b/.test(l))) {
     const school = edu?.school ?? edu?.institution;
     return school ? String(school) : null;
   }
@@ -214,6 +233,7 @@ function matchProfileRule(el: any, profile: any, job: any, hasPhoneCountryField:
   if (/\be-?mail\b/.test(l)) return profile?.email || null;
   const isPhoneCountrySelect = (["select", "combobox"].includes(el.role) || el.popup)
     && (/\bphone\b|\bcountry\s*code\b|\bdial(?:l?ing)?\s*code\b|\bcalling\s*code\b|\bisd\b/.test(l)
+      || (/\bphone\b/i.test(section) && /^country\b/i.test(cleanL))
       || (Array.isArray(el.options) && el.options.some((o: string) => /\(\+\d{1,3}\)|\+\d{1,3}\b/.test(o))));
   if (isPhoneCountrySelect || /\bphone\s*country\b|\bcountry\s*code\b|\bdial(?:l?ing)?\s*code\b|\bcalling\s*code\b|\bisd\b/.test(l)) {
     const code = extractDialCode(profile?.phone);
@@ -224,11 +244,18 @@ function matchProfileRule(el: any, profile: any, job: any, hasPhoneCountryField:
         ?? el.options.find((o: string) => o.includes(code));
       if (hit) return hit;
     }
-    return country ? `${country} (${code})` : code;
+    // Return the raw dial code ("+1", "+91") for async comboboxes so chooseDialOption matches
+    // both "United States (+1)" and "USA (+1)" without filtering the dropdown to zero options.
+    return code;
   }
-  if (/\bphone\b|\bmobile\b|\btelephone\b|\bwhatsapp\b/.test(l)) {
+  if (/\bphone\b|\bmobile\b|\btelephone\b|\bwhatsapp\b|\bcontact\s*number\b/.test(l)) {
     if (!profile?.phone) return null;
-    return hasPhoneCountryField ? stripDialCode(profile.phone) : String(profile.phone);
+    const raw = hasPhoneCountryField ? stripDialCode(profile.phone) : String(profile.phone);
+    if (typeof el.maxlength === "number" && el.maxlength > 0 && raw.length > el.maxlength) {
+      const localDigits = stripDialCode(profile.phone).replace(/\D/g, "");
+      if (localDigits && localDigits.length <= el.maxlength) return localDigits;
+    }
+    return raw;
   }
 
   // Profile links.
@@ -239,22 +266,32 @@ function matchProfileRule(el: any, profile: any, job: any, hasPhoneCountryField:
   // Location / Country.
   const loc = String(profile?.location ?? "").trim();
   const locParts = loc.split(",").map((s) => s.trim()).filter(Boolean);
-  if (/^country\b|\bcountry of residence\b|\bcurrent country\b/.test(l)) {
+  if (/^country\b|\bcountry of residence\b|\bcurrent country\b/.test(cleanL)) {
     return locParts.length >= 2 ? locParts[locParts.length - 1] : loc || null;
   }
-  if (/\bcurrent\s*city\b|^city\b/.test(l)) {
+  if (/\bcurrent\s*city\b|^city\b/.test(cleanL)) {
     return locParts[0] || loc || null;
   }
-  if (/\blocation\b|\bcity\b|where are you (?:currently )?(?:based|located)/.test(l)) {
+  if (/^(?:your\s+|current\s+)?(?:location|city)(?:\s*\([^)]*\))?$/.test(cleanL)
+    || /\b(?:current\s+location|your\s+location|where are you (?:currently )?(?:based|located)|location\s*\(city\)|city\s*\/\s*state|city,\s*state)\b/.test(l)) {
     return loc || null;
   }
 
   // Experience & preferences.
   if (/\bcurrent\s*(?:job\s*)?(?:title|designation|role|position)\b/.test(l)) return exp?.title ? String(exp.title) : null;
-  if (/\byears?\s+of\s+(?:total\s+|overall\s+|professional\s+|work\s+|full[- ]time\s+)?experience\b|\btotal\s+experience\b/.test(l)) {
-    return profile?.total_experience_years != null ? String(profile.total_experience_years) : null;
+  if ((/\byears?\s+of\s+(?:total\s+|overall\s+|professional\s+|work\s+|full[- ]time\s+)?experience\b|\btotal\s+experience\b/.test(l))
+    && !/\bexperience\b.*\b(?:working\s+with|using|with|in|managing|building|leading|developing)\s+(?!(?:total|overall|your\s+career|this\s+field)\b)[a-z]/i.test(l)) {
+    if (profile?.total_experience_years == null) return null;
+    const yrs = Number(profile.total_experience_years);
+    // Split Years/Months dropdowns (e.g. RippleHire "Total experience" with options 0..11 for months).
+    if (Array.isArray(el.options) && el.options.length === 12
+      && el.options.every((o: string, i: number) => o.trim() === String(i))) {
+      return Number.isFinite(yrs) ? String(Math.round((yrs - Math.floor(yrs)) * 12) % 12) : "0";
+    }
+    return Number.isFinite(yrs) && Array.isArray(el.options) && el.options.length > 12 && el.options.every((o: string) => /^\d+$/.test(o.trim()))
+      ? String(Math.floor(yrs))
+      : String(profile.total_experience_years);
   }
-  const prefs = profile?.preferences ?? {};
   if (/\b(?:expected|desired)\s*(?:annual\s*)?(?:salary|ctc|compensation|pay)\b/.test(l)) {
     return prefs.expected_ctc != null ? String(prefs.expected_ctc) : null;
   }
@@ -329,7 +366,11 @@ function buildActionForAnswer(el: any, answer: string, obs: any): any | null {
 export function ruleAgent(
   profile: any,
   job: any,
-  options: { fillOptional?: boolean; lookupSaved?: (question: string) => Promise<{ answer: string; answer_id?: number } | null> } = {},
+  options: {
+    fillOptional?: boolean;
+    lookupSaved?: (question: string) => Promise<{ answer: string; answer_id?: number } | null>;
+    handoffOnly?: boolean;
+  } = {},
 ) {
   const st: any = {
     session: crypto.randomUUID(),
@@ -343,6 +384,9 @@ export function ruleAgent(
     lastActions: [] as any[],
     filled: {} as Record<string, { label: string; value: string; kind: string; source: "user" | "profile" | "answer_bank"; needs_review: boolean; answer_id?: number }>,
     filledBatch: [] as Array<{ kind: "fill" | "upload"; label: string; command_id: string }>,
+    wrote: [] as string[],
+    writeValues: {} as Record<string, any>,
+    failedFields: [] as Array<{ ref: string; label: string; detail?: string }>,
     waits: 0,
   };
 
@@ -420,10 +464,24 @@ export function ruleAgent(
         const id = el ? identityOf(obs, el) : act.identity;
         const ok = r.ok !== false && r.result?.verified !== false;
         if (ok) {
-          if (id && act.fillMeta) st.filled[id] = act.fillMeta;
+          if (id && act.fillMeta) {
+            const uploadedName = act.type === "upload" ? String(r.result?.committed ?? r.result?.value ?? "").trim() : "";
+            st.filled[id] = uploadedName ? { ...act.fillMeta, value: uploadedName.slice(0, 1000) } : act.fillMeta;
+          }
+          if (id) {
+            if (!st.wrote.includes(id)) st.wrote.push(id);
+            if (el) st.writeValues[id] = choiceState(el) ?? el.value ?? "";
+          }
         } else {
           if (id) st.attempted.set(id, (st.attempted.get(id) ?? 0) + 1);
           st.filledBatch = st.filledBatch.filter((e: any) => e.command_id !== act.command_id);
+          if (!st.failedFields.some((f: any) => f.ref === act.ref)) {
+            st.failedFields.push({
+              ref: act.ref,
+              label: act.fillMeta?.label || act.label || act.ref,
+              ...(typeof r.detail === "string" && r.detail ? { detail: r.detail.slice(0, 200) } : {}),
+            });
+          }
         }
       }
       st.lastActions = [];
@@ -467,11 +525,13 @@ export function ruleAgent(
       }
     }
 
-    // 3b. Async-rendered forms (e.g. Workable): wait briefly when no form fields or navigation buttons have mounted yet.
+    // 3b. Async-rendered forms (e.g. Workable): wait briefly when no form fields or navigation/gate buttons have mounted yet.
     const hasFields = hasApplicationFields(obs);
+    const hasGateOrNav = obs.elements.some((e: any) => !e.disabled && !e.submit_like && ["button", "link"].includes(e.role)
+      && (NAV_BUTTON.test(String(e.name ?? "")) || /\b(?:agree|accept)\b/i.test(String(e.name ?? ""))));
     if (hasFields) {
       st.waits = 0;
-    } else if (obs.observation_id && st.waits < 3 && !obs.elements.some((e: any) => !e.disabled && !e.submit_like && ["button", "link"].includes(e.role) && NAV_BUTTON.test(String(e.name ?? "")))) {
+    } else if (obs.observation_id && st.waits < (options.handoffOnly ? 1 : 3) && !hasGateOrNav) {
       st.waits += 1;
       const action = { type: "wait", ms: 1500, label: "Waiting for the form to load", observation_id: obs.observation_id, command_id: crypto.randomUUID() };
       return { ...base, status: "continue", actions: [action], message: "" };
@@ -501,7 +561,9 @@ export function ruleAgent(
     // 5. Pass 1: deterministically fill all supported profile fields in page order.
     const hasPhoneCountryField = obs.elements.some((e: any) => (["select", "combobox"].includes(e.role) || e.popup)
       && (/\bphone\b|\bcountry\s*code\b|\bdial(?:l?ing)?\s*code\b/i.test(fieldLabel(e))
+        || (/\bphone\b/i.test(String(e.section ?? "")) && /^country\b/i.test(cleanFieldName(e)))
         || (Array.isArray(e.options) && e.options.some((o: string) => /\(\+\d{1,3}\)|\+\d{1,3}\b/.test(o)))));
+    const maxAttempts = options.handoffOnly ? 1 : MAX_FIELD_ATTEMPTS;
     const seenGroups = new Set<string>();
     const actions: any[] = [];
     const tracked: any[] = [];
@@ -524,17 +586,28 @@ export function ruleAgent(
       }
 
       const id = identityOf(obs, el);
-      if ((st.attempted.get(id) ?? 0) >= MAX_FIELD_ATTEMPTS) continue;
+      if ((st.attempted.get(id) ?? 0) >= maxAttempts) continue;
 
       let raw: any = null;
       let fillMeta: any = null;
       if (el.role === "file") {
         const file = canUpload(obs, el);
-        if (file) raw = { type: "upload", ref: el.ref, file, label: file === "cover_letter" ? "Upload cover letter" : "Upload resume" };
+        if (file) {
+          raw = { type: "upload", ref: el.ref, file, label: file === "cover_letter" ? "Upload cover letter" : "Upload resume" };
+          fillMeta = {
+            label: cleanFieldName(el).slice(0, 500) || (file === "cover_letter" ? "Cover letter" : "Resume"),
+            value: file === "cover_letter" ? "Cover letter attached" : "Resume attached",
+            kind: "file",
+            source: "profile" as const,
+            needs_review: false,
+          };
+        }
       } else if (["textbox", "textarea", "select", "combobox", "spinbutton", "radio", "checkbox"].includes(el.role) || isChoice) {
         const profileAnswer = matchProfileRule(el, profile, job, hasPhoneCountryField);
         let savedHit = profileAnswer ? null : matchSavedAnswer(el, profile);
-        if (!profileAnswer && !savedHit && options.lookupSaved) {
+        // In Auto mode (handoffOnly), skip backend semantic lookupSaved during the fast rule pass:
+        // Agent already has the answer bank + LLM reasoning to verify semantic matches and dropdown fit.
+        if (!profileAnswer && !savedHit && options.lookupSaved && !options.handoffOnly) {
           const rawLabel = fieldLabel(el);
           const l = rawLabel.toLowerCase();
           const ctx = `${el.section ?? ""} ${rawLabel}`.toLowerCase();
@@ -576,12 +649,37 @@ export function ruleAgent(
 
     if (actions.length) {
       st.lastActions = tracked;
-      return { ...base, status: "continue", actions, message: "" };
+      return { ...base, ...(options.handoffOnly ? { local_rule_step: true } : {}), status: "continue", actions, message: "" };
     }
 
     // 6. Pass 2: ask the user one question at a time for remaining required (then enabled optional) fields.
     const required = missingRequired(obs);
     const optional = options.fillOptional === false ? [] : emptyOptional(obs);
+
+    if (options.handoffOnly) {
+      const hasNavButton = !required.length && obs.elements.some((el: any) =>
+        ["button", "link"].includes(el.role) && NAV_BUTTON.test(String(el.name ?? ""))
+        && !(hasFields && /^apply(?:\s+(?:now|for\s+this\s+job))?$/i.test(String(el.name ?? "").trim()))
+        && isSafeClick(obs, el));
+      const hasErrors = Boolean((obs.errors?.length ?? 0) > 0 || obs.elements.some((e: any) => e.invalid || e.error));
+      return {
+        ...base,
+        status: "handoff",
+        actions: [],
+        message: flushFilledSummary(),
+        handoff: {
+          filled: { ...st.filled },
+          wrote: [...st.wrote],
+          writeValues: { ...st.writeValues },
+          failedFields: [...st.failedFields],
+          missingRequiredCount: required.length,
+          emptyOptionalCount: optional.length,
+          hasNavButton,
+          hasErrors,
+          hasFields,
+        },
+      };
+    }
     const queue = [...required.map((f: any) => ({ ...f, required: true })), ...optional.map((f: any) => ({ ...f, required: false }))];
 
     for (const field of queue) {
@@ -613,6 +711,9 @@ export function ruleAgent(
       for (const el of obs.elements) {
         if (!["button", "link"].includes(el.role)) continue;
         if (!NAV_BUTTON.test(String(el.name ?? ""))) continue;
+        // On single-page forms (e.g. Greenhouse), an "Apply" button at the top of the job description
+        // just scrolls to the form that is already visible on the page.
+        if (hasFields && /^apply(?:\s+(?:now|for\s+this\s+job))?$/i.test(String(el.name ?? "").trim())) continue;
         if (!isSafeClick(obs, el)) continue;
         const navKey = `${obs.url}|${el.ref}|${el.name}`;
         if (st.navClicks.has(navKey)) continue;

@@ -259,11 +259,11 @@ test('a connection made in the background shows without reloading', async () => 
   } finally { h.close(); }
 });
 
-test('extension has its own engine selector, defaulting to Agent based form assistant', async () => {
+test('extension has its own engine selector, defaulting to Auto', async () => {
   const h = await setup();
   try {
     const select = h.document.querySelector('#extensionEngine');
-    assert.equal(select.value, 'ai_led');
+    assert.equal(select.value, 'auto');
     select.value = 'rules_led';
     select.dispatchEvent(new h.window.Event('change'));
     await h.flush();
@@ -323,6 +323,36 @@ test('connected user without a profile sees profile setup card and opens /profil
     h.document.querySelector('#setupProfileBtn').click();
     await h.flush();
     assert.ok(h.calls.some((item) => item.type === 'openWebsite' && item.path === '/profile?from=extension'));
+  } finally {
+    h.close();
+  }
+});
+
+test('extensionEngine select stays in sync with chrome.storage.onChanged updates', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const select = h.document.querySelector('#extensionEngine');
+    assert.equal(select.value, 'auto');
+    h.storageChanged({ extensionEngine: { newValue: 'rules_led' } });
+    assert.equal(select.value, 'rules_led');
+    h.storageChanged({ extensionEngine: { newValue: 'ai_led' } });
+    assert.equal(select.value, 'ai_led');
+  } finally {
+    h.close();
+  }
+});
+
+test('autoShowLauncher defaults to off and persists changes in storage', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const toggle = h.document.querySelector('#autoShowLauncher');
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(h.stored.autoShowLauncher, true);
+    h.storageChanged({ autoShowLauncher: { newValue: false } });
+    assert.equal(toggle.checked, false);
   } finally {
     h.close();
   }

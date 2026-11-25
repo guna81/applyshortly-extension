@@ -53,17 +53,20 @@
         <div class="actions">
           <button id="signin" type="button" class="primary">Sign in with ApplyShortly</button>
           <button id="cancelSignin" type="button" hidden>Cancel sign-in</button>
-          <button id="logout" type="button" hidden>Log out</button>
+          <button id="openWebsite" type="button">Open ApplyShortly</button>
+          <button id="logout" type="button" class="danger" hidden>Log out</button>
         </div>
         <p id="logoutHint" class="hint" hidden></p>
-        <button id="openWebsite" type="button">Open ApplyShortly</button>
         <p id="pairingMsg" role="status" aria-live="polite"></p>
         <details id="manual">
           <summary>Advanced: manual API-key connection</summary>
         <label>API key
           <span class="input-with-btn">
             <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key" required>
-            <button id="reveal" type="button" class="icon" title="Show key" aria-label="Show key">👁</button>
+            <button id="reveal" type="button" class="icon" title="Show key" aria-label="Show key" aria-pressed="false">
+              <svg class="icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="icon-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+            </button>
           </span>
         </label>
         <p class="hint">For manual connection, create a per-user key in ApplyShortly → Settings → API keys.</p>
@@ -110,7 +113,7 @@
             <button type="button" id="customTest">Test connection</button>
             <button class="primary" type="submit" id="customSave">Save and activate</button>
             <button type="button" id="customDisable" class="ghost-btn">Switch to ApplyShortly credits</button>
-            <button type="button" id="deleteRetainedKey" hidden disabled>Delete retained server key</button>
+            <button type="button" id="deleteRetainedKey" class="danger" hidden disabled>Delete retained server key</button>
           </div>
         </form>
         <p id="customStatus" role="status"></p>
@@ -124,13 +127,18 @@
       <span class="eyebrow">YOUR WORKFLOW</span><h2>Preferences</h2>
       <p class="section-description">Decide how the extension helps you apply.</p>
       <label>Extension form filling method
-        <select id="extensionEngine"><option value="ai_led">Agent based form assistant</option><option value="rules_led">Rule based form assistant</option></select>
+        <select id="extensionEngine"><option value="auto">Auto</option><option value="ai_led">Agent based form assistant</option><option value="rules_led">Rule based form assistant</option></select>
       </label>
-      <p class="hint">Applies to new extension sessions on this device. The platform has a separate setting. Agent based form assistant uses your selected provider.</p>
+      <p class="hint">Applies to new extension sessions on this device. Auto fills known profile and saved answers locally first, then uses the AI agent to review and complete the rest when credits or a custom provider are available.</p>
       <label class="switch-row" id="toolOptions">
         <span>Send page screenshots to the AI
           <small class="muted">The Agent based form assistant agent can look at an image of the page, with its fields numbered, as well as read its text. The image goes to your selected AI provider only, is never stored by ApplyShortly, and a provider that does not accept images gets text only. Turn off to send text only.</small></span>
         <input id="agentVision" type="checkbox" class="switch" role="switch">
+      </label>
+      <label class="switch-row">
+        <span>Auto-show Apply button on job forms
+          <small class="muted">When enabled, automatically shows a floating “Start applying” button when a job application form is detected on the page. Off by default.</small></span>
+        <input id="autoShowLauncher" type="checkbox" class="switch" role="switch">
       </label>
       <label class="switch-row">
         <span>Auto apply
@@ -163,7 +171,7 @@
         <p class="hint">Only when Autopilot's auto-submit is on, at your Autopilot hour, and only while Chrome is
           running. The window closes shortly after it submits. Job boards are never opened this way.</p>
       </details>
-      <label>Appearance
+      <label class="appearance-row">Appearance
         <select id="theme">
           <option value="system">Match my browser</option>
           <option value="light">Light</option>
@@ -189,13 +197,6 @@
           3-second countdown you can cancel.</li>
       </ol>
       <p class="hint"><a href="#" id="shortcuts">Change the keyboard shortcut</a></p>
-    </section>
-
-    <section class="card settings-card" id="assistant-link">
-      <span class="eyebrow">CONNECTED ASSISTANT</span>
-      <h2>Let your assistant fill applications</h2>
-      <p class="section-description">Connect ChatGPT, Claude or Codex, and approve the application tabs it may fill.</p>
-      <p class="hint"><a href="external-browser.html" target="_blank" rel="noopener">Set up or review the connection</a></p>
     </section>
 
     </aside>

@@ -128,30 +128,12 @@ The agent needs a platform whose `/extension/agent/model` accepts `actions`, `im
 and the agent falls back to the plain request, then to asking "Please answer: First Name"). Rebuild the API container (`make up`)
 after pulling platform changes.
 
-## One command layer for both AI controllers
+## Shared command layer
 
 `extension/src/page-control/commands.js` (`CommandRunner`) is the only place that guards and runs page
 commands (stale observation, document change, user-edited or replaced control, password, unapproved
-link; verified `type`/`select`/`check`, `fill_form`, `options`, `review`, delta replies). The Agent based form assistant
-engine (`page-control/loop.js`) and the external controller (`external-browser.js`) both call it; do not
-copy its guards into a controller. Keep it in step with the platform's
-`services/browser_commands.py`.
-
-## External-assistant browser control exception
-
-The external browser controller may open job-board tabs for an exact batch approved in the
-extension, then accept application-only MCP commands sequentially. It makes no AI calls.
-Submission is a separate guarded operation with submission scope, local batch approval,
-reviewed answers, complete fields and a cancellable countdown. It never retries an uncertain
-submission or solves a CAPTCHA. Other form agents and Autopilot retain the restrictions above.
-
-## Standing approval for a connected assistant
-
-`external-browser.js` keeps the account's standing approval (`setStanding`, `loadStanding`; the server is the
-source of truth, `PUT /api/extension/browser/standing-approval`). While on, a `submit` treats changed answers as
-reviewed and skips the countdown, and **Stop access** turns it off. Do not extend it to skip validation,
-blockers, the existing-confirmation check, new-domain approval or unconfirmed-attempt locking, and never to job
-boards beyond one job at a time or to CAPTCHA/sign-in pages.
+link; verified `type`/`select`/`check`, `fill_form`, `options`, `review`, delta replies). The form agent
+loop (`page-control/loop.js`) calls it; do not copy its guards into a controller.
 
 
 ## Generic controls (do not add a detector per site)

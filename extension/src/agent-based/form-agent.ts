@@ -410,6 +410,29 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     // A sign-in or verification the user must do on the page is theirs; the model is not asked.
     if (obs.blockers?.some((b: string) => b !== "captcha" || !hasApplicationFields(obs))) return { ...base, status: "ask_user", message: "", question: { kind: "blocker", text: "Complete the sign-in or verification on the page, then Continue." } };
     const { results, notes } = deliver(body, obs);
+    if (body.handoff_context) {
+      const hc = body.handoff_context;
+      if (Array.isArray(hc.wrote)) {
+        for (const key of hc.wrote) {
+          if (typeof key === "string" && !st.gs.wrote.includes(key)) st.gs.wrote.push(key);
+        }
+      }
+      if (hc.writeValues && typeof hc.writeValues === "object") {
+        st.gs.writeValues = { ...(st.gs.writeValues ?? {}), ...hc.writeValues };
+      }
+      if (hc.filled && typeof hc.filled === "object") {
+        st.filled = { ...hc.filled, ...st.filled };
+      }
+      const handoffBits: string[] = [
+        "Auto mode handoff: the rule engine completed its initial deterministic pass on this step.",
+      ];
+      if (hc.summary) handoffBits.push(`Already filled by rules: ${cut(hc.summary, 600)}`);
+      if (Array.isArray(hc.failedFields) && hc.failedFields.length) {
+        handoffBits.push(`Rule writes that failed or were unverified: ${JSON.stringify(hc.failedFields.slice(0, 10))}.`);
+      }
+      handoffBits.push("Review the filled fields for any formatting/option mismatches or validation errors (you may fix rule-filled fields, but never overwrite user-edited fields), fill any remaining required or enabled optional fields, and call done once everything on this step is accurate and complete.");
+      notes.push(handoffBits.join(" "));
+    }
     // Raw saved answers are candidate data. Matching them is the model's responsibility.
     const saved = profile.answers ?? [];
     const answersTotal = Number(profile.answers_total ?? (Array.isArray(saved) ? saved.length : 0));
@@ -440,8 +463,11 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     const response: any = { ...base, filled: Object.values(st.filled), status: plan.status, message: cut(plan.message, 1000), actions: plan.actions ?? [], question: plan.question ?? null };
     if (plan.question) { response.question = { kind: plan.question.kind, text: cut(plan.question.text, 1000), ref: plan.question.ref ?? null, optional: Boolean(plan.question.optional), ...(plan.question.actions ? { actions: plan.question.actions } : {}) }; }
     if (response.status === "ready_for_review") {
-      response.unresolved = scanFields(obs).fields.filter((f: any) => f.role !== "file" || f.required)
-        .filter((f: any) => !String(f.value ?? "").trim() || f.value === "false" || ("error" in f && f.error)).map((f: any) => f.name || "the open field");
+      const scanned = scanFields(obs);
+      const missingRefs = new Set(scanned.missing.map((m: any) => m.ref));
+      response.unresolved = scanned.fields.filter((f: any) => f.role !== "file" || f.required)
+        .filter((f: any) => missingRefs.has(f.ref) || !String(f.value ?? "").trim() || f.value === "false" || ("error" in f && f.error))
+        .map((f: any) => ({ label: f.name || "the open field", required: Boolean(f.required) }));
     }
     note("plan", { status: response.status, actions: response.actions.map((a: any) => ({ type: a.type, ref: a.ref })) });
     try { options.onState?.(clone(st)); } catch { /* saving is best effort */ }

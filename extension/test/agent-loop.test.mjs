@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BridgeError } from "../src/shared/bridge.js";
 import { PAGE } from "./page-rules.mjs";
-import { CREDIT_FALLBACK_NOTICE, ProgressGuard, Agent, execute, explain, isInsufficientCreditsError, observeTab, questionChoices, stepWithRetry } from "../src/page-control/loop.js";
+import { CREDIT_FALLBACK_NOTICE, PROVIDER_FALLBACK_NOTICE, ProgressGuard, Agent, execute, explain, isInsufficientCreditsError, observeTab, questionChoices, stepWithRetry } from "../src/page-control/loop.js";
 import { formAgent } from "../src/agent-based/form-agent.js";
 
 const TOP = { frameId: "top", isTop: true, parentId: null };
@@ -1441,4 +1441,65 @@ test("402 plan_limit, non-402 errors, custom planner, and stopped runs do not fa
   rejectModel(new BridgeError(402, "This needs 5 credits; you have 0.", "insufficient_credits"));
   await running;
   assert.equal(fallbackCreated, 0);
+});
+
+test("transient AI provider outage switches to the local rule engine with a notification when fallbackStep is attached", async () => {
+  const driver = new GuardedDriver({
+    top: () => frameObs([{ ref: "1", role: "textbox", name: "First name", value: "" }], { document_id: "doc" }),
+  });
+  const notices = [];
+  let aiCalls = 0;
+  let fallbackCreated = 0;
+  let fallbackCalls = 0;
+  const agent = new Agent({
+    tabId: 1,
+    appId: null,
+    driver,
+    files: {},
+    notify: (m) => { notices.push(m); },
+    report: async () => {},
+    step: async () => {
+      aiCalls += 1;
+      throw new BridgeError(503, "The AI provider is unavailable right now. Try again shortly.");
+    },
+    fallbackStep: () => {
+      fallbackCreated += 1;
+      return async (req) => {
+        fallbackCalls += 1;
+        if (fallbackCalls === 1) {
+          return {
+            guarded_commands: true,
+            session_id: "rules-1",
+            agent_engine: "rules_led",
+            status: "continue",
+            want_screenshot: false,
+            actions: [{ type: "type", ref: "0.1", text: "Ada", command_id: "r1", observation_id: req.observation.observation_id }],
+            message: "Filled First name.",
+          };
+        }
+        return {
+          guarded_commands: true,
+          session_id: "rules-1",
+          agent_engine: "rules_led",
+          status: "ready_for_review",
+          want_screenshot: false,
+          actions: [],
+          message: "Ready to review.",
+        };
+      };
+    },
+  });
+  const runPromise = agent.run();
+  await new Promise((resolve) => {
+    const origNotify = agent.notify;
+    agent.notify = (m) => { origNotify(m); if (m.status === "ready") { agent.stop("Done"); resolve(); } };
+  });
+  await runPromise;
+  assert.ok(aiCalls >= 1);
+  assert.equal(fallbackCreated, 1);
+  assert.equal(fallbackCalls, 2);
+  assert.equal(agent.planner, "rules");
+  assert.equal(agent.last.agent_engine, "rules_led");
+  assert.ok(agent.log.includes(PROVIDER_FALLBACK_NOTICE));
+  assert.ok(notices.some((m) => m.message === PROVIDER_FALLBACK_NOTICE));
 });

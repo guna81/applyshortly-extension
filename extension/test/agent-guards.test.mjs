@@ -85,6 +85,19 @@ test("the user's own answer authorises the matching choice", () => {
   assert.equal(vet(ctx, obs, { type: "check", ref: "e2", checked: true }).ok, true);
 });
 
+test("a standalone consent checkbox is authorised only when the user's answer matches the check direction", () => {
+  const obs = page([el("c1", "checkbox", "I certify that the information above is true", { checked: false })]);
+  const yesCtx = setup({ preferences: {} });
+  yesCtx.guards.recordAnswer(yesCtx.state, obs, "c1", "Yes, I agree");
+  assert.equal(vet(yesCtx, obs, { type: "check", ref: "c1", checked: true }).ok, true);
+  assert.match(vet(yesCtx, obs, { type: "check", ref: "c1", checked: false }).error ?? "", /consent|approval|ask/i);
+
+  const noCtx = setup({ preferences: {} });
+  noCtx.guards.recordAnswer(noCtx.state, obs, "c1", "No");
+  assert.match(vet(noCtx, obs, { type: "check", ref: "c1", checked: true }).error ?? "", /consent|approval|ask/i);
+  assert.equal(vet(noCtx, obs, { type: "check", ref: "c1", checked: false }).ok, true);
+});
+
 test("a filled field is not overwritten, except by the agent's own earlier write", () => {
   const ctx = setup();
   const filled = page([el("e1", "textbox", "Name", { value: "Asha" })]);

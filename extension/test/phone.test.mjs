@@ -33,6 +33,37 @@ test("a selected country is a value: the selector asks for the phone country cod
   assert.equal(F.dropdownValue(fields[0]), "United Kingdom");
 });
 
+test("flag-only phone country selector reads its selected option from its sibling listbox or title", () => {
+  const { doc, F } = page(`
+    <label for="phoneid">Phone *</label>
+    <div class="react-international-phone-input-container">
+      <div class="react-international-phone-country-selector">
+        <button title="India" role="combobox" aria-label="Country selector" aria-haspopup="listbox" aria-expanded="false" type="button" data-country="in">
+          <div><img data-country="in" alt=""><div></div></div>
+        </button>
+        <ul role="listbox" aria-activedescendant="opt-in" style="display: none;">
+          <li role="option" aria-selected="false" aria-label="Afghanistan +93" id="opt-af">Afghanistan +93</li>
+          <li role="option" aria-selected="true" aria-label="India +91" id="opt-in">India +91</li>
+        </ul>
+      </div>
+      <input id="phoneid" type="tel" required value="+91 ">
+    </div>`);
+  const [country, number] = F.collectFields(doc, { checkLayout: false });
+  assert.equal(country.label, "Phone country code");
+  assert.equal(F.dropdownValue(country), "India +91");
+  assert.equal(F.countryText(country), "India +91");
+  assert.equal(F.isEmpty(country), true); // dial code only, phone number not yet filled
+  doc.getElementById("phoneid").value = "+91 98765 43210";
+  assert.equal(F.isEmpty(number), false);
+  assert.equal(F.isEmpty(country), false);
+
+  // When the listbox is unmounted (portal-style widget), fall back to the button's title.
+  doc.querySelector('[role="listbox"]').remove();
+  assert.equal(F.dropdownValue(country), "India");
+  assert.equal(F.countryText(country), "India");
+  assert.equal(F.isEmpty(country), false);
+});
+
 test("a dial code alone is an unanswered phone, and so is its country selector", () => {
   const { doc, F } = page(WIDGET("+44"));
   const [country, number] = F.collectFields(doc, { checkLayout: false });
