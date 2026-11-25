@@ -310,3 +310,46 @@ test("a typed instruction is not taken as the answer to the agent's question", (
   for (const m of ["fetch data from here - https://guna81.netlify.app/", "Read https://github.com/guna81/applyshortly-extension", "look at my site", "what does this mean", "Please open the link"]) assert.equal(P.isPlainAnswer(m), false, m);
   for (const m of ["https://guna81.netlify.app/", "ApplyShortly is a job-application tool", "5 years", "Yes"]) assert.equal(P.isPlainAnswer(m), true, m);
 });
+
+test("looksLikeApplicationForm detects job forms while ignoring login, payment, and generic forms", () => {
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "file", label: "Resume / CV" }],
+    pathname: "/careers/engineer",
+  }), true, "resume upload alone is a strong job-form signal");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Full name" }, { kind: "text", label: "LinkedIn Profile" }],
+    pathname: "/jobs/123",
+  }), true, "job-specific field with another input");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "First name" }, { kind: "text", label: "Email" }],
+    pathname: "/careers/apply",
+    title: "Apply for Software Engineer",
+  }), true, "contact fields on an apply page");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Email" }, { kind: "text", label: "Full name" }],
+    pathname: "/login",
+    passwordShown: false,
+  }), false, "login URL is excluded");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "file", label: "Resume" }, { kind: "text", label: "Email" }],
+    pathname: "/apply",
+    passwordShown: true,
+  }), false, "visible password box is excluded");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Full name" }, { kind: "text", label: "Email" }, { kind: "text", label: "Card number" }],
+    pathname: "/checkout",
+    title: "Apply promo code",
+  }), false, "payment/checkout forms are excluded");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "First name" }, { kind: "text", label: "Email" }],
+    pathname: "/contact",
+    title: "Contact us",
+    hasSubmit: true,
+    submitText: "Send message",
+  }), false, "generic contact form is excluded");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Search" }],
+    pathname: "/jobs",
+    title: "Search jobs",
+  }), false, "single search field is excluded");
+});

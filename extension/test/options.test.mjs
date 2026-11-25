@@ -341,3 +341,19 @@ test('extensionEngine select stays in sync with chrome.storage.onChanged updates
     h.close();
   }
 });
+
+test('autoShowLauncher defaults to off and persists changes in storage', async () => {
+  const h = await setup({ signedIn: true });
+  try {
+    const toggle = h.document.querySelector('#autoShowLauncher');
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new h.window.Event('change'));
+    await h.flush();
+    assert.equal(h.stored.autoShowLauncher, true);
+    h.storageChanged({ autoShowLauncher: { newValue: false } });
+    assert.equal(toggle.checked, false);
+  } finally {
+    h.close();
+  }
+});

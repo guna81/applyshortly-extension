@@ -125,6 +125,7 @@ async function load() {
   $("token").value = "";
   $("extensionEngine").value = ["auto", "ai_led", "rules_led"].includes(s.extensionEngine) ? s.extensionEngine : "auto";
   $("agentVision").checked = s.agentVision !== false;
+  $("autoShowLauncher").checked = s.autoShowLauncher === true;
   $("autoApply").checked = s.autoApply === true;
   $("fillOptional").checked = s.fillOptional !== false;
   $("aiDrafts").checked = Boolean(s.aiDrafts);
@@ -256,6 +257,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const v = changes.extensionEngine.newValue;
     $("extensionEngine").value = v === "ai_led" || v === "rules_led" ? v : "auto";
   }
+  if ("autoShowLauncher" in changes && $("autoShowLauncher")) {
+    $("autoShowLauncher").checked = changes.autoShowLauncher.newValue === true;
+  }
   if (!("token" in changes)) return;
   if (changes.token.newValue) $("pairingMsg").textContent = ""; // e.g. a stale "Logged out."
   void test();
@@ -319,6 +323,11 @@ $("extensionEngine").addEventListener("change", async (event) => {
 $("agentVision").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ agentVision: /** @type {HTMLInputElement} */ (event.target).checked });
   $("prefMsg").textContent = "Saved for new extension sessions";
+});
+$("autoShowLauncher").addEventListener("change", async (event) => {
+  await chrome.storage.local.set({ autoShowLauncher: /** @type {HTMLInputElement} */ (event.target).checked });
+  $("prefMsg").textContent = "Saved";
+  setTimeout(() => ($("prefMsg").textContent = ""), 1500);
 });
 $("autoApply").addEventListener("change", async (event) => {
   await chrome.storage.local.set({ autoApply: /** @type {HTMLInputElement} */ (event.target).checked });

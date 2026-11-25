@@ -867,8 +867,91 @@
     get pageCount() { return pageCount(); },
     AUTO_APPLY_DELAY_S,
     agentControl, askAssistant, autoApply, markSubmitted, outlineTarget, run: start, send,
+    launch: launchFromButton,
+    dismissLauncher() {
+      launcherDismissedUrl = location.href;
+      launcherShown = false;
+      stopAutoDetect();
+    },
   };
   const panel = globalThis.JobHuntPanelView.create(ctl);
+
+  // ------------------------------------------------------------------ optional form-detected launcher
+
+  let allowAutoDetect = false;
+  let autoShowLauncherOn = false;
+  let launcherShown = false;
+  let launcherDismissedUrl = "";
+  let detectObserver: MutationObserver | null = null;
+  let detectTimer: any = null;
+
+  function stopAutoDetect() {
+    if (detectObserver) { detectObserver.disconnect(); detectObserver = null; }
+    if (detectTimer) { clearTimeout(detectTimer); detectTimer = null; }
+  }
+
+  function pageApplicationCheck() {
+    try {
+      const fields = F.collectFields(document);
+      const submitBtn = F.findSubmitButton(document, fields, { includeDisabled: true });
+      const submitText = submitBtn ? F.cleanLabel(submitBtn.getAttribute("aria-label") || (submitBtn.tagName === "INPUT" ? submitBtn.value : submitBtn.textContent)) : "";
+      const pageHeading = F.cleanLabel(document.querySelector("h1, h2")?.textContent ?? "");
+      const passwordShown = [...document.querySelectorAll("input[type=password]")].some((el) => !isHidden(el));
+      return P.looksLikeApplicationForm({
+        fields,
+        pathname: location.pathname,
+        title: document.title,
+        hasSubmit: Boolean(submitBtn),
+        passwordShown,
+        submitText,
+        pageHeading,
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  function maybeShowLauncher() {
+    if (!autoShowLauncherOn || !allowAutoDetect || state || agent || launcherShown || launcherDismissedUrl === location.href) return;
+    if (!pageApplicationCheck()) return;
+    launcherShown = true;
+    stopAutoDetect();
+    void panel.showLauncher();
+  }
+
+  function startAutoDetect() {
+    if (!autoShowLauncherOn || !allowAutoDetect || state || agent || launcherShown || launcherDismissedUrl === location.href) return;
+    maybeShowLauncher();
+    if (launcherShown) return;
+    if (!detectObserver) {
+      detectObserver = new MutationObserver(() => {
+        if (detectTimer) return;
+        detectTimer = setTimeout(() => {
+          detectTimer = null;
+          maybeShowLauncher();
+        }, 400);
+      });
+      detectObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    if (!detectTimer) {
+      detectTimer = setTimeout(() => {
+        detectTimer = null;
+        maybeShowLauncher();
+      }, 800);
+    }
+  }
+
+  async function launchFromButton() {
+    launcherDismissedUrl = location.href;
+    launcherShown = false;
+    stopAutoDetect();
+    panel.hideLauncher();
+    try {
+      await send({ type: "start", allowUntracked: true });
+    } catch {
+      await start(null, { show: true });
+    }
+  }
 
   // ------------------------------------------------------------------ lifecycle
 
@@ -928,6 +1011,16 @@
   try { void chrome.storage?.local?.get?.("autoApply")?.then?.((v) => { autoApplyOn = v?.autoApply === true; }); } catch { /* storage unavailable */ }
   chrome.storage?.onChanged?.addListener((changes, area) => {
     if (area !== "local") return;
+    if ("autoShowLauncher" in changes) {
+      autoShowLauncherOn = allowAutoDetect && changes.autoShowLauncher.newValue === true;
+      if (!autoShowLauncherOn) {
+        stopAutoDetect();
+        launcherShown = false;
+        panel.hideLauncher();
+      } else if (!state && !agent && launcherDismissedUrl !== location.href) {
+        startAutoDetect();
+      }
+    }
     if ("autoApply" in changes) {
       autoApplyOn = changes.autoApply.newValue === true;
       if (!autoApplyOn) return panel.cancelCountdown?.();
@@ -938,6 +1031,9 @@
   });
 
   async function start(appId: any, opts: any = {}) {
+    stopAutoDetect();
+    launcherShown = false;
+    panel.hideLauncher();
     panel.setRetry(appId);
     await panel.restore(opts);
     if (!(await run(appId)) || agentLive()) return;
@@ -980,7 +1076,12 @@
     } catch {
       return; // extension reloaded or not configured; stay quiet on unrelated pages
     }
-    if (hello.mode === "idle") return;
+    if (hello.mode === "idle") {
+      allowAutoDetect = hello.allowAutoDetect === true;
+      autoShowLauncherOn = allowAutoDetect && hello.autoShowLauncher === true;
+      if (autoShowLauncherOn) startAutoDetect();
+      return;
+    }
     if (hello.mode === "agent") {
       // A new page of a form the agent is filling: show its progress, don't autofill over it.
       handedOff = true;

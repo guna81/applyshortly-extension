@@ -32,6 +32,7 @@
       error: null,
       toast: null,
       minimized: false,
+      launcher: false,
       confirmSubmit: false,
       autoApply: false, // the two switches under the chat; kept in storage so the settings page and every tab agree
       aiDrafts: true,
@@ -75,8 +76,8 @@
         .p { border: 1px solid CanvasText; }
         .bar i { forced-color-adjust: none; }
       }
-      .p, .pill { pointer-events: auto; }
-      :host([data-applyshortly-executing]) .p, :host([data-applyshortly-executing]) .pill { pointer-events: none; }
+      .p, .pill, .launcher { pointer-events: auto; }
+      :host([data-applyshortly-executing]) .p, :host([data-applyshortly-executing]) .pill, :host([data-applyshortly-executing]) .launcher { pointer-events: none; }
       .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 380px;
         max-width: calc(100vw - 32px); height: min(680px, calc(100vh - 32px)); min-height: 0; max-height: calc(100vh - 32px); display: flex; flex-direction: column;
         background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
@@ -214,6 +215,17 @@
       .pill .mark { width: 26px; height: 26px; }
       .pill .badge { background: var(--badge-bad); color: #fff; border-radius: 99px; padding: 0 7px; font-size: 12px; }
       .pill .badge.ok { background: var(--badge-ok); }
+      .launcher { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; display: flex; align-items: center; gap: 4px;
+        padding: 4px 6px 4px 4px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+        box-shadow: 0 10px 28px rgba(0,0,0,.20), 0 2px 6px rgba(0,0,0,.08); font: inherit; }
+      .launcher.enter { animation: in .18s ease-out; }
+      .launcher-go { display: flex; align-items: center; gap: 8px; border: 0; border-radius: 99px; padding: 4px 12px 4px 4px;
+        background: var(--accent); color: var(--accent-fg); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+      .launcher-go:hover { filter: brightness(1.08); }
+      .launcher-go .mark { width: 26px; height: 26px; }
+      .launcher-close { border: 0; background: transparent; color: var(--muted); width: 28px; height: 28px; border-radius: 99px;
+        font-size: 16px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+      .launcher-close:hover { background: var(--soft); color: var(--fg); }
     `;
 
     function el(tag: string, attrs: Record<string, any> = {}, ...children: any[]) {
@@ -300,7 +312,7 @@
       // turned pointer events off), raise it again and restore its own hit-testing. Otherwise it stays dead until a reload.
       const watchdog = setInterval(() => {
         if (!host?.isConnected || host.hasAttribute("data-applyshortly-executing")) return;
-        const box = root.querySelector(".p, .pill")?.getBoundingClientRect();
+        const box = root.querySelector(".p, .pill, .launcher")?.getBoundingClientRect();
         if (!box || !box.width) return;
         const x = Math.min(Math.max(box.left + box.width / 2, 0), innerWidth - 1), y = Math.min(Math.max(box.top + box.height / 2, 0), innerHeight - 1);
         if (document.elementFromPoint(x, y) === host) return;
@@ -468,12 +480,17 @@
       if (!ctl.agent || !agentBusy()) return null;
       const paused = ctl.agent.status === "paused";
       const steps = ctl.agent.log ?? [];
-      const why = /Paused to avoid|temporarily unavailable/.test(steps.at(-1) ?? "") ? steps.at(-1) : "Paused.";
+      if (paused) {
+        const last = steps.at(-1) ?? "";
+        const why = /Paused to avoid|temporarily unavailable/.test(last) ? last : "Paused.";
+        if (ctl.chat.lines.some((line) => line.text === why || line.parts?.includes(why))) return null;
+        return el("div", { class: "thinking", role: "status" }, why);
+      }
       const replied = ctl.chat.lines.some((line) => line.role === "user");
-      const text = paused ? why : replied ? "Applying your answer and checking the form…"
+      const text = replied ? "Applying your answer and checking the form…"
         : steps.length ? "Filling and checking the form…"
         : "Reading the form and matching your profile. The first fill may take a moment…";
-      return el("div", { class: "thinking", role: "status" }, paused ? null : el("span", { class: "spin" }), text);
+      return el("div", { class: "thinking", role: "status" }, el("span", { class: "spin" }), text);
     }
 
     function agentControls() {
@@ -607,6 +624,30 @@
 
       const wrap = el("div", { class: "wrap", "data-theme": view.theme === "light" || view.theme === "dark" ? view.theme : null });
 
+      if (view.launcher && !view.busy && !view.error && !ctl.state?.ctx && !ctl.submittedReported && !ctl.agent) {
+        wrap.append(el("div", {
+          class: root.querySelector(".launcher") ? "launcher" : "launcher enter",
+          role: "region",
+          "aria-label": "ApplyShortly form detected",
+        },
+          el("button", {
+            class: "launcher-go",
+            type: "button",
+            title: "Start filling this application with ApplyShortly",
+            onclick: () => { void ctl.launch?.(); },
+          }, el("span", { class: "mark", "aria-hidden": "true" }), "Start applying"),
+          el("button", {
+            class: "launcher-close",
+            type: "button",
+            title: "Dismiss",
+            "aria-label": "Dismiss ApplyShortly button",
+            onclick: () => { view.launcher = false; host?.remove(); ctl.dismissLauncher?.(); },
+          }, "×"),
+        ));
+        mount(wrap);
+        return;
+      }
+
       if (view.minimized) {
         const badge = ctl.submittedReported ? "Submitted ✓" : summary.todo ? `${summary.todo} to do` : "All set";
         wrap.append(el("button", {
@@ -732,16 +773,31 @@
     return {
       render,
       toast,
-      busy(text) { Object.assign(view, { busy: text, error: null }); render(); },
+      busy(text) { Object.assign(view, { busy: text, error: null, launcher: false }); render(); },
       idle() { view.busy = null; render(); },
       fail(err) {
         view.busy = null;
+        view.launcher = false;
         view.error = P.friendlyError(err.message, err.status, ctl.state?.ctx?.baseUrl, err.code);
         render();
+      },
+      async showLauncher() {
+        try {
+          const saved = await chrome.storage.local.get("theme");
+          if (saved?.theme) view.theme = saved.theme;
+        } catch { /* keep system theme */ }
+        view.launcher = true;
+        render();
+      },
+      hideLauncher() {
+        if (!view.launcher) return;
+        view.launcher = false;
+        if (!ctl.state?.ctx && !ctl.agent && !view.busy && !view.error) host?.remove();
       },
       setRetry(appId) { retryAppId = appId; },
       /** Shows the agent's latest update. */
       agent(show) {
+        view.launcher = false;
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });
         render();
       },
@@ -798,6 +854,7 @@
             });
           }
         } catch { /* no storage: right side, full size, the page's colour scheme */ }
+        view.launcher = false;
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);
       },

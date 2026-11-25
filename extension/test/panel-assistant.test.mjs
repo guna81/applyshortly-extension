@@ -19,8 +19,8 @@ const FORM = `
     </fieldset>
   </form>`;
 
-function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), app = { title: "Engineer", company_name: "Acme" }, context } = {}) {
-  const dom = new JSDOM(`<!doctype html><body>${form}</body>`, { url: "https://jobs.example/apply", runScripts: "outside-only", pretendToBeVisual: true });
+function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), app = { title: "Engineer", company_name: "Acme" }, context, hello, url = "https://jobs.example/apply" } = {}) {
+  const dom = new JSDOM(`<!doctype html><body>${form}</body>`, { url, runScripts: "outside-only", pretendToBeVisual: true });
   const win = dom.window;
   win.CSS = { escape: (s) => String(s).replace(/["\\]/g, "\\$&") };
   win.Element.prototype.getClientRects = () => [{}];
@@ -32,7 +32,8 @@ function panelPage(assist, { form = FORM, suggest = () => ({ answer: null }), ap
   const sent = [];
   let onMessage;
   const handlers = {
-    hello: () => ({ mode: "idle" }),
+    hello: hello ?? (() => ({ mode: "idle" })),
+    start: () => ({ found: true, appId: 5 }),
     context: context ?? (() => ({ profile: { full_name: "Ada Lovelace" }, app, aiDrafts: false })),
     resume: () => null,
     suggest: (msg) => suggest(msg),
@@ -1720,4 +1721,61 @@ test("boot reports reloaded=true on a page refresh so background stops stale age
   assert.equal(hello.reloaded, true);
   assert.equal(sent.some((m) => m.type === "agentStatus"), false);
   win.close();
+});
+
+test("paused provider-outage message is shown once in chat without a duplicate status line", async () => {
+  const page = panelPage(() => null, {
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }),
+  });
+  page.start();
+  await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+  const msg = "The AI provider is temporarily unavailable. Resume to retry the same request without repeating page actions.";
+  page.message({ type: "agentUpdate", status: "paused", agent_engine: "ai_led", appId: 5, log: [msg], message: msg });
+  await until(() => page.shadow().querySelector(".hero strong")?.textContent === "Paused", "paused header");
+  const bubbles = [...page.shadow().querySelectorAll(".bubble.assistant")].filter((b) => b.textContent.includes("temporarily unavailable"));
+  assert.equal(bubbles.length, 1);
+  assert.equal(page.shadow().querySelector(".thinking"), null);
+  page.win.close();
+});
+
+test("floating launcher stays hidden when autoShowLauncher is off, and appears on job forms when enabled", async () => {
+  const appForm = `
+    <form>
+      <label for="name">Full name</label><input id="name" required>
+      <label for="email">Email</label><input id="email" type="email" required>
+      <label for="resume">Resume</label><input id="resume" type="file">
+      <button type="submit">Submit application</button>
+    </form>`;
+
+  // Off by default: no floating launcher is mounted.
+  const off = panelPage(() => null, {
+    form: appForm,
+    hello: () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: false }),
+  });
+  await tick(40);
+  assert.equal(off.shadow(), undefined);
+  off.win.close();
+
+  // Enabled: floating "Start applying" button appears, and clicking it starts the extension.
+  const on = panelPage(() => null, {
+    form: appForm,
+    hello: () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: true }),
+  });
+  const goBtn = await until(() => on.shadow()?.querySelector(".launcher-go"), "floating launcher");
+  assert.match(goBtn.textContent, /Start applying/);
+  goBtn.click();
+  await until(() => on.sent.some((m) => m.type === "start" && m.allowUntracked === true), "start message");
+  assert.equal(on.win.document.querySelector("jobhunt-autofill-panel"), null);
+  on.win.close();
+
+  // Dismissing the floating button removes the host from the page; toggling the setting off also hides it.
+  const dismiss = panelPage(() => null, {
+    form: appForm,
+    hello: () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: true }),
+  });
+  const closeBtn = await until(() => dismiss.shadow()?.querySelector(".launcher-close"), "dismiss button");
+  closeBtn.click();
+  await tick(10);
+  assert.equal(dismiss.win.document.querySelector("jobhunt-autofill-panel"), null);
+  dismiss.win.close();
 });

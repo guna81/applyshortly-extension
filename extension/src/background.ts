@@ -27,7 +27,7 @@ try {
 } catch { /* no storage events: the value at the start of the run stands */ }
 
 const normalizeEngine = (value: unknown): ExtensionEngine => (value === "rules_led" || value === "ai_led" || value === "auto" ? value : "auto");
-const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autoApply: false, autopilotWindows: true, extensionEngine: "auto", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
+const DEFAULT_SETTINGS: ExtensionSettings = { baseUrl: "http://localhost:3000", token: "", aiDrafts: true, autoApply: false, autoShowLauncher: false, autopilotWindows: true, extensionEngine: "auto", agentVision: true, fillOptional: true, saveLearnedAnswers: false };
 const PROFILE_TTL_MS = 60_000;
 const CONTENT_SCRIPTS = ["src/page-control/phone.js", "src/rule-based/profile-answer.js", "src/rule-based/answers.js", "src/page-control/dom.js", "src/shared/ui/panel-model.js", "src/shared/ui/panel-view.js", "src/shared/ui/content.js"];
 // Injected by the agent into every frame's isolated world, in this order.
@@ -57,7 +57,7 @@ async function platformOrigin() {
 
 async function settings(): Promise<ExtensionSettings> {
   await storageReady;
-  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply", "disableCreditFallback"]);
+  const stored = await chrome.storage.local.get(["baseUrl", "token", "aiDrafts", "autopilotWindows", "connectionType", "extensionEngine", "agentVision", "fillOptional", "saveLearnedAnswers", "autoApply", "autoShowLauncher", "disableCreditFallback"]);
   const baseUrl = await platformOrigin();
   // Credentials for another deployment must never be sent to the packaged origin.
   if (stored.baseUrl && stored.baseUrl !== baseUrl) {
@@ -160,6 +160,11 @@ chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
 async function hello(tabId, url, reloaded = false) {
   const origin = new URL(url).origin;
+  const idle = async () => {
+    const s = await settings();
+    const allowAutoDetect = Boolean(s.token) && origin !== s.baseUrl;
+    return { appId: null, mode: "idle", allowAutoDetect, autoShowLauncher: allowAutoDetect && s.autoShowLauncher === true };
+  };
   const agent = agents.get(tabId);
   if (agent && !agent.stopped) {
     if (reloaded) {
@@ -172,7 +177,7 @@ async function hello(tabId, url, reloaded = false) {
       void Promise.resolve(agent.runPromise).finally(() => {
         if (agents.get(tabId) === agent) agents.delete(tabId);
       });
-      return { appId: null, mode: "idle" };
+      return idle();
     }
     // The agent drives this tab from here: the page's own autofill stays out of its way.
     if (!["ready", "failed"].includes(agent.status)) return { appId: agent.appId, mode: "agent" };
@@ -186,7 +191,7 @@ async function hello(tabId, url, reloaded = false) {
   }
   const current = await getTab(tabId);
   if (current && current.origin === origin) return { appId: current.appId, mode: "continue", attemptPending: current.attemptPending === true };
-  return { appId: null, mode: "idle" };
+  return idle();
 }
 
 /** The user clicked Apply in ApplyShortly, which opened this page with a one-time code: claimed,
@@ -833,7 +838,7 @@ const handlers = {
   openWebsite: (msg) => openWebsite(msg.path),
   connectionSettings: async () => {
     const s = await settings();
-    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autoApply: s.autoApply === true, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
+    return { baseUrl: s.baseUrl, configured: Boolean(s.token), extensionEngine: s.extensionEngine, agentVision: s.agentVision !== false, fillOptional: s.fillOptional !== false, aiDrafts: s.aiDrafts, autoApply: s.autoApply === true, autoShowLauncher: s.autoShowLauncher === true, saveLearnedAnswers: s.saveLearnedAnswers === true, autopilotWindows: s.autopilotWindows !== false, connectionType: s.connectionType ?? "manual" };
   },
   saveManualConnection: async (msg) => {
     const baseUrl = await platformOrigin();
@@ -861,7 +866,12 @@ const handlers = {
     if (new URL(sender.url).origin !== await platformOrigin()) throw new Error("Message not permitted.");
     return websiteSession(msg.signedIn === true);
   },
-  start: (msg) => start(msg.tabId, msg.url, Boolean(msg.allowUntracked), msg.autoSubmit === true),
+  start: (msg, sender) => start(
+    fromPage(sender) ? sender.tab.id : msg.tabId,
+    fromPage(sender) ? sender.url : msg.url,
+    Boolean(msg.allowUntracked),
+    msg.autoSubmit === true,
+  ),
   context: (msg, sender) => context(msg.appId ?? null, sender.tab?.id, sender.url, msg.page),
   suggest: async (msg) => {
     const b = await bridge();

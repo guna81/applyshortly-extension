@@ -124,6 +124,7 @@ export async function stepWithRetry(step, body, waits = BUSY_RETRIES) {
 }
 
 export const CREDIT_FALLBACK_NOTICE = "You're out of AI credits — continuing with the Rule based form assistant (free, no AI calls).";
+export const PROVIDER_FALLBACK_NOTICE = "The AI provider is temporarily unavailable — form engine switched to the Rule based form assistant.";
 
 export function isInsufficientCreditsError(error: unknown): boolean {
   const e = error as { status?: number; code?: string; message?: string } | null | undefined;
@@ -829,9 +830,13 @@ export class Agent {
     for (let pauses = 0; ; pauses++) {
       try { return await attempt(); }
       catch (error) {
-        if (!transientStepError(error) || (!local && !body.request_id) || this.stopped || pauses >= 3) throw error;
+        if (!transientStepError(error) || (!local && !body.request_id) || this.stopped || pauses >= 3 || (this.planner === "platform" && this.fallbackStep)) throw error;
         this.pause();
-        this.say(`The AI provider is temporarily unavailable (${String(explain(error)).slice(0, 200)}). Resume to retry the same request without repeating page actions.`);
+        const detail = String(explain(error)).slice(0, 200);
+        const alreadyGeneric = /^the ai provider is (?:temporarily )?unavailable\b/i.test(detail);
+        this.say(alreadyGeneric
+          ? "The AI provider is temporarily unavailable. Resume to retry the same request without repeating page actions."
+          : `The AI provider is temporarily unavailable (${detail}). Resume to retry the same request without repeating page actions.`);
         this.emit({ message: this.log.at(-1) });
         while (this.paused && !this.stopped) await this.waitForUser();
         if (this.stopped) return null;
@@ -998,7 +1003,9 @@ export class Agent {
           ...extra,
           });
         } catch (error: any) {
-          if (!this.stopped && this.planner === "platform" && this.fallbackStep && isInsufficientCreditsError(error)) {
+          const creditFallback = isInsufficientCreditsError(error);
+          const providerFallback = transientStepError(error);
+          if (!this.stopped && this.planner === "platform" && this.fallbackStep && (creditFallback || providerFallback)) {
             const nextStep = this.fallbackStep();
             this.fallbackStep = null;
             this.step = nextStep;
@@ -1009,7 +1016,7 @@ export class Agent {
             wantScreenshot = false;
             annotateScreenshot = false;
             this.progressGuard.reset();
-            this.say(CREDIT_FALLBACK_NOTICE);
+            this.say(creditFallback ? CREDIT_FALLBACK_NOTICE : PROVIDER_FALLBACK_NOTICE);
             this.emit({ message: this.log.at(-1) });
             res = await this.planningStep({
               guarded_commands: true,
