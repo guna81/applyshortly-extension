@@ -353,3 +353,88 @@ test("looksLikeApplicationForm detects job forms while ignoring login, payment, 
     title: "Search jobs",
   }), false, "single search field is excluded");
 });
+
+test("looksLikeApplicationForm ignores job listings, sign-ups and chat boxes", () => {
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Keywords" }, { kind: "text", label: "City, state or zip" }],
+    pathname: "/jobs/forward-deployed-ai-engineer",
+    title: "Forward Deployed AI Engineer - Jobs",
+    hasSubmit: true,
+    submitText: "Apply now",
+  }), false, "a listing's search boxes next to an Apply now button");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Job title" }, { kind: "text", label: "Location" }],
+    pathname: "/jobs/123",
+    hasSubmit: true,
+    submitText: "Apply now",
+  }), false, "two boxes that hold none of the applicant's details");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Full name" }, { kind: "text", label: "Email" }],
+    pathname: "/jobs",
+    title: "Jobs in the UK",
+    hasSubmit: true,
+    submitText: "Submit and get job alerts",
+  }), false, "a job-alert sign-up");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Type your answer…" }, { kind: "text", label: "Search" }],
+    pathname: "/applications/runs/53",
+    hasSubmit: true,
+    submitText: "Submit application",
+  }), false, "a chat box and a search box");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Email", search: true }, { kind: "text", label: "Name", search: true }],
+    pathname: "/careers/apply",
+    submitText: "Apply now",
+  }), false, "boxes inside a search region");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "First name" }, { kind: "text", label: "Last name" }, { kind: "text", label: "Email" }, { kind: "text", label: "Search" }],
+    pathname: "/o/engineer",
+    hasSubmit: true,
+    submitText: "Submit application",
+  }), true, "a real application form still counts when a search box is also on the page");
+});
+
+test("looksLikeApplicationForm needs a job signal, keeps real questions and reads German forms", () => {
+  const contact = [{ kind: "text", label: "First name" }, { kind: "text", label: "Last name" }, { kind: "text", label: "Email" }, { kind: "textarea", label: "Message" }];
+  assert.equal(P.looksLikeApplicationForm({ fields: contact, pathname: "/contact", title: "Contact us", hasSubmit: true, submitText: "Submit" }), false, "a contact-us form");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "First name" }, { kind: "text", label: "Work email" }, { kind: "text", label: "Phone" }, { kind: "text", label: "Company" }],
+    pathname: "/demo", title: "Book a demo", hasSubmit: true, submitText: "Submit",
+  }), false, "a demo request form");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "First name" }, { kind: "text", label: "Last name" }, { kind: "text", label: "Email" }],
+    pathname: "/careers/engineer/apply", hasSubmit: false,
+  }), true, "step one of an application with only contact boxes and a Next button");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "How did you hear about us? (e.g. Google search)" }, { kind: "text", label: "Email" }],
+    pathname: "/o/engineer", title: "Engineer", hasSubmit: true, submitText: "Submit application",
+  }), true, "a question that mentions search is not a search box");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Keywords describing your skills" }, { kind: "textarea", label: "Write a message to the hiring team" }, { kind: "text", label: "Full name" }],
+    pathname: "/careers/apply", hasSubmit: true, submitText: "Submit",
+  }), true, "questions that start like noise but say more still count");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "textarea", label: "Why do you want to join?" }, { kind: "textarea", label: "Describe a project you are proud of" }],
+    pathname: "/careers/x/apply", hasSubmit: true, submitText: "Submit application",
+  }), true, "a last step with only custom questions");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "textarea", label: "Why do you want to join?" }, { kind: "textarea", label: "Describe a project you are proud of" }],
+    pathname: "/feedback", hasSubmit: true, submitText: "Submit",
+  }), false, "custom questions without any apply wording");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Full name" }, { kind: "text", label: "Email" }],
+    pathname: "/jobs/123", hasSubmit: true, submitText: "Sign up & apply",
+  }), true, "Sign up & apply still applies");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "select", label: "Years of experience" }, { kind: "select", label: "Location" }, { kind: "select", label: "Job type" }],
+    pathname: "/jobs", hasSubmit: true, submitText: "Apply filters",
+  }), false, "a job board's filter form");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "text", label: "Vorname" }, { kind: "text", label: "Nachname" }, { kind: "text", label: "E-Mail" }, { kind: "text", label: "Telefon" }],
+    pathname: "/stellenangebote/entwickler", title: "Jetzt bewerben – Entwickler", hasSubmit: false,
+  }), true, "a German application form without an upload");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [{ kind: "file", label: "Lebenslauf" }],
+    pathname: "/job/1",
+  }), true, "a German resume upload");
+});

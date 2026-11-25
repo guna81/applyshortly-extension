@@ -123,17 +123,31 @@
     return passwordShown || LOGIN_URL.test(pathname ?? "");
   }
 
-  const RESUME_FIELD = /\b(resume|r[eé]sum[eé]|cv|curriculum vitae|cover letter)\b/i;
-  const JOB_FIELD = /\b(linkedin|github|portfolio|work authorization|authorized to work|sponsorship|visa|notice period|expected salary|desired salary|current salary|compensation|years of experience|current company|current title|willing to relocate|relocation|how did you hear|referred by|start date|availability|pronouns|veteran|disability|eeo|equal opportunity)\b/i;
-  const CONTACT_FIELD = /\b(first name|last name|full name|your name|email|e-mail|phone|mobile|telephone)\b/i;
-  const JOB_CONTEXT = /\b(apply|application|job|jobs|career|careers|position|role|candidate|hiring|recruit|opening|vacancy)\b/i;
-  const APPLY_SUBMIT = /\b(submit application|apply now|apply for|submit your application|complete application|send application)\b/i;
+  const RESUME_FIELD = /\b(resume|r[eé]sum[eé]|cv|curriculum vitae|cover letter|lebenslauf|anschreiben)\b/i;
+  const JOB_FIELD = /\b(linkedin|github|xing|portfolio|work authorization|authorized to work|sponsorship|visa|notice period|expected salary|desired salary|current salary|compensation|years of experience|current company|current title|willing to relocate|relocation|how did you hear|referred by|start date|availability|pronouns|veteran|disability|eeo|equal opportunity|gehaltsvorstellung|eintrittsdatum|kündigungsfrist|verfügbarkeit|arbeitserlaubnis)\b/i;
+  const CONTACT_FIELD = /\b(first name|last name|full name|your name|email|e-mail|phone|mobile|telephone|vorname|nachname|telefon|handy|mobilnummer)\b/i;
+  const JOB_CONTEXT = /\b(apply|application|job|jobs|career|careers|position|role|candidate|hiring|recruit|opening|vacancy|karriere|stelle|stellenangebot|jobs?angebot)\b/i;
+  // Stronger than JOB_CONTEXT: every page on a job site says "jobs", far fewer say "apply".
+  const APPLY_CONTEXT = /\b(apply|applying|application|bewerbung|bewerben)\b/i;
+  const APPLY_SUBMIT = /\b(submit application|apply now|apply for|submit your application|complete application|send application|jetzt bewerben|bewerbung (?:absenden|senden|abschicken))\b/i;
+  const APPLY_WORD = /\b(apply|bewerben)\b/i;
+  // Buttons that sign up for something rather than send an application ("Sign up & apply" still applies).
+  const SIGNUP_SUBMIT = /\b(subscribe|sign up|notify me|job alerts?|create alert)\b/i;
+  // Buttons of a search or filter form: the boxes next to them are not an application.
+  const FILTER_SUBMIT = /\b(filters?|search|find jobs|refine)\b/i;
   const PAYMENT_FIELD = /\b(credit card|card number|cvv|cvc|expir(?:y|ation)|billing address|shipping address|promo code|coupon)\b/i;
+  // Boxes that are on the page but are not application questions: search, filters, chat and newsletter boxes.
+  // The whole label must be one of these, so a question that only mentions "search" or "message" still counts.
+  const NOISE_FIELD = /^\s*(?:search\b.{0,30}|keywords?|filters?|sort(?: by)?\b.{0,20}|type (?:your |a )?(?:message|answer|reply)|write a message|ask a question|newsletter\b.{0,30}|subscribe\b.{0,30})[\s.…:*]*$/i;
 
   /**
-   * Heuristic check for whether a page currently displays a job application form,
-   * used only when the user enables the optional floating "Start applying" launcher.
-   * Purely local — no network or AI calls.
+   * Whether a page currently displays a job application form, used only when the user enables
+   * the optional floating "Start applying" launcher. Purely local — no network or AI calls.
+   *
+   * `fields` should be the fields that belong with the submit button (its form, when it has one).
+   * A resume/CV upload decides on its own; otherwise the page is scored and must reach 4 points,
+   * with at least two real fields and a sign that this is a job application: a job question, an
+   * upload, or "apply" on the button or in the address, title or heading.
    */
   function looksLikeApplicationForm({
     fields = [],
@@ -146,26 +160,48 @@
   }: any = {}): boolean {
     if (loginWall(pathname, Boolean(passwordShown))) return false;
     if (!Array.isArray(fields) || !fields.length) return false;
-    const labels = fields.map((f: any) => String(f?.label ?? ""));
-    if (labels.some((l) => PAYMENT_FIELD.test(l))) return false;
+    if (fields.some((f: any) => PAYMENT_FIELD.test(String(f?.label ?? "")))) return false;
 
-    const contextText = `${pathname} ${title} ${pageHeading} ${submitText}`;
-    const hasJobContext = JOB_CONTEXT.test(contextText);
-    const hasResumeUpload = fields.some((f: any) => (f?.kind === "file" || f?.kind === "picker") && RESUME_FIELD.test(String(f?.label ?? "")));
-    const hasAnyUpload = fields.some((f: any) => f?.kind === "file" || f?.kind === "picker");
+    const submit = String(submitText ?? "");
+    // The submit button belongs to a search or filter form ("Apply filters"), not an application.
+    if (FILTER_SUBMIT.test(submit)) return false;
 
-    if (hasResumeUpload) return true;
-    if (fields.length >= 2 && hasAnyUpload && hasJobContext) return true;
-    if (fields.length >= 2 && APPLY_SUBMIT.test(String(submitText ?? ""))) return true;
+    const isUpload = (f: any) => f?.kind === "file" || f?.kind === "picker";
+    const applicantDetail = (label: string) => JOB_FIELD.test(label) || CONTACT_FIELD.test(label) || RESUME_FIELD.test(label);
+    const real = fields.filter((f: any) => {
+      const label = String(f?.label ?? "");
+      if (f?.search) return false;
+      return applicantDetail(label) || !NOISE_FIELD.test(label);
+    });
+    const labels = real.map((f: any) => String(f?.label ?? ""));
+
+    if (real.some((f: any) => isUpload(f) && RESUME_FIELD.test(String(f?.label ?? "")))) return true;
+    if (real.length < 2) return false;
 
     const jobFields = labels.filter((l) => JOB_FIELD.test(l)).length;
-    if (fields.length >= 2 && jobFields >= 1) return true;
-
     const contactFields = labels.filter((l) => CONTACT_FIELD.test(l)).length;
-    if (fields.length >= 2 && contactFields >= 2 && hasJobContext) return true;
-    if (fields.length >= 3 && hasSubmit && hasJobContext) return true;
+    const hasUpload = real.some(isUpload);
+    const contextText = `${pathname} ${title} ${pageHeading}`;
+    const applySubmit = APPLY_SUBMIT.test(submit);
+    const applyContext = APPLY_CONTEXT.test(contextText);
+    const applyButton = applySubmit || APPLY_WORD.test(submit);
+    // A contact form (name, email, message) is not an application unless a job question, an
+    // upload or the word "apply" says so. A last step of only custom questions counts when both
+    // the button and the page say "apply".
+    if (!jobFields && !hasUpload && !applyButton && !applyContext) return false;
+    if (!jobFields && !contactFields && !hasUpload && !(applyButton && applyContext)) return false;
 
-    return false;
+    const signUp = SIGNUP_SUBMIT.test(submit) && !APPLY_WORD.test(submit);
+
+    let score = Math.min(jobFields, 2) * 2;
+    score += contactFields >= 2 ? 2 : contactFields;
+    if (hasUpload) score += 1;
+    if (applySubmit) score += 2;
+    score += applyContext ? 2 : JOB_CONTEXT.test(contextText) ? 1 : 0;
+    if (real.length >= 3) score += 1;
+    if (hasSubmit && !signUp) score += 1;
+    if (signUp) score -= 3;
+    return score >= 4;
   }
 
   /** Turns an error from the background worker into words and the one action that fixes it. */
