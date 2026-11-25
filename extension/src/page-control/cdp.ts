@@ -116,6 +116,14 @@ export interface CdpTabInfo {
   id?: number;
   openerTabId?: number;
   url?: string;
+  pendingUrl?: string;
+  title?: string;
+}
+
+export interface CdpTargetInfo {
+  tabId?: number;
+  type?: string;
+  url?: string;
   title?: string;
 }
 
@@ -129,6 +137,7 @@ export interface CdpApi {
     attach: (target: CdpDebuggee, requiredVersion: string) => Promise<void>;
     detach: (target: CdpDebuggee) => Promise<void>;
     sendCommand: (target: CdpDebuggee, method: string, params?: Record<string, any>) => Promise<any>;
+    getTargets?: () => Promise<CdpTargetInfo[]>;
     onEvent: {
       addListener: (cb: (source: CdpDebuggee, method: string, params?: any) => void) => void;
       removeListener: (cb: (source: CdpDebuggee, method: string, params?: any) => void) => void;
@@ -193,8 +202,12 @@ export class TabDriver {
     this.logged = { console: [], network: [] };
     this.requests = new Map();
     this.handleCreated = (tab) => {
-      if (tab.openerTabId === this.tabId && Date.now() - this.lastInteractionAt < 5000 && tab.id)
-        this.candidateTabs.set(tab.id, tab);
+      if (!tab.id || tab.id === this.tabId) return;
+      const elapsed = Date.now() - this.lastInteractionAt;
+      const openedByUs =
+        (tab.openerTabId === this.tabId && elapsed < 5000) ||
+        (tab.openerTabId == null && elapsed < 2500);
+      if (openedByUs) this.candidateTabs.set(tab.id, tab);
     };
     this.onDetached = null;
     this.handleEvent = this.handleEvent.bind(this);
@@ -351,7 +364,7 @@ export class TabDriver {
     const walk = (tree: any, sessionId?: string) => {
       const { id, parentId, url } = tree.frame;
       const known = byId.get(id);
-      if (!known || (sessionId && !known.sessionId)) {
+      if (!known || (sessionId && !known.sessionId && !known.isTop)) {
         byId.set(id, {
           frameId: id,
           sessionId,
@@ -519,13 +532,35 @@ export class TabDriver {
     return Boolean(res.result?.value);
   }
 
+  private async resolveTabInfo(id: number, targets?: CdpTargetInfo[] | null): Promise<{ url: string; title: string }> {
+    const tab = await this.api.tabs.get(id);
+    let url = tab.url || tab.pendingUrl || "";
+    let title = tab.title || "";
+    if (!url && this.api.debugger?.getTargets) {
+      const list = targets ?? (await this.api.debugger.getTargets().catch(() => [] as CdpTargetInfo[]));
+      const match = list.find((t) => t.tabId === id && (!t.type || t.type === "page"));
+      if (match?.url) url = match.url;
+      if (!title && match?.title) title = match.title;
+    }
+    return { url, title };
+  }
+
   async applicationTabs(): Promise<Array<{ id: number; url: string; title: string }>> {
     const out: Array<{ id: number; url: string; title: string }> = [];
+    let targets: CdpTargetInfo[] | null = null;
     for (const id of [...this.candidateTabs.keys()].slice(-10)) {
       try {
         const tab = await this.api.tabs.get(id);
-        if (/^https?:/.test(tab.url || ""))
-          out.push({ id, url: tab.url!.slice(0, 2000), title: (tab.title || "").slice(0, 300) });
+        let url = tab.url || tab.pendingUrl || "";
+        let title = tab.title || "";
+        if (!url && this.api.debugger?.getTargets) {
+          if (targets === null) targets = await this.api.debugger.getTargets().catch(() => []);
+          const match = targets.find((t) => t.tabId === id && (!t.type || t.type === "page"));
+          if (match?.url) url = match.url;
+          if (!title && match?.title) title = match.title;
+        }
+        if (/^https?:/.test(url))
+          out.push({ id, url: url.slice(0, 2000), title: title.slice(0, 300) });
       } catch {
         this.candidateTabs.delete(id);
       }
@@ -536,7 +571,7 @@ export class TabDriver {
 
   async switchTab(id: number): Promise<void> {
     if (!this.candidateTabs.has(id)) throw new Error("That tab was not opened by this application flow.");
-    const tab = await this.api.tabs.get(id);
+    const tab = await this.resolveTabInfo(id);
     if (!/^https?:/.test(tab.url || "") || this.observedTabs?.get(id) !== tab.url)
       throw new Error("Application tab changed; inspect again.");
     const previous = this.tabId;

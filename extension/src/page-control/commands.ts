@@ -206,7 +206,8 @@ export class CommandRunner {
     if (!this.current(action.observation_id)) throw new Error("Observe again before changing the page.");
     if (this.blocking(o.observation).length) throw new Error("Resolve the page blocker first.");
     const target = o.refs.get(action.ref);
-    const top = o.frames.find((frame) => frame.isTop);
+    const top = o.frames.find((frame) => frame.isTop) ?? o.frames[0];
+    if (!top) throw new Error("No active frame available. Observe again.");
     const currentDocument = await this.driver.call(top, "freshState", "");
     if (currentDocument.document_id !== o.observation.document_id) throw new Error("Document changed. Observe again.");
     if (target) {

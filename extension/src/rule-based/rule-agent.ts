@@ -512,8 +512,26 @@ export function ruleAgent(
       return { ...base, status: "ask_user", actions: [], message: "Please complete the CAPTCHA on this page.", question: { kind: "blocker", text: "Please complete the CAPTCHA to continue.", optional: false } };
     }
 
-    // 3a. Dismiss cookie-consent modals (decline/reject/essential-only) that hide the form behind an open dialog.
-    if (obs.dialog || !hasApplicationFields(obs)) {
+    // 3a. Follow an application tab opened by our own recent click when the current page has no form fields.
+    const hasFields = hasApplicationFields(obs);
+    if (!hasFields && Array.isArray(obs.tabs) && obs.tabs.length > 0 && obs.observation_id) {
+      const targetTab = obs.tabs[obs.tabs.length - 1];
+      const tabKey = `tab|${targetTab.id}|${targetTab.url}`;
+      if (targetTab?.id && !st.navClicks.has(tabKey)) {
+        st.navClicks.add(tabKey);
+        const action = {
+          type: "switch_tab",
+          tab_id: targetTab.id,
+          label: "Switch to application tab",
+          observation_id: obs.observation_id,
+          command_id: crypto.randomUUID(),
+        };
+        return { ...base, status: "continue", actions: [action], message: "" };
+      }
+    }
+
+    // 3b. Dismiss cookie-consent modals (decline/reject/essential-only) that hide the form behind an open dialog.
+    if (obs.dialog || !hasFields) {
       const decline = obs.elements.find((e: any) => !e.disabled && ["button", "link"].includes(e.role) && COOKIE_DECLINE.test(String(e.name ?? "")));
       if (decline && isSafeClick(obs, decline)) {
         const navKey = `cookie|${obs.url}|${decline.ref}|${decline.name}`;
@@ -525,8 +543,7 @@ export function ruleAgent(
       }
     }
 
-    // 3b. Async-rendered forms (e.g. Workable): wait briefly when no form fields or navigation/gate buttons have mounted yet.
-    const hasFields = hasApplicationFields(obs);
+    // 3c. Async-rendered forms (e.g. Workable): wait briefly when no form fields or navigation/gate buttons have mounted yet.
     const hasGateOrNav = obs.elements.some((e: any) => !e.disabled && !e.submit_like && ["button", "link"].includes(e.role)
       && (NAV_BUTTON.test(String(e.name ?? "")) || /\b(?:agree|accept)\b/i.test(String(e.name ?? ""))));
     if (hasFields) {

@@ -264,6 +264,11 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
           terminal = { kind: "gone", id: c.id, reason: cut(args.reason, 1000).trim() || message.result.message }; ended = true;
         } else if (c.name === "done") {
           if (actions.length) { put("Not executed: the actions above run first. Call done again afterwards.", true); ended = true; continue; }
+          if (!hasApplicationFields(obs) && st.gs.wrote.length === 0 && Object.keys(st.filled).length === 0) {
+            put("There is no application form on this page and no fields have been filled yet. Click Apply/Continue, switch to an opened application tab with switch_tab, call posting_gone if the job is closed, or ask the user to open the form instead of calling done.", true);
+            refused += 1;
+            continue;
+          }
           const missing = guards.missingRequired(obs, st.gs);
           if (missing.length) { put(`Required fields are still unanswered: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill them from supported facts or ask the user before calling done.`, true); refused += 1; continue; }
           // Optional applicability is a model decision (the full attention list is in the snapshot).
