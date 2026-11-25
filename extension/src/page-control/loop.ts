@@ -903,6 +903,7 @@ export class Agent {
           const message = this.messages.shift() || "";
           if (input.kind === "resume" || /^(continue|resume|go ahead)\b/i.test(message)) this.trustedOrigins.add(origin);
           this.status = "running";
+          this.last = { ...this.last, question: null };
           wantScreenshot = true;
           continue;
         }
@@ -933,6 +934,7 @@ export class Agent {
           const input = await this.waitForUser();
           if (input.kind === "stop") break;
           this.status = "running";
+          this.last = { ...this.last, question: null };
           captchaClearedFor = documentKey;
           extra = { resumed: true };
           continue;
@@ -1165,6 +1167,7 @@ export class Agent {
           const input = await this.waitForUser();
           if (input.kind === "stop") break;
           this.status = "running";
+          this.last = { ...this.last, question: null };
           if (input.kind === "reply") extra = { user_reply: input.text };
           else if (input.kind === "skip") extra = { skip_question: true };
           else extra = { resumed: true };
