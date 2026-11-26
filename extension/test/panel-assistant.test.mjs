@@ -1779,3 +1779,65 @@ test("floating launcher stays hidden when autoShowLauncher is off, and appears o
   assert.equal(dismiss.win.document.querySelector("jobhunt-autofill-panel"), null);
   dismiss.win.close();
 });
+
+test("floating launcher counts the right boxes: forms without <form>, form= links, shadow roots, contact forms", async () => {
+  const hello = () => ({ mode: "idle", allowAutoDetect: true, autoShowLauncher: true });
+
+  // An application built from plain divs, with a newsletter <form> lower on the page.
+  const divForm = panelPage(() => null, {
+    url: "https://acme.example/careers/engineer/apply",
+    hello,
+    form: `
+      <div>
+        <label for="n">Full name</label><input id="n">
+        <label for="e">Email</label><input id="e" type="email">
+        <label for="p">Phone</label><input id="p" type="tel">
+        <button type="button">Next</button>
+      </div>
+      <form><input aria-label="Email address"><button type="submit">Submit</button></form>`,
+  });
+  await until(() => divForm.shadow()?.querySelector(".launcher-go"), "launcher next to a newsletter form");
+  divForm.win.close();
+
+  // Boxes outside the <form> but linked to it with form="app".
+  const linked = panelPage(() => null, {
+    url: "https://acme.example/careers/engineer",
+    hello,
+    form: `
+      <form id="app"><button type="submit">Submit application</button></form>
+      <label for="n">Full name</label><input id="n" form="app">
+      <label for="e">Email</label><input id="e" type="email" form="app">
+      <label for="p">Phone</label><input id="p" type="tel" form="app">`,
+  });
+  await until(() => linked.shadow()?.querySelector(".launcher-go"), "launcher for form= boxes");
+  linked.win.close();
+
+  // Boxes inside a web component's shadow root, with the button in the light-DOM form.
+  const shadowed = panelPage(() => null, {
+    url: "https://acme.example/careers/engineer",
+    hello,
+    form: `<form><x-fields></x-fields><button type="submit">Submit application</button></form>`,
+  });
+  const root = shadowed.win.document.querySelector("x-fields").attachShadow({ mode: "open" });
+  root.innerHTML = `<input aria-label="Full name"><input aria-label="Email" type="email"><input aria-label="Phone" type="tel">`;
+  shadowed.win.document.body.append(shadowed.win.document.createElement("span")); // wakes the page watcher
+  await until(() => shadowed.shadow()?.querySelector(".launcher-go"), "launcher for shadow-root boxes");
+  shadowed.win.close();
+
+  // A contact-us form is not an application.
+  const contact = panelPage(() => null, {
+    url: "https://acme.example/contact",
+    hello,
+    form: `
+      <form>
+        <label for="f">First name</label><input id="f">
+        <label for="l">Last name</label><input id="l">
+        <label for="e">Email</label><input id="e" type="email">
+        <label for="m">Message</label><textarea id="m"></textarea>
+        <button type="submit">Submit</button>
+      </form>`,
+  });
+  await tick(1000);
+  assert.equal(contact.shadow(), undefined);
+  contact.win.close();
+});

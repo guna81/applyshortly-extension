@@ -32,6 +32,33 @@ test("tab navigation after observation invalidates a switch command", async () =
   assert.equal(driver.tabId, 1);
 });
 
+test("applicationTabs falls back to pendingUrl and debugger.getTargets when tabs.get omits url", async () => {
+  const api = {
+    tabs: {
+      get: async (id) => (id === 4 ? { id, pendingUrl: "https://ats.example.test/pending" } : { id }),
+    },
+    debugger: {
+      getTargets: async () => [{ tabId: 5, type: "page", url: "https://ats.example.test/apply", title: "Apply" }],
+    },
+  };
+  const driver = new TabDriver(1, "", api);
+  driver.lastInteractionAt = Date.now();
+  driver.handleCreated({ id: 4, openerTabId: 1 });
+  driver.handleCreated({ id: 5 }); // rel="noopener" right after click
+  const tabs = await driver.applicationTabs();
+  assert.deepEqual(tabs, [
+    { id: 4, url: "https://ats.example.test/pending", title: "" },
+    { id: 5, url: "https://ats.example.test/apply", title: "Apply" },
+  ]);
+  driver.detach = async () => {};
+  driver.attach = async () => {};
+  let followedUrl;
+  driver.onTabChanged = async (_id, nextUrl) => { followedUrl = nextUrl; };
+  await driver.switchTab(5);
+  assert.equal(driver.tabId, 5);
+  assert.equal(followedUrl, "https://ats.example.test/apply");
+});
+
 test("accessibility discovery resolves controls in the isolated world and releases handles", async () => {
   const driver = new TabDriver(1, "", {});
   driver.world = async () => 17;

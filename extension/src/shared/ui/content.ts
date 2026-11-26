@@ -892,11 +892,28 @@
 
   function pageApplicationCheck() {
     try {
-      const fields = F.collectFields(document);
-      const submitBtn = F.findSubmitButton(document, fields, { includeDisabled: true });
+      const all = F.collectFields(document);
+      const submitBtn = F.findSubmitButton(document, all, { includeDisabled: true });
       const submitText = submitBtn ? F.cleanLabel(submitBtn.getAttribute("aria-label") || (submitBtn.tagName === "INPUT" ? submitBtn.value : submitBtn.textContent)) : "";
       const pageHeading = F.cleanLabel(document.querySelector("h1, h2")?.textContent ?? "");
       const passwordShown = [...document.querySelectorAll("input[type=password]")].some((el) => !isHidden(el));
+      // Count only the boxes that belong with the submit button, when it sits in a form that holds
+      // most of the page's boxes. A footer newsletter form must not hide a form built from plain divs.
+      const form = submitBtn && F.applicationControl(submitBtn) ? submitBtn.closest?.("form") : null;
+      const inForm = (el: any) => {
+        if (el?.form === form) return true; // also boxes linked with form="id"
+        for (let node = el; node; node = node.getRootNode?.()?.host) {
+          if (form.contains(node)) return true; // boxes inside a web component's shadow root
+        }
+        return false;
+      };
+      const formFields = form ? all.filter((f) => inForm(f.el)) : [];
+      const scoped = formFields.length >= 2 && formFields.length * 2 >= all.length ? formFields : all;
+      const fields = scoped.map((f) => ({
+        kind: f.kind,
+        label: f.label,
+        search: Boolean(f.el?.closest?.('[role="searchbox"], [role="search"], form[role="search"]')),
+      }));
       return P.looksLikeApplicationForm({
         fields,
         pathname: location.pathname,

@@ -158,11 +158,14 @@ async function clearTab(tabId) {
 
 chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
+// ApplyShortly's own sites are never an employer's form, whichever deployment this build pairs with.
+const APPLYSHORTLY_HOST = /(^|\.)applyshortly\.com$/i;
+
 async function hello(tabId, url, reloaded = false) {
-  const origin = new URL(url).origin;
+  const { origin, hostname } = new URL(url);
   const idle = async () => {
     const s = await settings();
-    const allowAutoDetect = Boolean(s.token) && origin !== s.baseUrl;
+    const allowAutoDetect = Boolean(s.token) && origin !== s.baseUrl && !APPLYSHORTLY_HOST.test(hostname);
     return { appId: null, mode: "idle", allowAutoDetect, autoShowLauncher: allowAutoDetect && s.autoShowLauncher === true };
   };
   const agent = agents.get(tabId);
