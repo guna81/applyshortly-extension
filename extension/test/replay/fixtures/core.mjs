@@ -12,6 +12,12 @@ export default [
     expect: { outcome: "failed", questions_max: 0 },
   },
   {
+    name: "an already-applied posting with no form ends the run as posting_gone",
+    pages: [{ text: "Forward Deployed AI Engineer at gravity9. Applied yesterday. Jobs at gravity9.", elements: [] }],
+    model: { gone: "applied yesterday|already applied" },
+    expect: { outcome: "failed", questions_max: 0 },
+  },
+  {
     name: "profile fields fill without a single question, then the form is handed over",
     pages: [{ elements: [...contact(), file("cv", "Resume")] }],
     profile: { resume_url: "/api/extension/resume" },

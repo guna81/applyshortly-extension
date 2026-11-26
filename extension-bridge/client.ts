@@ -36,7 +36,7 @@ export interface ExtensionPreferences {
   currency: string | null;
   available_from: string | null; // YYYY-MM-DD
   willing_to_relocate: boolean;
-  requires_sponsorship: boolean | null; // null: not answered yet
+  requires_sponsorship: boolean | null; // always null now: sponsorship is decided per job country from work_authorization
   work_authorization: Record<string, string>;
   time_zone_regions?: string[];
 }

@@ -57,10 +57,8 @@ export function profileFact(
   );
   const place = jobPlace(job);
   if (SPONSORSHIP.test(text)) {
-    if (NEGATED.test(text) || typeof prefs.requires_sponsorship !== "boolean") return null;
+    if (NEGATED.test(text) || !authorizations.length || !place) return null;
     const home = authorizations.filter(([, status]) => hasRight(status)).map(([country]) => country);
-    if (!home.length) return prefs.requires_sponsorship ? "yes" : "no";
-    if (!place) return null;
     if (home.some((country) => mentions(place, country))) return "no";
     return UNSPECIFIED.test(place) ? null : "yes";
   }
