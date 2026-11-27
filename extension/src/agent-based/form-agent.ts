@@ -163,9 +163,9 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
         else if (body.user_reply) {
           replyUsed = true;
           guards.recordAnswer(st.gs, obs, p.ref, body.user_reply);
-          const askedEl = p.ref ? obs.elements.find((e: any) => e.ref === p.ref) : null;
-          st.answered.push({ ref: p.ref, key: questionKey(p.question), id: askedEl ? guards.identity(obs, askedEl) : null, answer: cut(body.user_reply, 1000) });
-          content = `The user answered: ${JSON.stringify(cut(body.user_reply, 1000))}. This answer is final; use it.`;
+          // The field's identity from when it was asked: refs can shift when the page changes before the reply arrives.
+          st.answered.push({ ref: p.ref, key: questionKey(p.question), id: p.field ?? null, group: p.group ?? null, answer: cut(body.user_reply, 1000) });
+          content = `The user answered: ${JSON.stringify(cut(body.user_reply, 1000))}. This answer is final; use it. If it declines or says to skip or leave the question, leave the field as it is and do not ask about it again; when you finish, a required one goes in done's declined.`;
         } else content = body.user_message ? "The user sent a conversational message, not a field answer. Respond to that message; do not record it as an answer or fill the pending field from it." : "The user pressed Continue without answering (they may have dealt with it on the page). Look at the page again.";
         if (p.id) results.push({ id: p.id, content, is_error: false }); else notes.push(content);
       } else if (p.kind === "done") {
@@ -273,7 +273,8 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
           // A required field the user was asked about and declined stays open for them, like a skip: the model names it in
           // `declined`, and only fields the user was actually asked about count, so done can never skip asking.
           const declinedRefs = new Set(Array.isArray(args.declined) ? args.declined.map(String) : []);
-          const wasAsked = (f: any) => { const el = obs.elements.find((e: any) => e.ref === f.ref); const id = el ? guards.identity(obs, el) : null; return st.answered.some((a: any) => a.ref === f.ref || (id !== null && a.id === id)); };
+          // A choice group counts as asked when any of its options was (the scan reports a group by its first option).
+          const wasAsked = (f: any) => { const el = obs.elements.find((e: any) => e.ref === f.ref); const id = el ? guards.identity(obs, el) : null; const group = el ? guards.groupKey(obs, el) : null; return st.answered.some((a: any) => a.ref === f.ref || (id !== null && a.id === id) || (group !== null && a.group === group)); };
           const open = guards.missingRequired(obs, st.gs);
           const declined = open.filter((f: any) => declinedRefs.has(String(f.ref)) && wasAsked(f));
           const missing = open.filter((f: any) => !declined.includes(f));
@@ -307,7 +308,8 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
         return finish({ status: "continue", message: message.result.message, actions });
       }
       if (terminal?.kind === "ask") {
-        st.carry = results; st.pending = [{ kind: "ask", id: terminal.id, ref: terminal.question.ref ?? null, question: terminal.question.text }]; st.refusedTurns = 0;
+        const askedField = terminal.question.ref ? ctx.obs.elements.find((e: any) => e.ref === terminal.question.ref) : null;
+        st.carry = results; st.pending = [{ kind: "ask", id: terminal.id, ref: terminal.question.ref ?? null, question: terminal.question.text, field: askedField ? guards.identity(ctx.obs, askedField) : null, group: askedField ? guards.groupKey(ctx.obs, askedField) : null }]; st.refusedTurns = 0;
         const q = terminal.question;
         st.asked.push(questionKey(q.text)); if (q.kind === "question") st.questions += 1;
         return finish({ status: "ask_user", message: message.result.message || q.text, question: q });

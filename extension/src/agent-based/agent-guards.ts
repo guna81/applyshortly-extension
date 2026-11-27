@@ -205,5 +205,5 @@ export function createGuards({ profile, job }: { profile: any; job?: any; allowD
 
   /** Whether a field (or a pick-one question) still waits for an answer. */
   const open = (obs: any, el: any) => (grouped(el) ? !el.disabled && !el.submit_like && !chosenIn(obs, el) : empty(el));
-  return { vet, open, skip, recordAnswer, noteWrite, missingRequired, emptyOptional, identity, isSkipped, formRoles: FORM_ROLES, botCheck: (el: any) => BOT_CHECK.test(`${el?.group ?? ""} ${el?.name ?? ""}`) };
+  return { vet, open, skip, recordAnswer, noteWrite, missingRequired, emptyOptional, identity, groupKey, isSkipped, formRoles: FORM_ROLES, botCheck: (el: any) => BOT_CHECK.test(`${el?.group ?? ""} ${el?.name ?? ""}`) };
 }

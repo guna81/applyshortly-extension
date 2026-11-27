@@ -777,3 +777,28 @@ test("done cannot leave a required field the user was never asked about", async 
   assert.match(seen[1].look.results[0].content, /Required fields are still unanswered.*Current employer/);
   assert.equal(plan.status, "ask_user");
 });
+
+test("a declined required field still counts as asked when the page renumbered its ref before the reply", async () => {
+  const { request } = scripted(
+    { tool_calls: [call("ask_user", { question: "Who is your current employer?", ref: "e1" })] },
+    { tool_calls: [call("done", { summary: "Please answer the current employer question on the page.", declined: ["e7"] })] },
+  );
+  const step = make(request);
+  await step(body(observation([el("e1", "textbox", "Current employer")])));
+  const moved = observation([el("e6", "textbox", "Notice period", { required: false }), el("e7", "textbox", "Current employer")], { observation_id: "obs-2" });
+  const plan = await step(body(moved, { user_reply: "Please skip this question and move on." }));
+  assert.equal(plan.status, "ready_for_review");
+  assert.deepEqual(plan.unresolved.filter((f) => f.required), [{ label: "Current employer", required: true }]);
+});
+
+test("a declined required radio group counts as asked whichever option the question pointed at", async () => {
+  const { request } = scripted(
+    { tool_calls: [call("ask_user", { question: "Do you require sponsorship?", ref: "e2" })] },
+    { tool_calls: [call("done", { summary: "Please answer the sponsorship question on the page.", declined: ["e1"] })] },
+  );
+  const step = make(request);
+  const obs = observation([el("e1", "radio", "Yes", { group: "Do you require sponsorship?" }), el("e2", "radio", "No", { group: "Do you require sponsorship?" })]);
+  await step(body(obs));
+  const plan = await step(body(observation(obs.elements, { observation_id: "obs-2" }), { user_reply: "Please skip this question and move on." }));
+  assert.equal(plan.status, "ready_for_review");
+});
