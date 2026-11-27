@@ -23,8 +23,8 @@ function showConn(kind: string, title: string, detail = "") {
   $("connDetail").textContent = detail;
 }
 function setMsg(text: string, kind = "") {
-  $("formMsg").textContent = text;
-  $("formMsg").className = kind;
+  $("pairingMsg").textContent = text;
+  $("pairingMsg").className = kind;
 }
 let customPicked = false;
 let clearKeyFlag = false;
@@ -60,7 +60,6 @@ async function test() {
   connected = Boolean(s?.connected);
   $("accountSummary").hidden = !connected;
   $("signin").hidden = connected;
-  $("manual").hidden = connected;
   $("logout").hidden = !connected;
   $("logoutHint").hidden = !connected;
   $("retest").hidden = true;
@@ -122,7 +121,6 @@ async function test() {
 }
 async function load() {
   const s = await send("connectionSettings");
-  $("token").value = "";
   $("extensionEngine").value = ["auto", "ai_led", "rules_led"].includes(s.extensionEngine) ? s.extensionEngine : "auto";
   $("agentVision").checked = s.agentVision !== false;
   $("autoShowLauncher").checked = s.autoShowLauncher === true;
@@ -227,17 +225,6 @@ $("logout").addEventListener("click", async () => {
   } catch (error: any) { $("pairingMsg").textContent = `Could not log out: ${error?.message}`; }
   finally { $("logout").disabled = false; }
 });
-$("form").addEventListener("submit", async (event: any) => {
-  event.preventDefault();
-  const token = $("token").value.trim().replace(/^EXTENSION_API_TOKEN=/, "").replace(/^bearer\s+/i, "").replace(/^["']|["']$/g, "").trim();
-  if (!token) return setMsg("Paste your ApplyShortly account API key.", "bad");
-  try {
-    await send("saveManualConnection", { token });
-    $("token").value = "";
-    setMsg("Saved.", "good");
-    await test();
-  } catch (error: any) { setMsg(error?.message, "bad"); }
-});
 $("aiFunding").addEventListener("change", () => {
   const selection = $("aiFunding").value;
   if (selection !== "platform") { customPicked = true; renderAI(); return; }
@@ -267,17 +254,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Returning from the website (signed in, out, or as another account) refreshes the connection.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && !$("signin").disabled) void connect();
-});
-$("reveal").addEventListener("click", () => {
-  const hidden = $("token").type === "password";
-  $("token").type = hidden ? "text" : "password";
-  $("reveal").title = hidden ? "Hide key" : "Show key";
-  $("reveal").setAttribute("aria-label", $("reveal").title);
-  $("reveal").setAttribute("aria-pressed", String(hidden));
-  const eye = $("reveal").querySelector(".icon-eye");
-  const eyeOff = $("reveal").querySelector(".icon-eye-off");
-  if (eye) eye.toggleAttribute("hidden", hidden);
-  if (eyeOff) eyeOff.toggleAttribute("hidden", !hidden);
 });
 (() => {
   const links = Array.from(document.querySelectorAll<HTMLAnchorElement>(".section-nav a[href^='#']"));

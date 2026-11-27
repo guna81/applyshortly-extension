@@ -937,6 +937,7 @@
   }
 
   function maybeShowLauncher() {
+    if (!chrome.runtime?.id) { stopAutoDetect(); return; }
     if (!autoShowLauncherOn || !allowAutoDetect || state || agent || launcherShown || launcherDismissedUrl === location.href) return;
     if (!pageApplicationCheck()) return;
     launcherShown = true;
@@ -945,6 +946,7 @@
   }
 
   function startAutoDetect() {
+    if (!chrome.runtime?.id) { stopAutoDetect(); return; }
     if (!autoShowLauncherOn || !allowAutoDetect || state || agent || launcherShown || launcherDismissedUrl === location.href) return;
     maybeShowLauncher();
     if (launcherShown) return;
@@ -1033,11 +1035,15 @@
   // The panel's two switches (also on the settings page) take effect at once, also on an open panel.
   // "Auto-draft open-ended answers": draft what the profile doesn't cover. "Auto apply": send once everything is answered.
   let autoApplyOn = false;
-  try { void chrome.storage?.local?.get?.("autoApply")?.then?.((v) => { autoApplyOn = v?.autoApply === true; }); } catch { /* storage unavailable */ }
-  chrome.storage?.onChanged?.addListener((changes, area) => {
-    if (area !== "local") return;
-    if ("autoShowLauncher" in changes) {
-      autoShowLauncherOn = allowAutoDetect && changes.autoShowLauncher.newValue === true;
+  try {
+    void chrome.storage?.local?.get?.("autoApply")?.then?.(
+      (v) => { autoApplyOn = v?.autoApply === true; },
+      () => { /* storage restricted to trusted contexts */ },
+    );
+  } catch { /* storage unavailable */ }
+  function applySettingPatch(patch: { autoShowLauncher?: boolean; autoApply?: boolean }) {
+    if ("autoShowLauncher" in patch) {
+      autoShowLauncherOn = allowAutoDetect && patch.autoShowLauncher === true;
       if (!autoShowLauncherOn) {
         stopAutoDetect();
         launcherShown = false;
@@ -1046,13 +1052,20 @@
         startAutoDetect();
       }
     }
-    if ("autoApply" in changes) {
-      autoApplyOn = changes.autoApply.newValue === true;
+    if ("autoApply" in patch) {
+      autoApplyOn = patch.autoApply === true;
       if (!autoApplyOn) return panel.cancelCountdown?.();
       // Switched on after the form is already filled: send it now, through the usual checks and countdown.
       const idle = state?.ctx && !chat.pending && !agentLive() && (!agent || agent.status === "ready");
       if (idle && state.results.length && !submittedReported) void autoApply();
     }
+  }
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== "local") return;
+    const patch: { autoShowLauncher?: boolean; autoApply?: boolean } = {};
+    if ("autoShowLauncher" in changes) patch.autoShowLauncher = changes.autoShowLauncher.newValue === true;
+    if ("autoApply" in changes) patch.autoApply = changes.autoApply.newValue === true;
+    if (Object.keys(patch).length) applySettingPatch(patch);
   });
 
   async function start(appId: any, opts: any = {}) {
@@ -1081,6 +1094,11 @@
       const previous = agent;
       agent = { ...msg, agent_engine: msg.agent_engine ?? previous?.agent_engine };
       void agentChanged(previous, agent);
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg?.type === "settingsChanged") {
+      applySettingPatch(msg);
       sendResponse({ ok: true });
       return;
     }

@@ -176,6 +176,7 @@
     if (FILTER_SUBMIT.test(submit)) return false;
 
     const isUpload = (f: any) => f?.kind === "file" || f?.kind === "picker";
+    const isEntry = (f: any) => ["text", "textarea", "select", "radio", "dropdown"].includes(f?.kind);
     const applicantDetail = (label: string) => JOB_FIELD.test(label) || CONTACT_FIELD.test(label) || RESUME_FIELD.test(label);
     const real = fields.filter((f: any) => {
       const label = String(f?.label ?? "");
@@ -185,10 +186,12 @@
     const labels = real.map((f: any) => String(f?.label ?? ""));
 
     if (real.some((f: any) => isUpload(f) && RESUME_FIELD.test(String(f?.label ?? "")))) return true;
-    if (real.length < 2) return false;
+    // A page with only checkboxes (e.g. an inbox or table selection list) and a generic file input is not a form.
+    const entries = real.filter(isEntry);
+    if (real.length < 2 || !entries.length) return false;
 
     const jobFields = labels.filter((l) => JOB_FIELD.test(l)).length;
-    const contactFields = labels.filter((l) => CONTACT_FIELD.test(l)).length;
+    const contactFields = entries.filter((f: any) => CONTACT_FIELD.test(String(f?.label ?? ""))).length;
     const hasUpload = real.some(isUpload);
     const contextText = `${pathname} ${title} ${pageHeading}`;
     const applySubmit = APPLY_SUBMIT.test(submit);
@@ -207,7 +210,7 @@
     if (hasUpload) score += 1;
     if (applySubmit) score += 2;
     score += applyContext ? 2 : JOB_CONTEXT.test(contextText) ? 1 : 0;
-    if (real.length >= 3) score += 1;
+    if (entries.length >= 2 && real.length >= 3) score += 1;
     if (hasSubmit && !signUp) score += 1;
     if (signUp) score -= 3;
     return score >= 4;

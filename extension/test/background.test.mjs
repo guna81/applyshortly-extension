@@ -158,6 +158,16 @@ test('credentials are restricted to trusted storage and privileged UI messages',
   assert.equal((await h.send({ type: 'disconnect' }, h.content)).ok, false);
   assert.equal(h.local.token, 'fixture-bearer');
   assert.deepEqual(h.access, ['TRUSTED_CONTEXTS', 'TRUSTED_CONTEXTS']);
+});
+
+test('extension options and popup pages stay permitted with URL hash or query parameters', async () => {
+  const h = harness();
+  const optionsWithHash = { ...h.ui, url: `${h.ui.url}#account` };
+  const optionsWithQueryAndHash = { ...h.ui, url: `${h.ui.url}?section=ai#ai` };
+  const otherExtensionPage = { ...h.ui, url: h.ui.url.replace('options.html', 'other.html') };
+  assert.equal((await h.send({ type: 'connectionSettings' }, optionsWithHash)).ok, true);
+  assert.equal((await h.send({ type: 'connectionSettings' }, optionsWithQueryAndHash)).ok, true);
+  assert.equal((await h.send({ type: 'connectionSettings' }, otherExtensionPage)).ok, false);
   assert.equal((await h.send({ type: 'pairingStart', baseUrl: 'https://example.com' }, h.content)).ok, false);
   assert.equal((await h.send({ type: 'context', appId: 123 }, h.content)).ok, false);
   const panel = await h.send({ type: 'panelPreference', minimized: true }, h.content);

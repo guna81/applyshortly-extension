@@ -1872,3 +1872,38 @@ test("floating launcher counts the right boxes: forms without <form>, form= link
   assert.equal(contact.shadow(), undefined);
   contact.win.close();
 });
+
+test("stale panel host from a previous extension load is removed instead of fighting for the top layer", async () => {
+  const page = panelPage(() => null, {
+    form: `
+      <form>
+        <label for="name">Full name</label><input id="name" required>
+        <label for="email">Email</label><input id="email" type="email" required>
+        <label for="resume">Resume</label><input id="resume" type="file">
+        <button type="submit">Submit application</button>
+      </form>`,
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }),
+  });
+  // Simulate an orphaned launcher host left behind in the DOM after an extension reload.
+  const stale = page.win.document.createElement("jobhunt-autofill-panel");
+  stale.dataset.stale = "1";
+  page.win.document.documentElement.append(stale);
+
+  page.start();
+  await until(() => page.shadow()?.querySelector(".p"), "active panel");
+
+  const hosts = page.win.document.querySelectorAll("jobhunt-autofill-panel");
+  assert.equal(hosts.length, 1, "only the active panel host remains");
+  assert.equal(hosts[0].dataset.stale, undefined, "orphaned host was removed");
+
+  // Once the extension context is invalidated, a toggle event tears down the orphaned host.
+  page.win.chrome.runtime.id = undefined;
+  const other = page.win.document.createElement("div");
+  page.win.document.body.append(other);
+  const toggleEv = new page.win.Event("toggle");
+  toggleEv.newState = "open";
+  other.dispatchEvent(toggleEv);
+  await tick(10);
+  assert.equal(page.win.document.querySelectorAll("jobhunt-autofill-panel").length, 0, "orphaned host removed after context loss");
+  page.win.close();
+});

@@ -48,7 +48,7 @@
 
     <section class="card settings-card" id="account">
       <div class="section-heading"><div><span class="eyebrow">YOUR ACCOUNT</span><h2>Connection</h2><p class="section-description">Connect your profile to fill applications.</p></div></div>
-      <form id="form" novalidate>
+      <div class="account-controls">
         <p id="accountSummary" hidden></p>
         <div class="actions">
           <button id="signin" type="button" class="primary">Sign in with ApplyShortly</button>
@@ -58,24 +58,7 @@
         </div>
         <p id="logoutHint" class="hint" hidden></p>
         <p id="pairingMsg" role="status" aria-live="polite"></p>
-        <details id="manual">
-          <summary>Advanced: manual API-key connection</summary>
-        <label>API key
-          <span class="input-with-btn">
-            <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key" required>
-            <button id="reveal" type="button" class="icon" title="Show key" aria-label="Show key" aria-pressed="false">
-              <svg class="icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-              <svg class="icon-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
-            </button>
-          </span>
-        </label>
-        <p class="hint">For manual connection, create a per-user key in ApplyShortly → Settings → API keys.</p>
-        <div class="actions">
-          <button type="submit" class="primary">Save &amp; connect</button>
-          <span id="formMsg" role="status"></span>
-        </div>
-        </details>
-      </form>
+      </div>
     </section>
 
     <section class="card settings-card" id="ai">

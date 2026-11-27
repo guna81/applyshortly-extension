@@ -23,6 +23,16 @@ try {
     for (const key of (["fillOptional", "aiDrafts", "autoApply"] as const)) {
       if (key in changes) liveSwitches[key] = key === "autoApply" ? changes[key].newValue === true : changes[key].newValue !== false;
     }
+    if ("autoShowLauncher" in changes || "autoApply" in changes) {
+      const patch: Record<string, boolean> = {};
+      if ("autoShowLauncher" in changes) patch.autoShowLauncher = changes.autoShowLauncher.newValue === true;
+      if ("autoApply" in changes) patch.autoApply = changes.autoApply.newValue === true;
+      chrome.tabs?.query?.({ url: ["http://*/*", "https://*/*"] }, (tabs) => {
+        for (const tab of tabs ?? []) {
+          if (tab.id != null) void chrome.tabs.sendMessage(tab.id, { type: "settingsChanged", ...patch }).catch(() => {});
+        }
+      });
+    }
   });
 } catch { /* no storage events: the value at the start of the run stands */ }
 
@@ -160,12 +170,19 @@ chrome.tabs.onRemoved.addListener((tabId) => void clearTab(tabId));
 
 // ApplyShortly's own sites are never an employer's form, whichever deployment this build pairs with.
 const APPLYSHORTLY_HOST = /(^|\.)applyshortly\.com$/i;
+// Webmail, chat, and productivity apps never host employer job application forms (docs.google.com is
+// intentionally excluded because Google Forms lives there).
+const NON_APPLICATION_HOST = /^(?:mail|calendar|drive|meet|chat|contacts|keep|photos)\.google\.com$|^outlook\.(?:live|office|office365)\.com$|^mail\.(?:yahoo|protonmail|zoho)\.com$|^mail\.proton\.me$|^app\.fastmail\.com$|^web\.(?:whatsapp\.com|telegram\.org)$|^app\.slack\.com$|^discord\.com$|^teams\.microsoft\.com$/i;
 
 async function hello(tabId, url, reloaded = false) {
   const { origin, hostname } = new URL(url);
   const idle = async () => {
     const s = await settings();
-    const allowAutoDetect = Boolean(s.token) && origin !== s.baseUrl && !APPLYSHORTLY_HOST.test(hostname);
+    const allowAutoDetect =
+      Boolean(s.token) &&
+      origin !== s.baseUrl &&
+      !APPLYSHORTLY_HOST.test(hostname) &&
+      !NON_APPLICATION_HOST.test(hostname);
     return { appId: null, mode: "idle", allowAutoDetect, autoShowLauncher: allowAutoDetect && s.autoShowLauncher === true };
   };
   const agent = agents.get(tabId);
@@ -947,7 +964,8 @@ async function dispatch(msg: any, sender: any) {
   if (!msg || typeof msg !== "object" || sender.id !== chrome.runtime.id) throw new Error("Invalid extension message.");
   const handler = handlers[msg.type];
   if (!handler) throw new Error("Unknown extension message.");
-  const extensionPage = ["src/ui/options.html", "src/ui/popup.html"].some((path) => sender.url === chrome.runtime.getURL(path));
+  const senderBaseUrl = typeof sender.url === "string" ? sender.url.split(/[?#]/, 1)[0] : "";
+  const extensionPage = ["src/ui/options.html", "src/ui/popup.html"].some((path) => senderBaseUrl === chrome.runtime.getURL(path));
   if (!extensionPage) {
     if (!sender.tab || !/^https?:/.test(sender.url ?? "") || !CONTENT_MESSAGES.has(msg.type)) throw new Error("Message not permitted.");
     if (["context", "suggest", "assist", "report", "agentStart"].includes(msg.type)) {

@@ -26,6 +26,7 @@ html { scroll-behavior: smooth; }
 .settings-page .card p.section-description { margin: 4px 0 20px; }
 .settings-page .card p:empty { display: none; }
 .settings-page form { gap: 14px; }
+.settings-page .account-controls { display: grid; gap: 14px; }
 .settings-page button { font-weight: 600; }
 .settings-page #accountSummary { margin: 0; font-weight: 600; }
 .settings-page #logoutHint { margin: -4px 0 0; }

@@ -214,7 +214,7 @@ test('billing-off setup describes disabled credit charging without account contr
     assert.match(h.document.querySelector('#accountSummary').textContent, /No credit charges/);
     assert.equal(h.document.querySelector('#disconnect'), null);
     assert.equal(h.document.querySelector('#retest').hidden, true);
-    assert.equal(h.document.querySelector('#manual').hidden, true);
+    assert.equal(h.document.querySelector('#manual'), null);
   } finally { h.close(); }
 });
 

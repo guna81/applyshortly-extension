@@ -252,7 +252,30 @@
     };
     let watching = false;
     let raiseQueued = false;
-    let modalTimer = 0;
+    let modalTimer: any = 0;
+    let watchdogTimer: any = 0;
+    let domObserver: MutationObserver | null = null;
+    let onToggle: ((e: Event) => void) | null = null;
+    let launcherToken = 0;
+
+    function contextLost() {
+      return typeof chrome !== "undefined" && Boolean(chrome.runtime) && !chrome.runtime.id;
+    }
+
+    function teardownOrphan() {
+      clearInterval(modalTimer);
+      modalTimer = 0;
+      clearInterval(watchdogTimer);
+      watchdogTimer = 0;
+      domObserver?.disconnect();
+      domObserver = null;
+      if (onToggle) {
+        document.removeEventListener("toggle", onToggle, true);
+        onToggle = null;
+      }
+      watching = false;
+      host?.remove();
+    }
 
     function topModal() {
       let top = null;
@@ -263,6 +286,7 @@
     }
 
     function raise() {
+      if (contextLost()) { teardownOrphan(); return; }
       if (!host?.parentNode) return; // closed by the user
       const home = topModal() ?? document.documentElement;
       // Moving the host and re-entering the top layer both drop focus: keep the user's typing.
@@ -282,6 +306,7 @@
       // A modal removed from the page without closing takes the panel with it: bring it back.
       if (home !== document.documentElement) {
         modalTimer = setInterval(() => {
+          if (contextLost()) { teardownOrphan(); return; }
           if (host.parentNode === home && host.isConnected && topModal() === home) return;
           if (host.parentNode === home) document.documentElement.append(host);
           raise();
@@ -290,6 +315,7 @@
     }
 
     function queueRaise() {
+      if (contextLost()) { teardownOrphan(); return; }
       if (raiseQueued) return;
       raiseQueued = true;
       queueMicrotask(() => { raiseQueued = false; raise(); });
@@ -298,16 +324,22 @@
     function watch() {
       if (watching) return;
       watching = true;
-      const ours = (node) => node === host || node?.hasAttribute?.("data-applyshortly-screenshot-refs");
+      const ours = (node) =>
+        node === host ||
+        node?.tagName?.toLowerCase() === "jobhunt-autofill-panel" ||
+        node?.hasAttribute?.("data-applyshortly-screenshot-refs");
       // Popovers announce themselves with a toggle event, which doesn't bubble: listen in capture.
-      document.addEventListener("toggle", (e) => {
-        if (!ours(e.target) && /** @type {any} */ (e).newState === "open") queueRaise();
-      }, true);
+      onToggle = (e) => {
+        if (contextLost()) { teardownOrphan(); return; }
+        if (!ours(e.target) && (e as any).newState === "open") queueRaise();
+      };
+      document.addEventListener("toggle", onToggle, true);
       // A dialog opened with showModal() or closed again flips its `open` attribute; a site that
       // marks the panel inert (focus traps do) gets it undone.
       // Watchdog: if clicks at the panel's centre don't reach it (a site made it inert, covered it or
       // turned pointer events off), raise it again and restore its own hit-testing. Otherwise it stays dead until a reload.
-      const watchdog = setInterval(() => {
+      watchdogTimer = setInterval(() => {
+        if (contextLost()) { teardownOrphan(); return; }
         if (!host?.isConnected || host.hasAttribute("data-applyshortly-executing")) return;
         const box = root.querySelector(".p, .pill, .launcher")?.getBoundingClientRect();
         if (!box || !box.width) return;
@@ -318,13 +350,19 @@
         raise();
       }, 1000);
       // Node-based UI tests may return a timer object; browsers return a numeric id.
-      (watchdog as any)?.unref?.();
-      new MutationObserver((records) => {
+      (watchdogTimer as any)?.unref?.();
+      domObserver = new MutationObserver((records) => {
+        if (contextLost()) { teardownOrphan(); return; }
         if (records.some((r) => (r.target === host && host.inert) || (!ours(r.target) && r.target instanceof HTMLDialogElement))) queueRaise();
-      }).observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["open", "inert"] });
+      });
+      domObserver.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["open", "inert"] });
     }
 
     function ensure() {
+      // Remove any orphaned panel left behind by an earlier extension load so two hosts never fight for the top layer.
+      for (const stale of document.querySelectorAll("jobhunt-autofill-panel")) {
+        if (stale !== host) stale.remove();
+      }
       if (host?.isConnected) return;
       if (!host) {
         host = document.createElement("jobhunt-autofill-panel");
@@ -773,23 +811,28 @@
     return {
       render,
       toast,
-      busy(text) { Object.assign(view, { busy: text, error: null, launcher: false }); render(); },
+      busy(text) { launcherToken++; Object.assign(view, { busy: text, error: null, launcher: false }); render(); },
       idle() { view.busy = null; render(); },
       fail(err) {
+        launcherToken++;
         view.busy = null;
         view.launcher = false;
         view.error = P.friendlyError(err.message, err.status, ctl.state?.ctx?.baseUrl, err.code);
         render();
       },
       async showLauncher() {
+        const token = ++launcherToken;
         try {
           const saved = await chrome.storage.local.get("theme");
           if (saved?.theme) view.theme = saved.theme;
         } catch { /* keep system theme */ }
+        if (token !== launcherToken) return;
+        if (view.busy || view.error || ctl.state?.ctx || ctl.submittedReported || ctl.agent) return;
         view.launcher = true;
         render();
       },
       hideLauncher() {
+        launcherToken++;
         if (!view.launcher) return;
         view.launcher = false;
         if (!ctl.state?.ctx && !ctl.agent && !view.busy && !view.error) host?.remove();
@@ -797,6 +840,7 @@
       setRetry(appId) { retryAppId = appId; },
       /** Shows the agent's latest update. */
       agent(show) {
+        launcherToken++;
         view.launcher = false;
         if (show) Object.assign(view, { minimized: false, busy: null, error: null });
         render();
@@ -854,6 +898,7 @@
             });
           }
         } catch { /* no storage: right side, full size, the page's colour scheme */ }
+        launcherToken++;
         view.launcher = false;
         if (show) view.minimized = false;
         else view.minimized = Boolean((await chrome.runtime.sendMessage({ type: "panelPreference" }).catch(() => ({}))).data);

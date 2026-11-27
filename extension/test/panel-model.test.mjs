@@ -442,4 +442,15 @@ test("looksLikeApplicationForm needs a job signal, keeps real questions and read
     fields: [{ kind: "file", label: "Lebenslauf" }],
     pathname: "/job/1",
   }), true, "a German resume upload");
+  assert.equal(P.looksLikeApplicationForm({
+    fields: [
+      { kind: "checkbox", label: "Select email" },
+      { kind: "checkbox", label: "Select email from ApplyShortly" },
+      { kind: "checkbox", label: "Select" },
+      { kind: "file", label: "File upload" },
+    ],
+    pathname: "/mail/u/0/",
+    title: "Inbox (12) - user@gmail.com - Gmail",
+    pageHeading: "Application key has been created",
+  }), false, "inbox checkbox list with hidden file input is not a job application");
 });

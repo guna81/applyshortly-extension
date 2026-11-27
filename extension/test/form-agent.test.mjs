@@ -812,3 +812,11 @@ test("a declined required radio group counts as asked whichever option the quest
   const plan = await step(body(observation(obs.elements, { observation_id: "obs-2" }), { user_reply: "Please skip this question and move on." }));
   assert.equal(plan.status, "ready_for_review");
 });
+
+test("system prompt tells the agent to include all earlier silent first-pass writes in its fill summary", async () => {
+  const { request, seen } = scripted({ tool_calls: [call("done", { summary: "Done." })] });
+  await make(request)(body(observation([el("e1", "textbox", "First name", { value: "Guna" })])));
+  const system = seen[0].messages[0].content;
+  assert.match(system, /across ALL first-pass write turns on this step/);
+  assert.match(system, /including every field from earlier silent turns, not just the final turn's write/);
+});
