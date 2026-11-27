@@ -2,13 +2,15 @@
 """Preview the real autofill panel with fictional data, without accounts or AI calls.
 
 Run from the repo root, then open http://127.0.0.1:8766. Runtime assets are served
-directly from extension/src; no extension files or local connection settings are changed.
+from dist/extension after running npm run build. No local connection settings are changed.
 """
 
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+BUILD = ROOT / "dist/extension"
 PAGE = """<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>Software Engineer · Northstar Labs</title>
 <style>
@@ -43,7 +45,7 @@ const profile={full_name:'Alex Morgan',email:'alex.morgan@example.com',phone:'+1
 const handlers={hello:()=>({mode:'idle'}),context:()=>({profile,app:{title:'Software Engineer',company_name:'Northstar Labs'},aiDrafts:false}),resume:()=>null,report:()=>null,panelPreference:()=>false,suggest:()=>({answer:null,source:'none'}),assist:(msg)=>({reply:'Thanks, I set relocation to Yes.',updates:{[msg.fields.find(f=>f.kind==='radio').key]:'Yes'},warnings:[],done:false,choices:[]})};
 window.chrome={runtime:{id:'store-fixture',sendMessage:(msg,cb)=>{const response=Promise.resolve().then(()=>({ok:true,data:handlers[msg.type]?.(msg)}));return cb?void response.then(cb):response},onMessage:{addListener:fn=>{runPanel=fn}}}};
 </script>
-<script src="/profile-answer.js"></script><script src="/fill.js"></script><script src="/panel-model.js"></script><script src="/panel-view.js"></script><script src="/content.js"></script>
+<!-- COMPILED_CONTENT_SCRIPTS -->
 <script>runPanel({type:'run',appId:7},{id:'store-fixture'},()=>{});</script></html>
 """
 
@@ -51,9 +53,11 @@ window.chrome={runtime:{id:'store-fixture',sendMessage:(msg,cb)=>{const response
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            body, mime = PAGE.encode(), "text/html; charset=utf-8"
-        elif self.path in ("/profile-answer.js", "/fill.js", "/panel-model.js", "/panel-view.js", "/content.js"):
-            body = (ROOT / "extension/src/rule-based" / self.path[1:]).read_bytes()
+            scripts = "\n".join(f'<script src="/{path}"></script>' for path in self.content_scripts)
+            body = PAGE.replace("<!-- COMPILED_CONTENT_SCRIPTS -->", scripts).encode()
+            mime = "text/html; charset=utf-8"
+        elif self.path[1:] in self.content_scripts:
+            body = (BUILD / self.path[1:]).read_bytes()
             mime = "text/javascript; charset=utf-8"
         else:
             self.send_error(404)
@@ -70,5 +74,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    manifest = BUILD / "manifest.json"
+    if not manifest.is_file():
+        raise SystemExit("Run npm run build before starting the screenshot fixture.")
+    Handler.content_scripts = json.loads(manifest.read_text())["content_scripts"][0]["js"]
     print("Store screenshot fixture: http://127.0.0.1:8766", flush=True)
     ThreadingHTTPServer(("127.0.0.1", 8766), Handler).serve_forever()

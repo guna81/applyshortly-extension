@@ -1,12 +1,12 @@
-# Apply Shortly Form Agent privacy disclosure
+# ApplyShortly Form Assistant privacy disclosure
 
 For the hosted service, see the published [Privacy](https://applyshortly.com/privacy) and
-[Terms](https://applyshortly.com/terms). This disclosure covers extension version 0.3.1.
+[Terms](https://applyshortly.com/terms). This disclosure covers extension version 0.4.3.
 
 ## Scope and contact
 
-Apply Shortly Form Agent helps you fill job application forms from your ApplyShortly profile and
-saved answers. It submits an application only when you choose Auto apply (in the extension, or
+ApplyShortly Form Assistant helps you fill job application forms from your ApplyShortly profile and
+saved answers. It submits an application only when you choose Auto submit (in the extension, or
 by clicking Apply for that job in ApplyShortly), and then only by clicking the employer's own
 Submit button after a countdown you can cancel. Otherwise you review
 the form and click the employer's Submit button. This policy describes the extension connecting to `https://applyshortly.com`.
@@ -43,7 +43,7 @@ A source build with custom endpoint support can instead send answer-drafting and
 the extension to a user-configured OpenAI-compatible provider. The request contains the question,
 relevant professional profile fields and job context. The provider processes this information under
 its own terms. The ApplyShortly server is still used for the account, profile and answer-bank lookup;
-assistant chat also sends the conversation and form fields and values to the custom provider. When Agent based form assistant form filling is selected, the extension sends observed page content, form values, candidate profile, job context, action results and conversation directly to that provider for planning. It does not send screenshots to the custom provider. Page actions are subject to the extension's guarded command layer.
+assistant chat also sends the conversation and form fields and values to the custom provider. When Agent based form assistant form filling is selected, the extension sends observed page content, form values, candidate profile, job context, action results and conversation directly to that provider for planning. It can include screenshots when screenshot sharing is enabled and the custom endpoint supports images. Page actions are subject to the extension's guarded command layer.
 
 When the extension fills a field or attaches your résumé, that information becomes available to
 the employer website. The website may read or transmit it before submission. Review that site's
@@ -59,12 +59,11 @@ messages through ApplyShortly to its provider, subject to account usage and cred
 Custom AI provider sends these directly to the selected provider; its API key stays on this device.
 The server remains involved in account/profile access and saved-answer lookup.
 
-Current Agent based form assistant planning does not send screenshots to either
-provider path. Earlier extension Platform AI versions used a screenshot-aware server planner;
-legacy step clients and the separate server browser can still use screenshots. This source
-change does not update an already installed extension or a published privacy page. Rule based form assistant
-continues to use the server step endpoint. Planner session state lives in extension runtime
-memory; platform gateway sessions keep short-lived billing, usage and retry state. User-approved
+When “Send page screenshots to the AI” is enabled, agent-based planning may include a
+screenshot of the application tab. Platform AI routes it through ApplyShortly. Compatible
+custom endpoints receive it directly and apply their own retention terms. ApplyShortly does
+not store these screenshots. Rule based form assistant
+continues to use the server step endpoint. Planner session state uses Chrome session storage; platform gateway sessions keep short-lived billing, usage and retry state. User-approved
 answers may be saved to the answer bank. Employer pages can read filled values before submission.
 
 ## Autopilot windows
@@ -72,16 +71,16 @@ answers may be saved to the answer bank. Employer pages can read filled values b
 If you turn on nightly submission in ApplyShortly, the extension asks ApplyShortly about once a
 minute whether a job needs your signed-in browser. A reply contains only that job's link, its
 application number and a one-time code. The extension opens the link in a separate window and runs
-Auto apply as described below, then closes that window. Nothing about your browsing is sent in the
+Auto submit as described below, then closes that window. Nothing about your browsing is sent in the
 request. You can turn this off in the extension's Settings.
 
-## Auto apply and submission records
+## Auto submit and submission records
 
-Ordinary filling does not submit. In versions that offer Auto apply, choosing it (in the
+Ordinary filling does not submit. In versions that offer Auto submit, choosing it (in the
 extension, or with Apply in ApplyShortly, which opens the job with a one-time code the extension
 checks with ApplyShortly once) authorises
 clicking the employer's Submit button after a three-second countdown with Cancel; closing or
-minimising the panel cancels it. Auto apply checks detected required fields, browser validity,
+minimising the panel cancels it. Auto submit checks detected required fields, browser validity,
 an identifiable single Submit button and tracked application status. These checks depend on
 page detection and do not guarantee correctness or employer acceptance. Required consent and
 upload steps may still need you. Review answers, attachments and AI drafts first: an AI draft

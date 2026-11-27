@@ -236,7 +236,7 @@ Add: "Apply in ApplyShortly opens the job page with a one-time code, and the ext
 Auto apply. On the review demo, Auto apply must still refuse its disabled Submit control.
 Reloading that page, or opening the same link again, only fills."
 
-## Current source architecture correction — 14 November 2026
+## Historical source architecture note — 14 November 2026
 
 The store text above is historical release copy, not the current implementation contract.
 Before publishing the unified-planner build, replace claims that personal keys are stored by
@@ -246,3 +246,55 @@ the platform model gateway; custom/local AI sends those directly to its endpoint
 one extension planner and currently exclude images. Older installed builds and the server
 browser may still use screenshots. See the current extension privacy policy for replacement
 processing details. Updating this file does not publish store text or a hosted privacy policy.
+
+## v0.4.3 listing
+
+**Title** — ApplyShortly Form Assistant
+
+**Summary** — Fill and review multi-step job applications with your ApplyShortly profile and saved answers. Optional Auto submit.
+
+### Description
+
+ApplyShortly Form Assistant fills supported job application forms from your saved profile,
+résumé and answers. It can help with multi-step forms, pop-ups and embedded application
+forms. Review the completed fields and attachments before you submit.
+
+HOW IT WORKS
+
+1. Sign in at https://www.applyshortly.com and set up your profile and saved answers.
+2. Open a job application and start filling from the toolbar popup, press Alt+Shift+F,
+   or enable the Floating button in the popup to show a launcher on job forms.
+3. Review the answers and complete anything that needs your input. On supported forms,
+   you can answer questions in the panel or request an AI draft.
+
+FORM ENGINES
+
+Choose Rule for filling from profile data and saved answers without AI, Agent for AI-assisted
+forms, or Auto to start with rule-based filling and let the agent help finish. Support varies
+by site. Sign-in, human verification, consent and some uploads can require your input.
+
+SUBMISSION AND TRACKING
+
+You can submit on the employer's site or enable Auto submit. The standard Auto submit flow
+checks detected required fields and browser validation, then gives you three seconds to
+cancel. Choosing Apply for a job in ApplyShortly may start Auto submit using a one-time
+link. If you enable nightly submission and allow Autopilot windows, supported jobs that
+need your signed-in browser can open in a separate window. The extension tracks supported
+applications in your account and flags unconfirmed attempts for verification.
+
+PRICING AND PRIVACY
+
+An ApplyShortly account is required. Rule-based filling is free and available globally.
+Optional platform AI uses ApplyShortly credits. Paid ApplyShortly checkout is currently
+available in India. Custom AI providers apply their own charges.
+
+The extension reads application form content to fill and track applications. AI features
+may send relevant form, profile, job and conversation data through ApplyShortly or directly
+to your configured custom provider. Custom provider keys stay on this device. When screenshot
+sharing is enabled and the provider supports images, the agent may send an image of the
+application tab. Provider retention terms apply. Filled values are visible to the employer
+site, and submitting sends your application and attachments to that site.
+
+Privacy policy — https://www.applyshortly.com/privacy
+Source — https://github.com/guna81/applyshortly-extension
+Support — admin@applyshortly.com
