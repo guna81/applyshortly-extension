@@ -738,3 +738,42 @@ test("ready_for_review unresolved entries preserve each field's required flag", 
     { label: "Photograph", required: false },
   ]);
 });
+
+test("a hand-back lists the fields still open, so the person and the Applications page see what is left", async () => {
+  const { request } = scripted({ text: "" }, { text: "" }, { text: "" });
+  const obs = observation([
+    el("e1", "textbox", "Name", { value: "Asha Kumar", required: true }),
+    el("e2", "textbox", "Current employer", { value: "", required: true }),
+    el("e3", "textbox", "Referral", { value: "", required: false }),
+  ]);
+  const plan = await make(request)(body(obs));
+  assert.equal(plan.status, "ask_user");
+  assert.equal(plan.question.kind, "blocker");
+  assert.deepEqual(plan.unresolved, [
+    { label: "Current employer", required: true },
+    { label: "Referral", required: false },
+  ]);
+});
+
+test("done may leave a required field the user declined after being asked", async () => {
+  const { request } = scripted(
+    { tool_calls: [call("ask_user", { question: "Who is your current employer?", ref: "e1" })] },
+    { tool_calls: [call("done", { summary: "Please answer the current employer question on the page.", declined: ["e1"] })] },
+  );
+  const step = make(request);
+  const obs = observation([el("e1", "textbox", "Current employer")]);
+  await step(body(obs));
+  const plan = await step(body(observation(obs.elements, { observation_id: "obs-2" }), { user_reply: "Please skip this question and move on." }));
+  assert.equal(plan.status, "ready_for_review");
+  assert.deepEqual(plan.unresolved, [{ label: "Current employer", required: true }]);
+});
+
+test("done cannot leave a required field the user was never asked about", async () => {
+  const { request, seen } = scripted(
+    { tool_calls: [call("done", { summary: "Please answer it on the page.", declined: ["e1"] })] },
+    { tool_calls: [call("ask_user", { question: "Who is your current employer?", ref: "e1" })] },
+  );
+  const plan = await make(request)(body(observation([el("e1", "textbox", "Current employer")])));
+  assert.match(seen[1].look.results[0].content, /Required fields are still unanswered.*Current employer/);
+  assert.equal(plan.status, "ask_user");
+});

@@ -41,7 +41,7 @@ export const TOOL_CATALOG = [
     actions: { type: "array", items: { type: "string", enum: ["draft", "skip", "on_page"] }, maxItems: 3 },
   }, ["ref"]),
   tool("posting_gone", "The job posting is closed, removed, or already applied (a 404 / \"not found\" page, \"position filled\", \"no longer accepting applications\", or \"already applied\" with no form) so there is no application form to fill. Ends the run; never use it for a form that merely failed to load.", { reason: { type: "string", maxLength: 1000 } }),
-  tool("done", "Applicable required and enabled optional fields are settled; leave inapplicable conditional follow-ups blank. Hand over for review. Never submits.", { summary: { type: "string", maxLength: 1000 } }),
+  tool("done", "Applicable required and enabled optional fields are settled; leave inapplicable conditional follow-ups blank. Hand over for review. Never submits. A required field the user declined after you asked stays blank for them: list its ref in declined and say once in summary that they must answer it on the page.", { summary: { type: "string", maxLength: 1000 }, declined: { type: "array", items: { type: "string" }, maxItems: 50 } }),
 ];
 
 /** The one observed control under a screenshot point (image pixels), or an error: ambiguous points are refused. */

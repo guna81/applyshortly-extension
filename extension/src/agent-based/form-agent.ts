@@ -152,7 +152,7 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
               const written = cut(item.value ?? field.value ?? field.name, 1000);
               const matchedSavedId = st.gs.answers[id] === undefined ? findSavedAnswerId(written) : null;
               const source = st.gs.answers[id] !== undefined ? "user" : matchedSavedId !== null ? "answer_bank" : "llm";
-              st.filled[id] = { label: cut(field.group || field.name, 500), value: written, kind, source, needs_review: source === "llm", ...(matchedSavedId !== null ? { answer_id: matchedSavedId } : {}) };
+              st.filled[id] = { label: cut(field.group || field.name, 500), value: written, kind, source, needs_review: source === "llm", required: Boolean(field.required), ...(matchedSavedId !== null ? { answer_id: matchedSavedId } : {}) };
             }
           }
         }
@@ -163,7 +163,8 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
         else if (body.user_reply) {
           replyUsed = true;
           guards.recordAnswer(st.gs, obs, p.ref, body.user_reply);
-          st.answered.push({ ref: p.ref, key: questionKey(p.question), answer: cut(body.user_reply, 1000) });
+          const askedEl = p.ref ? obs.elements.find((e: any) => e.ref === p.ref) : null;
+          st.answered.push({ ref: p.ref, key: questionKey(p.question), id: askedEl ? guards.identity(obs, askedEl) : null, answer: cut(body.user_reply, 1000) });
           content = `The user answered: ${JSON.stringify(cut(body.user_reply, 1000))}. This answer is final; use it.`;
         } else content = body.user_message ? "The user sent a conversational message, not a field answer. Respond to that message; do not record it as an answer or fill the pending field from it." : "The user pressed Continue without answering (they may have dealt with it on the page). Look at the page again.";
         if (p.id) results.push({ id: p.id, content, is_error: false }); else notes.push(content);
@@ -269,8 +270,15 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
             refused += 1;
             continue;
           }
-          const missing = guards.missingRequired(obs, st.gs);
-          if (missing.length) { put(`Required fields are still unanswered: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill them from supported facts or ask the user before calling done.`, true); refused += 1; continue; }
+          // A required field the user was asked about and declined stays open for them, like a skip: the model names it in
+          // `declined`, and only fields the user was actually asked about count, so done can never skip asking.
+          const declinedRefs = new Set(Array.isArray(args.declined) ? args.declined.map(String) : []);
+          const wasAsked = (f: any) => { const el = obs.elements.find((e: any) => e.ref === f.ref); const id = el ? guards.identity(obs, el) : null; return st.answered.some((a: any) => a.ref === f.ref || (id !== null && a.id === id)); };
+          const open = guards.missingRequired(obs, st.gs);
+          const declined = open.filter((f: any) => declinedRefs.has(String(f.ref)) && wasAsked(f));
+          const missing = open.filter((f: any) => !declined.includes(f));
+          if (missing.length) { put(`Required fields are still unanswered: ${JSON.stringify(missing.map((f: any) => ({ ref: f.ref, name: f.name })))}. Fill them from supported facts or ask the user before calling done. If the user already declined one you asked about, list its ref in declined.`, true); refused += 1; continue; }
+          for (const f of declined) guards.skip(st.gs, obs, f.ref);
           // Optional applicability is a model decision (the full attention list is in the snapshot).
           // Refusing every blank optional follow-up forces questions even when its parent excludes it.
           terminal = { kind: "done", id: c.id, summary: cut(args.summary, 1000).trim() || message.result.message }; results.push({ id: c.id, content: "", is_error: false }); results.pop(); ended = true;
@@ -467,7 +475,9 @@ export function formAgent(config: any, profile: any, job: any, request: (config:
     compact();
     const response: any = { ...base, filled: Object.values(st.filled), status: plan.status, message: cut(plan.message, 1000), actions: plan.actions ?? [], question: plan.question ?? null };
     if (plan.question) { response.question = { kind: plan.question.kind, text: cut(plan.question.text, 1000), ref: plan.question.ref ?? null, optional: Boolean(plan.question.optional), ...(plan.question.actions ? { actions: plan.question.actions } : {}) }; }
-    if (response.status === "ready_for_review") {
+    // Report what is still open whenever the form goes back to the person: on review, and on a hand-back (a blocker such as
+    // "could not continue"), so the panel, the Applications page and tests see which fields still need them.
+    if (response.status === "ready_for_review" || response.question?.kind === "blocker") {
       const scanned = scanFields(obs);
       const missingRefs = new Set(scanned.missing.map((m: any) => m.ref));
       response.unresolved = scanned.fields.filter((f: any) => f.role !== "file" || f.required)
