@@ -384,6 +384,16 @@ test("the system message asks for one question about each optional field the fac
   assert.doesNotMatch(system, /two plain sentences/i);
 });
 
+test("the completion prompt reports verified fields missing from the earlier chat summary", async () => {
+  const completion = "I also filled the self-identification fields. Please review and submit.";
+  const { request, seen } = scripted({ tool_calls: [call("done", { summary: completion })] });
+  const result = await make(request)(body(observation([el("e1", "textbox", "Name", { value: "A" })])));
+  const system = seen[0].messages[0].content;
+  assert.match(system, /additional fields you verified you filled.*optional fields filled after an Auto mode rules pass/);
+  assert.match(system, /Use field labels only.*Omit fields already reported, fields the user answered or edited, and unverified writes/);
+  assert.equal(result.message, completion);
+});
+
 test("every snapshot shows the user's three switches as they are now", async () => {
   const switches = { fillOptional: true, allowDrafts: true, autoApply: false };
   const { request, seen } = scripted({ tool_calls: [call("scroll", { direction: "down" })] }, { tool_calls: [call("scroll", { direction: "down" })] });

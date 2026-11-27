@@ -293,6 +293,11 @@ test("autoApplyBlockers: the agent's frame-aware readiness and a pending CAPTCHA
     "1 required field in the embedded form still needs you",
     "This form is embedded in the page, so I can't check all of it from here. Review it and submit it yourself",
   ]);
+  const readiness = { total: 1, framed: 0, missing: [{ name: "Email", framed: false }] };
+  const email = { label: "Email", kind: "text", required: true };
+  assert.deepEqual(plain(P.autoApplyBlockers([], null, readiness)), ["1 required field still needs you"]);
+  assert.deepEqual(plain(P.autoApplyBlockers([{ field: email, status: "unresolved" }], null, readiness)), ["1 required field still needs you"]);
+  assert.deepEqual(plain(P.autoApplyBlockers([{ field: email, status: "done" }], null, readiness)), []);
   assert.deepEqual(plain(P.autoApplyBlockers(complete, null, null, true)), [
     "The site still needs you to complete its CAPTCHA. Do that, then submit it yourself",
   ]);

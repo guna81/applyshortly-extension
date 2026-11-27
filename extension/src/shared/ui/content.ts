@@ -484,13 +484,16 @@
       if (kept.length <= log.length && kept.every((line, i) => line === log[i])) { fresh = log.slice(kept.length); break; }
     }
     shownLog = log;
+    let added = false;
     for (const text of fresh) {
-      // The agent repeats generic lines (e.g. "Filling the next known answer…"); say each only once in a row.
+      // Older runs may still carry a synthetic reply confirmation.
+      if (text === "I added your answer to the form." || text.startsWith("Answered: ")) continue;
       const last = [...chat.lines].reverse().find((l) => l.step);
       if ((last?.parts ? last.parts.at(-1) : last?.text) === text || /^Filling the next known answer/i.test(text)) continue;
       pushStep(text);
+      added = true;
     }
-    return fresh.length > 0;
+    return added;
   }
 
   /** Brings the agent's progress into the chat: every step it takes, its questions, and what happened when it stopped. */
@@ -536,10 +539,15 @@
     const refreshed = await run(state?.appId ?? next.appId ?? null, { quiet: true });
     // The panel's scan covers this document only; keep the agent's frame-aware view beside it.
     if (state) { state.readiness = next.status === "ready" ? next.readiness ?? null : null; state.captchaPending = next.status === "ready" && next.captchaPending === true; }
-    // The agent's own closing message is the whole hand-off; the Agent based form adds no counts, notes or questions.
+    const required = P.missingRequired(state?.results ?? [], next.readiness);
+    const missingNote = next.status === "ready" && required.count ? P.readinessNote({
+      missing: [...required.local.map((r) => ({ name: r.field.label })), ...required.extra],
+    }) : "";
+    // Use the page's required-field check when the planner hands back an incomplete form.
     const agentBased = next.agent_engine === "ai_led";
-    const framedNote = next.status === "ready" && !agentBased ? P.readinessNote({ missing: (next.readiness?.missing ?? []).filter((m: any) => m.framed) }) : "";
-    const leadWithNote = [lead, framedNote].filter(Boolean).join(" ");
+    const leadWithNote = missingNote
+      ? [missingNote, next.captchaPending ? "Complete any CAPTCHA the site requires before submitting." : ""].filter(Boolean).join(" ")
+      : lead;
     const follow = next.status === "ready" && !agentBased && state
       ? P.nextPrompt(state.results.filter((r) => !chat.deferred.has(deferredKey(r.field?.label))))
       : null;
@@ -802,7 +810,7 @@
       return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Auto submit”.");
     }
     recheck();
-    const blocked = P.autoApplyBlockers(state.results, state.ctx.app, state.readiness, state.captchaPending);
+    const blocked = P.autoApplyBlockers(state.results, state.ctx.app, state.readiness ?? agent?.readiness, state.captchaPending);
     if (blocked.length) return panel.stop(`Not submitted: ${blocked.join(". ")}.`);
     // Autopilot's window sends only what is certain: a guessed or drafted answer is for the user to check.
     const unchecked = unattended ? state.results.filter((r) => r.status === "filled" && r.needsReview && !r.reviewed) : [];
@@ -821,7 +829,7 @@
     recheck();
     const currentFields = F.collectFields(document);
     const currentButton = F.findSubmitButton(document, currentFields, { includeDisabled: true });
-    if (P.autoApplyBlockers(state.results, state.ctx.app, state.readiness, state.captchaPending).length ||
+    if (P.autoApplyBlockers(state.results, state.ctx.app, state.readiness ?? agent?.readiness, state.captchaPending).length ||
         currentFields.some((field) => (field.required && !answeredNow(field)) || F.isInvalid(field)) ||
         currentButton !== button || !button.isConnected || button.disabled ||
         button.getAttribute("aria-disabled") === "true" || (form && !form.checkValidity())) {

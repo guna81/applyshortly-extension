@@ -1347,7 +1347,7 @@ test("controller: after the agent finishes, consent requests still go to the mod
   await until(() => page.sent.filter((m) => m.type === "agentStart"), "native controller start");
   page.win.document.getElementById("name").value = "Profile name";
   page.message({ type: "agentUpdate", status: "ready", message: "Please tick the privacy policy box and submit.", guarded_commands: true, agent_engine: "ai_led", appId: 5, log: [], filled: [{ label: "Full name", value: "Profile name", source: "profile", needs_review: false }], unresolved: [] });
-  await until(() => page.shadow().textContent.includes("Please tick the privacy policy box"), "agent closing message");
+  await until(() => /Still empty and required:.*privacy policy/.test(page.shadow().textContent), "required consent note");
   assert.equal([...page.shadow().querySelectorAll(".quick button")].some((b) => b.textContent === "I agree, tick it"), false);
   const consent = page.win.document.getElementById("consent");
   assert.equal(consent.checked, false);
@@ -1360,7 +1360,7 @@ test("controller: after the agent finishes, consent requests still go to the mod
   page.win.close();
 });
 
-test("controller: ai_led ready does not re-ask unanswered required fields after its closing message", async () => {
+test("controller: an incomplete AI-led handoff lists missing fields without re-asking them", async () => {
   const form = `<form>
     <label for="company">What is your current company?</label><input id="company" required>
     <label for="position">What is your current position?</label><input id="position" required>
@@ -1378,7 +1378,7 @@ test("controller: ai_led ready does not re-ask unanswered required fields after 
   await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "skip"), "skip sent");
   const closing = "Please complete the company and position fields, then review and submit the application.";
   page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, message: closing, log: [] });
-  await until(() => page.shadow().textContent.includes(closing), "closing message");
+  await until(() => /Still empty and required:.*current company.*current position/.test(page.shadow().textContent), "missing-fields note");
   const text = page.shadow().textContent;
   assert.doesNotMatch(text, /questions? needs? your answer before you can submit/);
   assert.equal(page.shadow().querySelectorAll(".question").length, 1); // only the original question, not re-asked
@@ -1402,7 +1402,7 @@ test("rules_led ready does not re-ask fields the user deferred with I'll fill it
   chip.click();
   await until(() => page.sent.some((m) => m.type === "agentControl" && m.action === "skip"), "skip sent");
   page.message({ type: "agentUpdate", status: "ready", agent_engine: "rules_led", appId: 5, message: "Review the form and finish any remaining fields.", log: [] });
-  await until(() => page.shadow().textContent.includes("Review the form and finish any remaining fields."), "ready message");
+  await until(() => /Still empty and required:.*current company/.test(page.shadow().textContent), "missing-field note");
   assert.doesNotMatch(page.shadow().textContent, /question needs your answer before you can submit/);
   assert.equal(page.shadow().querySelectorAll(".question").length, 1);
   assert.match(page.shadow().querySelector(".f").textContent, /1 required field still needs you/);
@@ -1583,8 +1583,35 @@ test("agent status explains the initial wait and long choices preserve the full 
   page.win.close();
 });
 
-test("agent ready header survives an empty legacy scan and long chat stays bounded", async () => {
-  const page = panelPage(() => null, { context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }) });
+test("a planner handoff with a missing required answer blocks Submit until the answer is filled", async () => {
+  const page = panelPage(() => ({}), { form: AUTO_FORM,
+    context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }) });
+  try {
+    page.start();
+    await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
+    const ready = { type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5,
+      field_total: 1, field_answered: 0, filled_count: 1, message: "Everything I could fill is done." };
+    page.message({ ...ready, autoSubmit: true,
+      readiness: { total: 1, framed: 0, missing: [{ name: "Full name", framed: false }] } });
+    await until(() => page.shadow().textContent.includes("Still empty and required"), "incomplete handoff");
+    assert.match(page.shadow().querySelector(".hero").textContent, /1 required answer needed.*0\/1/s);
+    assert.ok(page.shadow().querySelector(".submit-main.primary").disabled);
+    assert.doesNotMatch(page.shadow().textContent, /Everything I could fill is done|Submitting in/);
+
+    page.message({ ...ready, status: "waiting", question: { kind: "question", text: "What is your full name?", ref: "0.1" } });
+    await until(() => page.shadow().textContent.includes("What is your full name?"), "question shown");
+    page.win.document.querySelector("#name").value = "Ada Lovelace";
+    page.message({ ...ready, field_answered: 1, log: ["Answered: Ada Lovelace", "I added your answer to the form."],
+      readiness: { total: 1, framed: 0, missing: [] } });
+    await until(() => page.shadow().textContent.includes(ready.message) &&
+      page.shadow().querySelector(".submit-main.primary")?.disabled === false, "verified answer and enabled Submit");
+    assert.doesNotMatch(page.shadow().textContent, /Ada Lovelace|I added your answer to the form/);
+    assert.match(page.shadow().querySelector(".hero").textContent, /Ready for your review.*1\/1/s);
+  } finally { page.win.close(); }
+});
+
+test("agent ready header survives an empty legacy scan", async () => {
+  const page = panelPage(() => null, { form: "<form></form>", context: () => ({ agentAvailable: true, agentEngine: "ai_led", profile: {}, app: { id: 5 } }) });
   page.start();
   await until(() => page.sent.some((m) => m.type === "agentStart"), "agent start");
   page.message({ type: "agentUpdate", status: "ready", agent_engine: "ai_led", appId: 5, field_total: 30, field_answered: 30, log: ["Review your answers before submitting."] });
@@ -1673,6 +1700,10 @@ test("Rule and Agent engines share the same natural-language bubble style withou
       "I selected the remote location and added your portfolio link.",
     ],
   );
+
+  // The agent's writes have appeared on the page before it hands back to the user.
+  page.win.document.querySelector("#name").value = "Guna P";
+  page.win.document.querySelector("input[type=radio]").checked = true;
 
   // When ready_for_review message already mentions CAPTCHA, do not append a duplicate CAPTCHA sentence.
   page.message({

@@ -157,7 +157,6 @@
       .bubble { max-width: 88%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
       .bubble.assistant { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
       .bubble.assistant p { margin: 0; }
-      .bubble.assistant.stepline { font-size: 12.5px; padding: 6px 10px; opacity: .9; }
       .bubble.user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
       .bubble.assistant { width: fit-content; max-width: 100%; box-sizing: border-box; background: var(--soft); border-top-left-radius: 4px; }
       .turn { display: flex; align-items: flex-start; gap: 8px; }
@@ -169,11 +168,9 @@
       .said .filled li { display: flex; align-items: center; gap: 6px; min-width: 0; }
       .said .filled li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .said .filled svg { flex: none; width: 14px; height: 14px; color: var(--good); }
-      .question { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px;
-        border-radius: 8px; background: var(--soft); }
+      .bubble.assistant.question { gap: 4px; }
       .question p { margin: 0; word-break: break-word; }
       .question .step { font-size: 11px; font-weight: 600; color: var(--muted); }
-      .question .label { font-weight: 600; }
       .question .note { font-size: 12px; color: var(--muted); }
       .question .quick { padding-top: 4px; }
       .said .warn { margin: 0; color: var(--bad); font-size: 12px; }
@@ -434,15 +431,17 @@
     const agentBusy = () => agentLive() && ctl.agent.status !== "waiting";
 
     /** Headline, count and progress bar. Until the form has been read there is no total to show, so the bar animates instead. */
-    function heroSection(summary) {
+    function heroSection(summary, results) {
       const agent = ctl.agent;
       const working = agentLive();
       const paused = agent?.status === "paused";
       const busy = agentBusy() && !paused;
       const completed = agent?.status === "ready";
-      const full = ctl.submittedReported || summary.progress >= 1;
+      const missing = completed ? P.missingRequired(results, ctl.state?.readiness ?? agent?.readiness).count : 0;
+      const full = ctl.submittedReported || (!missing && summary.progress >= 1);
       const headline = ctl.submittedReported ? "Saved in ApplyShortly ✓"
         : agent && ["stopped", "failed"].includes(agent.status) ? "Stopped: review the form"
+        : missing ? `${missing} required ${missing === 1 ? "answer" : "answers"} needed`
         : completed ? "Ready for your review"
         : working ? (agent.status === "waiting" ? "Needs you" : agent.status === "paused" ? "Paused" : "Working through the form…")
         : summary.headline;
@@ -450,14 +449,15 @@
       const filledCount = agent?.filled_count ?? 0;
       // Before the agent has read the form, the page's own quick count stands in.
       const early = working && !summary.total && !agent?.field_total ? ctl.pageCount : null;
-      const total = summary.total || (working || completed ? agent?.field_total || early?.total || 0 : 0);
+      const total = (missing ? Math.max(summary.total, agent?.field_total ?? 0, agent?.readiness?.total ?? 0, missing) : summary.total) || (working || completed ? agent?.field_total || early?.total || 0 : 0);
       const live = working ? Math.max(summary.answered, filledCount, agent?.field_answered ?? 0, early?.answered ?? 0) : completed ? Math.max(summary.answered, agent?.field_answered ?? 0, filledCount) : summary.answered;
-      const done = full && total ? total : total ? Math.min(live, total) : live;
+      const done = full && total ? total : total ? Math.min(live, total - missing) : live;
       const pct = full ? 100 : total ? Math.round((done / total) * 100) : 0;
       const reading = busy && !full && !total && !filledCount;
       const unknownTotal = busy && !full && !total && filledCount > 0;
       const stopped = Boolean(agent && ["stopped", "failed"].includes(agent.status));
       const meta = ctl.submittedReported ? "Tracked in ApplyShortly"
+        : missing ? "Fill the remaining required fields to continue."
         : completed ? "Review your answers on the form before submitting."
         : paused ? "Paused. Press Resume to continue."
         : reading ? "Reading the form to see what it asks…"
@@ -530,7 +530,7 @@
           el("div", { class: "said" },
             line.text ? el("div", { class: line.step ? "bubble assistant stepline" : "bubble assistant" }, ...paragraphs(line.text).map((t) => el("p", {}, t))) : null,
             line.filled?.length ? el("ul", { class: "filled", "aria-label": "Filled" }, line.filled.map((f) => el("li", { title: f }, icon(CHECK), el("span", {}, f)))) : null,
-            q ? el("div", { class: "question" },
+            q ? el("div", { class: "bubble assistant question" },
               q.step ? el("p", { class: "step" }, q.step) : null,
               el("p", { class: "label" }, q.label),
               q.note ? el("p", { class: "note" }, q.note) : null,
@@ -691,7 +691,7 @@
           el("div", { class: "msg bad", role: "alert" }, el("b", {}, e.title), el("p", {}, e.detail), action)));
       } else if (ctl.state?.ctx || ctl.submittedReported || ctl.agent) {
         const working = agentLive();
-        p.append(heroSection(summary));
+        p.append(heroSection(summary, results));
 
         const body = el("div", { class: "body" });
         if (ctl.submittedReported) {
@@ -719,7 +719,7 @@
         // Submit is in the footer (not while the agent is working). It runs the guarded flow: refuses and says why unless every required
         // answer is in, then clicks the form's own Submit after a countdown the user can cancel.
         const blockersNow = () => {
-          const blockers = P.autoApplyBlockers(results, ctl.state.ctx.app, ctl.state.readiness, ctl.state.captchaPending);
+          const blockers = P.autoApplyBlockers(results, ctl.state.ctx.app, ctl.state.readiness ?? ctl.agent?.readiness, ctl.state.captchaPending);
           if (["stopped", "failed"].includes(ctl.agent?.status)) blockers.push("The form agent stopped before completing its review");
           return blockers;
         };

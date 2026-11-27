@@ -350,6 +350,37 @@ test("Agent: acts, asks the user, and stops at review without submitting", async
   assert.deepEqual(driver.calls.at(-1), ["detach"]);
 });
 
+test("Agent checks required-field readiness after a reply without adding a chat confirmation", async () => {
+  for (const committed of ["Online search", ""]) {
+    let value = "";
+    const field = () => ({ ref: "1", role: "combobox", name: "How did you hear about this job?", required: true, value, options: ["Online search"] });
+    const driver = new FakeDriver({ top: () => frameObs([field()]) });
+    const updates = [];
+    const agent = new ScriptedAgent({
+      tabId: 3, appId: 9, driver,
+      step: async (body) => {
+        if (body.user_reply) {
+          assert.equal(body.user_reply, "Online search");
+          value = committed;
+          return { session_id: "s", status: "continue", actions: [] };
+        }
+        if (updates.some((u) => u.status === "waiting")) return { session_id: "s", status: "ready_for_review", actions: [] };
+        return { session_id: "s", status: "ask_user", question: { kind: "question", text: field().name, ref: "0.1" } };
+      },
+      files: async () => null,
+      notify: (update) => {
+        updates.push(update);
+        if (update.status === "waiting") queueMicrotask(() => agent.reply("Online search"));
+      },
+      report: async () => {},
+    });
+    await agent.run();
+    const ready = updates.find((update) => update.status === "ready");
+    assert.doesNotMatch(ready.log.join("\n"), /Online search|I added your answer to the form/);
+    assert.equal(ready.readiness.missing.length, committed ? 0 : 1);
+  }
+});
+
 test("Agent: a question about a search-style picker carries its choices, not a draft prompt", async () => {
   // Greenhouse's dropdowns are textboxes the page marks popup; the card must still offer the choices.
   const driver = new FakeDriver({ top: () => frameObs([{ ref: "1", role: "textbox", popup: true, name: "When are you available to start?" }]) });

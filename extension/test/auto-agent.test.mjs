@@ -309,3 +309,50 @@ test("autoAgent loops back to RULE_FILL when an SPA gate (0 fields) reveals a fo
   assert.equal(res.actions[0].text, PROFILE.email);
   assert.equal(modelTurns, 1);
 });
+
+test("autoAgent falls back to rules_led on HTTP 402 during a subsequent agent turn or mid-rule user_message", async () => {
+  const err402 = () => Object.assign(new Error("You are out of AI credits."), { status: 402, code: "insufficient_credits" });
+
+  // Case A: 402 on second agent turn (after initial handoff succeeded)
+  let calls = 0;
+  const secondTurn402 = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: "", tool_calls: [{ name: "ask_user", arguments: { ref: "0.2", question: "Why this role?" } }] };
+    }
+    throw err402();
+  };
+  const stepLater = autoAgent(
+    () => ruleAgent(PROFILE, null, { handoffOnly: true }),
+    () => formAgent(null, PROFILE, null, secondTurn402),
+    () => ruleAgent(PROFILE, null, { handoffOnly: false }),
+    { canUseAgent: () => true },
+  );
+  const fields = [
+    { ref: "0.1", role: "textbox", name: "Full name", required: true, value: "" },
+    { ref: "0.2", role: "textarea", name: "Why this role?", required: true, value: "" },
+  ];
+  let res = await stepLater({ observation: makeObs(fields), results: [] });
+  fields[0].value = res.actions[0].text;
+  res = await stepLater({ observation: makeObs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(res.status, "ask_user");
+  assert.equal(res.agent_engine, "ai_led");
+  // Next turn in agent phase hits 402 -> falls back to rule_only
+  res = await stepLater({ observation: makeObs(fields), user_reply: "I love building backend systems." });
+  assert.equal(res.agent_engine, "rules_led");
+  assert.equal(res.status, "ask_user");
+  assert.match(res.message, /out of AI credits/i);
+
+  // Case B: 402 on mid-rule user_message
+  const stepMsg = autoAgent(
+    () => ruleAgent(PROFILE, null, { handoffOnly: true }),
+    () => formAgent(null, PROFILE, null, async () => { throw err402(); }),
+    () => ruleAgent(PROFILE, null, { handoffOnly: false }),
+    { canUseAgent: () => true },
+  );
+  const msgFields = [{ ref: "0.1", role: "textarea", name: "Why this role?", required: true, value: "" }];
+  res = await stepMsg({ observation: makeObs(msgFields), user_message: "Can you help me?" });
+  assert.equal(res.agent_engine, "rules_led");
+  assert.equal(res.status, "ask_user");
+  assert.match(res.message, /out of AI credits/i);
+});

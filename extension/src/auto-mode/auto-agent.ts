@@ -85,8 +85,13 @@ export function autoAgent(
     if (phase === "rule" && body?.user_message && (await checkCanUseAgent())) {
       phase = "agent";
       agentStep ??= createAgentPhase();
-      const res = await agentStep({ ...body, results: pendingAgentResults.splice(0) });
-      return withFilled(res);
+      try {
+        const res = await agentStep({ ...body, results: pendingAgentResults.splice(0) });
+        return withFilled(res);
+      } catch (error) {
+        if (!isInsufficientCreditsError(error)) throw error;
+        return runRuleOnly(body, CREDIT_FALLBACK_NOTICE);
+      }
     }
 
     if (phase === "rule_only") {
@@ -97,8 +102,13 @@ export function autoAgent(
 
     if (phase === "agent") {
       agentStep ??= createAgentPhase();
-      const res = await agentStep(body);
-      return withFilled(res);
+      try {
+        const res = await agentStep(body);
+        return withFilled(res);
+      } catch (error) {
+        if (!isInsufficientCreditsError(error)) throw error;
+        return runRuleOnly(body, CREDIT_FALLBACK_NOTICE);
+      }
     }
 
     // Phase 1: deterministic Rule pass (0 LLM calls).

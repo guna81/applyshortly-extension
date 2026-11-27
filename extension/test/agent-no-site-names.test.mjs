@@ -5,9 +5,13 @@ import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
 // Every file of the Agent based form assistant agent (a new file there is checked too).
-const FILES = readdirSync(new URL("../src/agent-based/", import.meta.url)).filter((f) => f.endsWith(".js"));
+const FILES = readdirSync(new URL("../src/agent-based/", import.meta.url)).filter((f) => f.endsWith(".ts") || f.endsWith(".js"));
 const NAMES = /greenhouse|ashby|workable|lever\b|workday|smartrecruiters|icims|taleo|bamboo|recruitee|jobvite|teamtailor|personio|breezy|rippling|linkedin|naukri|indeed|glassdoor|monster|ziprecruiter|wellhub|clickhouse|gitlab|credo ?ai|level ?ai|acme\b/i;
 const LABELS = /how did you hear|preferred first name|pronouns?:|linkedin url|current employer|desired salary|notice period/i;
+
+test("agent-based directory has source files to check", () => {
+  assert.ok(FILES.length > 0, "expected at least one .ts/.js file in src/agent-based/");
+});
 
 for (const file of FILES) {
   test(`${file} names no company, ATS, job board or form-specific label`, () => {

@@ -76,6 +76,14 @@
   // Application statuses that mean nothing has been sent yet.
   const OPEN_STATUSES = ["saved", "queued", "filling", "ready_for_review"];
 
+  /** Merge the live top-page scan with required fields found only by the frame-aware scan. */
+  function missingRequired(results: any[], readiness: any = null) {
+    const local = results.filter((r) => r.status === "unresolved");
+    const extra = (readiness?.missing ?? []).filter((m: any) => m.framed ||
+      results.filter((r) => r.field?.required && r.field.label === m.name).length !== 1);
+    return { local, extra, count: local.length + extra.length };
+  }
+
   /**
    * Why "Auto apply" must not click Submit yet; empty when it may. Every required question
    * has to be answered on the page, and a tracked application must not already be sent or
@@ -92,10 +100,11 @@
       blockers.push(`This application is already ${String(app.status).replace(/_/g, " ")}`);
     }
     if (!results.length && !(readiness?.total > 0)) blockers.push("No form fields found on this page");
-    const unresolved = results.filter((r) => r.status === "unresolved");
-    if (unresolved.length) blockers.push(`${plural(unresolved.length, "required field")} still ${unresolved.length === 1 ? "needs" : "need"} you`);
+    const { local: unresolved, extra } = missingRequired(results, readiness);
+    const topMissing = unresolved.length + extra.filter((m: any) => !m.framed).length;
+    if (topMissing) blockers.push(`${plural(topMissing, "required field")} still ${topMissing === 1 ? "needs" : "need"} you`);
     // Fields inside a frame are not on this page's own list, so count the ones the agent found empty.
-    const framedMissing = (readiness?.missing ?? []).filter((m: any) => m.framed);
+    const framedMissing = extra.filter((m: any) => m.framed);
     if (framedMissing.length) blockers.push(`${plural(framedMissing.length, "required field")} in the embedded form still ${framedMissing.length === 1 ? "needs" : "need"} you`);
     // Auto apply can only check and press what this page holds; a form in a frame is for the user to send.
     if (readiness?.framed > 0) blockers.push("This form is embedded in the page, so I can't check all of it from here. Review it and submit it yourself");
@@ -521,7 +530,7 @@
   }
 
   (globalThis as any).JobHuntPanel = {
-    summarize, autoApplyBlockers, readinessNote, loginWall, looksLikeApplicationForm, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
+    summarize, autoApplyBlockers, missingRequired, readinessNote, loginWall, looksLikeApplicationForm, friendlyError, sourceLabel, assistantFields, assistantGreeting, chatHistory,
     groundedDraft, nextPrompt, promptTarget, directAnswer, openQuestions, draftable, isDraftRequest, isPlainAnswer, isNavigateRequest, navigationNeeded, handoffText, agentAsk, ON_PAGE_REPLY, CONTINUE_REPLY, LOCAL_REPLIES, DRAFT_REPLY, SKIP_REPLY, AGREE_REPLY, SHOW_REPLY, DONE_REPLY,
   };
 })();

@@ -32,7 +32,7 @@ export function readSnapshot(text) {
 }
 
 /**
- * @param {{knowledge?: Array<{match: string, value?: string, checked?: boolean, rogue?: boolean, click?: string}>, reask?: boolean, stubborn?: boolean, clickNext?: boolean, wrongJson?: number, max_actions?: number, delay_ms?: number, fail?: Array<{at_call: number, status: number}>, failStatusOnError?: boolean}} options
+ * @param {{knowledge?: Array<{match: string, value?: string, checked?: boolean, rogue?: boolean, click?: string}>, reask?: boolean, stubborn?: boolean, clickNext?: boolean, wrongJson?: number, max_actions?: number, completionSummary?: string, delay_ms?: number, fail?: Array<{at_call: number, status: number}>, failStatusOnError?: boolean}} options
  *   knowledge: [{match: "regex on the field's group or name", value}]; reask: ask again even what was asked before (a careless model);
  *   stubborn: propose a refused action again; fail: provider errors injected at call numbers (1-based); wrongJson: how many first replies have no tool call.
  * @param {{profile?: any, job?: any}} [context] the person and the job, which a model reads from its system message
@@ -167,5 +167,6 @@ function decide(snap, state, knowledge, options) {
     const target = els.find((el) => new RegExp(rogueClick.click, "i").test(el.name ?? "") && el.role === "button");
     if (target && !state.refused.has(target.ref)) return reply([{ name: "click", arguments: { ref: target.ref } }]);
   }
-  return reply([{ name: "done", arguments: { summary: "Everything I could fill is done." } }], "Everything I could fill is done.");
+  const summary = options.completionSummary ?? "Everything is filled in. Please review and submit.";
+  return reply([{ name: "done", arguments: { summary } }], summary);
 }

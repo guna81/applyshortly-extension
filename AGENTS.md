@@ -75,7 +75,7 @@ The extension has exactly two form engines, with a strict architectural boundary
    - **Default behaviour (prompted, not coded):** Fill the form top-to-bottom in page order — first fill all known answers without user interaction, report the initially filled fields in chat as a message only from the LLM (never a code-generated checklist), then ask the user unknown questions one by one top-to-bottom and move to the next after each answer.
    - **Settings controlled via prompts:** `Auto apply`, `Fill optional fields`, and `Auto-draft open-ended answers` are read fresh every turn and passed to the model in each snapshot so behaviour is controlled via prompts rather than code branches.
 
-Both sit on `src/page-control/` (observe the page, run guarded commands, drive the tab). Do not add another planner, mode, flag, setting,
+Both sit on `src/page-control/` (observe the page, run guarded commands, drive the tab). `src/auto-mode/auto-agent.ts` composes them per form step (deterministic rule pass first with 0 LLM calls, then Agent review & completion when credits/Custom AI are available, or rule-only fallback when credits are unavailable) without breaking the boundary between the two engines. Do not add another planner, mode, flag, setting,
 "experimental" tier or numbered variant (classic, model-led, tool-led, v2, "new" ...) to compare against the agent: each one multiplies code,
 tests, docs and scorecard columns. Improve the one agent, or fold the idea into it. To try an idea, change the agent on a branch of your
 working tree and measure it against the recorded results; if it does not win, discard it. The earlier classic, model-led and tool-led modes
@@ -143,9 +143,9 @@ The form agent follows the Playwright MCP / Claude in Chrome principle: observe 
 
 ## Paired form-agent fixes
 
-The extension's Agent based form assistant is `src/agent-based/form-agent.js` in the public repository,
-shared by Platform AI and custom/local providers. Change it once for both. The private server
-browser retains its Python planner; mirror shared policy fixes there when applicable.
+The extension's Agent based form assistant is `src/agent-based/form-agent.ts` in the public repository,
+shared by Platform AI, custom/local providers, and the platform's in-app `browser-runner` (bundled via `make runner-bundle-sync`).
+Change it once for all surfaces. The legacy Python AI-led step planner in `services/agent/` was removed; keep shared rule/policy data in sync where applicable.
 Add a page snapshot and scripted replies to the extension's `test/agent-scenarios.json` and run
 both the Node replay and backend `test_shared_scenario_replay`. Runtime policy data is in
 `extension/src/shared/agent-rules.json`; regenerate `src/shared/agent-rules.js` with
@@ -153,10 +153,9 @@ both the Node replay and backend `test_shared_scenario_replay`. Runtime policy d
 copy identical. Shared tests check all copies. See the platform's
 `docs/development/shared-agent-rules.md`. Never restore server-stored personal-key calls.
 
-The extension agent sends one JPEG per planning turn to the selected provider when the layout changed and the user's
+The shared form agent sends one JPEG per planning turn to the selected provider when the layout changed and the user's
 screenshot switch is on (never stored by ApplyShortly; custom providers only when the host is known to take images or
-`supportsVision` is set). The server Python planner has its own screenshots and native tools. Do not claim visual parity or
-identical behavior between the two. Whether the screenshots and tool calls help is not proven: the gateway does not yet report
+`supportsVision` is set). Whether the screenshots and tool calls help is not proven: the gateway does not yet report
 whether a provider used them (see `apply-assistant/docs/development/form-agent-testing/form-agent-planner-results.md`).
 
 ## Enforced form-engine boundary
