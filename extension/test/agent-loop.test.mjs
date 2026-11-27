@@ -1503,3 +1503,68 @@ test("transient AI provider outage switches to the local rule engine with a noti
   assert.ok(agent.log.includes(PROVIDER_FALLBACK_NOTICE));
   assert.ok(notices.some((m) => m.message === PROVIDER_FALLBACK_NOTICE));
 });
+
+test("Agent clears previous tab log messages after switch_tab so referral-tab messages do not replay", async () => {
+  let switched = false;
+  const driver = new GuardedDriver({
+    top: () => frameObs(
+      switched
+        ? [{ ref: "1", role: "textbox", name: "Name*", value: "" }]
+        : [{ ref: "1", role: "link", name: "Apply" }],
+      {
+        url: switched ? "https://jobs.ashbyhq.com/acme/1/application" : "https://arbeitnow.co.uk/jobs/1",
+        document_id: switched ? "doc-ats" : "doc-board",
+      },
+    ),
+  });
+  driver.documentId = "doc-board";
+  driver.applicationTabs = async () => (switched ? [] : [{ id: 99, url: "https://jobs.ashbyhq.com/acme/1/application" }]);
+  driver.switchTab = async (id) => {
+    assert.equal(id, 99);
+    switched = true;
+    driver.documentId = "doc-ats";
+  };
+  let turn = 0;
+  const notices = [];
+  const agent = new Agent({
+    tabId: 1,
+    appId: null,
+    driver,
+    files: {},
+    notify: (m) => { notices.push(m); },
+    report: async () => {},
+    step: async (req) => {
+      turn += 1;
+      if (turn === 1) {
+        return {
+          guarded_commands: true,
+          session_id: "s-tab",
+          agent_engine: "ai_led",
+          status: "continue",
+          want_screenshot: false,
+          pre_messages: ["Filled Email address."],
+          actions: [{ type: "switch_tab", tab_id: 99, command_id: "sw-1", observation_id: req.observation.observation_id }],
+          message: "",
+        };
+      }
+      return {
+        guarded_commands: true,
+        session_id: "s-tab",
+        agent_engine: "ai_led",
+        status: "ready_for_review",
+        want_screenshot: false,
+        pre_messages: ["Filled Name."],
+        actions: [],
+        message: "Ready to review.",
+      };
+    },
+  });
+  const runPromise = agent.run();
+  await new Promise((resolve) => {
+    const origNotify = agent.notify;
+    agent.notify = (m) => { origNotify(m); if (m.status === "ready") { agent.stop("Done"); resolve(); } };
+  });
+  await runPromise;
+  assert.ok(!agent.log.includes("Filled Email address."));
+  assert.ok(agent.log.includes("Filled Name."));
+});

@@ -391,10 +391,10 @@ test("every snapshot shows the user's three switches as they are now", async () 
     vision: false, get fillOptional() { return switches.fillOptional; }, get allowDrafts() { return switches.allowDrafts; }, get autoApply() { return switches.autoApply; },
   });
   const first = await step(body(observation([el("e1", "textbox", "Name")])));
-  assert.match(seen[0].messages[1].content, /Fill optional fields: ON.*Auto-draft open-ended answers: ON.*Auto apply: OFF/);
+  assert.match(seen[0].messages[1].content, /Fill optional fields: ON.*Auto-draft open-ended answers: ON.*Auto submit: OFF/);
   Object.assign(switches, { fillOptional: false, allowDrafts: false, autoApply: true });
   await step(body(observation([el("e1", "textbox", "Name")], { observation_id: "obs-2" }), { results: [{ index: 0, ok: true, command_id: first.actions[0].command_id }] }));
-  assert.match(seen[1].messages[1].content, /Fill optional fields: OFF.*Auto-draft open-ended answers: OFF.*Auto apply: ON/);
+  assert.match(seen[1].messages[1].content, /Fill optional fields: OFF.*Auto-draft open-ended answers: OFF.*Auto submit: ON/);
 });
 
 test("Auto-draft open-ended answers is read fresh in the snapshot and does not hard-block factual textarea writes", async () => {

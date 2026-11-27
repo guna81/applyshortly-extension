@@ -13,6 +13,7 @@ const FORBIDDEN_CLICK = /\b(?:submit|send|finish|complete application|sign.?in|l
 const COOKIE_DECLINE = /^(?:reject|decline|deny|refuse|opt[- ]?out)\b.*|\b(?:necessary|essential) (?:cookies )?only\b|\bonly (?:necessary|essential)\b/i;
 const PLACEHOLDER = /^(?:select|choose|pick|please select|--|none selected)[…\s.-]*$/i;
 const BOT_CHECK = /\b(?:not a (?:robot|bot)|i(?:'| a)?m human|i am human|verify (?:that )?you(?:'re| are) (?:a )?human|human verification)\b/i;
+const NEWSLETTER_OR_ALERT = /\b(?:newsletter|subscribe|subscription|job\s+alerts?|weekly\s+digest|daily\s+digest|mailing\s+list|email\s+alerts?|notify\s+me)\b/i;
 const CONSENT_OR_LEGAL = /\b(?:consent|certify|declare|swear|truthful|agree|accept|confirm|privacy policy|terms|visa|sponsor|work (?:permit|authori[sz]ation)|authori[sz]ed to work|right to work|eligible to work|criminal|convict|felon|previously (?:employed|worked)|former(?:ly)? (?:employee|employed)|employment agreements?|post-employment restrictions?|non-?compete|conflict of interest)\b/i;
 const YES_NO_QUESTION = /^\s*(?:are|do|does|did|have|has|had|will|would|can|could|should|is|were|was)\s+(?:you|there|this|it)\b/i;
 const DIAL_COUNTRIES: Record<string, string> = { "+1": "United States", "+44": "United Kingdom", "+91": "India", "+61": "Australia", "+49": "Germany", "+33": "France", "+65": "Singapore", "+81": "Japan", "+86": "China", "+55": "Brazil" };
@@ -513,7 +514,18 @@ export function ruleAgent(
     }
 
     // 3a. Follow an application tab opened by our own recent click when the current page has no form fields.
-    const hasFields = hasApplicationFields(obs);
+    // A job-listing page with an Apply button/link and only a lone email box (e.g. newsletter/job-alert signup)
+    // is not an application form; treat it as having no application fields so we navigate instead of filling it.
+    const editableFields = obs.elements.filter((e: any) =>
+      ["textbox", "textarea", "combobox", "select", "radio", "checkbox", "file", "spinbutton"].includes(e.role) &&
+      !e.disabled && !["password", "hidden", "search"].includes(e.input_type) &&
+      !BOT_CHECK.test(`${e.group ?? ""} ${e.name ?? ""}`));
+    const hasApplyLink = obs.elements.some((e: any) =>
+      !e.disabled && ["button", "link"].includes(e.role) &&
+      /^apply(?:\s+(?:now|for\s+this\s+job))?$/i.test(String(e.name ?? "").trim()));
+    const onlyLoneEmailOnListing = hasApplyLink && editableFields.length === 1
+      && editableFields[0].role === "textbox" && /\be-?mail\b/i.test(fieldLabel(editableFields[0]));
+    const hasFields = hasApplicationFields(obs) && !onlyLoneEmailOnListing;
     if (!hasFields && Array.isArray(obs.tabs) && obs.tabs.length > 0 && obs.observation_id) {
       const targetTab = obs.tabs[obs.tabs.length - 1];
       const tabKey = `tab|${targetTab.id}|${targetTab.url}`;
@@ -585,10 +597,11 @@ export function ruleAgent(
     const actions: any[] = [];
     const tracked: any[] = [];
 
-    for (const el of obs.elements) {
+    for (const el of (onlyLoneEmailOnListing ? [] : obs.elements)) {
       if (actions.length >= MAX_BATCH) break;
       if (el.disabled || el.user_edited || el.input_type === "password" || isSkipped(obs, el)) continue;
       if (BOT_CHECK.test(`${el.group ?? ""} ${el.name ?? ""}`)) continue;
+      if (NEWSLETTER_OR_ALERT.test(`${el.section ?? ""} ${fieldLabel(el)}`)) continue;
       if (el.required === false && options.fillOptional === false) continue;
 
       const isChoice = isChoiceOption(el) || el.role === "radio" || (el.role === "checkbox" && Boolean(el.group));
@@ -670,8 +683,8 @@ export function ruleAgent(
     }
 
     // 6. Pass 2: ask the user one question at a time for remaining required (then enabled optional) fields.
-    const required = missingRequired(obs);
-    const optional = options.fillOptional === false ? [] : emptyOptional(obs);
+    const required = onlyLoneEmailOnListing ? [] : missingRequired(obs);
+    const optional = (onlyLoneEmailOnListing || options.fillOptional === false) ? [] : emptyOptional(obs);
 
     if (options.handoffOnly) {
       const hasNavButton = !required.length && obs.elements.some((el: any) =>

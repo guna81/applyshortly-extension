@@ -1101,6 +1101,7 @@ export class Agent {
               // Same document, same control (not edited by the user, not replaced), not a password.
               await this.runner.guard(action);
               outcome = await withDeadline(executing(this.driver, frames, () => execute(this.driver, refs, frames, action, this.files, res.agent_engine === "ai_led", Boolean(res.local_rule_step))), STEP_DEADLINE_MS, `doing ${action.label || action.type}`);
+              if (action.type === "switch_tab") this.log = [];
             }
 
             if (outcome && typeof outcome === "object" && outcome.via === "activateOption") this.recovered("activate_option", action.label);

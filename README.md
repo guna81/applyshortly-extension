@@ -20,7 +20,7 @@ Stop retyping the same details. Fill **job applications** from your saved profil
 
 </div>
 
-![ApplyShortly Chrome extension showing an autofilled job application, screening-answer chat, optional AI drafting and a cancellable Auto apply countdown](docs/images/applyshortly-autofill-auto-apply-demo.jpg)
+![ApplyShortly Chrome extension showing an autofilled job application, screening-answer chat, optional AI drafting and a cancellable Auto submit countdown](docs/images/applyshortly-autofill-auto-apply-demo.jpg)
 
 *Fill your application, answer screening questions in chat, then review and submit. Fictional demonstration; no application is sent.*
 
@@ -32,7 +32,7 @@ Stop retyping the same details. Fill **job applications** from your saved profil
 
 Profile and saved-answer fills are 100% free forever with no credit card required. Optional AI drafts use ApplyShortly credits, a connected assistant (ChatGPT, Claude or Gemini via MCP), or your own supported provider key. A compatible ApplyShortly server and an account are required; the backend and website are maintained separately.
 
-> Today: **autofill, multi-step forms, on-page chat and application tracking**. Review answers and submit yourself, or explicitly choose Auto apply with a cancellable countdown. Form support varies by website.
+> Today: **autofill, multi-step forms, on-page chat and application tracking**. Review answers and submit yourself, or explicitly choose Auto submit with a cancellable countdown. Form support varies by website.
 
 ## Features
 
@@ -41,7 +41,7 @@ Profile and saved-answer fills are 100% free forever with no credit card require
 - **Answer in chat:** respond to remaining questions or ask the assistant to change an answer in plain words.
 - **Optional AI drafts:** draft open-ended answers from your profile and the job, then review and edit them.
 - **Review progress:** see which fields are filled and which still need your input.
-- **User-chosen Auto apply:** check detected required fields and browser validity, then submit after a three-second countdown with Cancel.
+- **User-chosen Auto submit:** check detected required fields and browser validity, then submit after a three-second countdown with Cancel.
 - **Application tracking:** keep attempts and confirmed submissions in your ApplyShortly account for supported applications.
 - **Open source:** inspect the extension, build it yourself and connect it to a compatible server.
 
@@ -50,7 +50,7 @@ Profile and saved-answer fills are 100% free forever with no credit card require
 1. [Install Apply Shortly Form Agent](https://chromewebstore.google.com/detail/apply-shortly-form-assist/pdeffhelbeobnpcbjdegddcfimglmedd) from the Chrome Web Store.
 2. Sign in to [ApplyShortly](https://applyshortly.com), save your profile, résumé and application answers, then check your connection in extension settings.
 3. Open a job application and click the toolbar icon: the chat opens and starts filling by itself (or press **Alt+Shift+F**).
-4. Answer remaining questions, review the form and attachments, then submit yourself or turn on the **Auto apply** switch.
+4. Answer remaining questions, review the form and attachments, then submit yourself or turn on the **Auto submit** switch.
 
 Then: **save your profile → open an application → autofill → review → submit.**
 
@@ -65,7 +65,7 @@ The store version connects to `https://applyshortly.com` and updates automatical
    on, the agent writes them (as long as the question needs) from your profile and the job; off,
    it asks you, and **Draft it for me** has it write just that one answer. Visa and work-authorization narratives quote recorded profile facts without
    assuming authorization in another country; missing legal facts remain yours to answer.
-4. **Review and submit:** check answers, attachments and consent. Submit on the employer's site, or explicitly choose Auto apply with its checks and cancellable countdown.
+4. **Review and submit:** check answers, attachments and consent. Submit on the employer's site, or explicitly choose Auto submit with its checks and cancellable countdown.
    Skipped fields stay listed for your review. After **Continue**, the agent hands the form
    back without asking about them again; they can still be incomplete, and submission keeps
    its required-field checks. Unused optional upload helpers do not count as remaining tasks.
@@ -119,7 +119,7 @@ For automatic browser sign-in, the server operator must register the installed e
 
 ## Safety and privacy
 
-Review filled answers, AI drafts and attachments before submission. The form agent never clicks final Submit itself. Auto apply requires your explicit choice, including clicking Apply for a job in ApplyShortly through a one-time link, and uses a cancellable countdown. Sign-in, CAPTCHAs, uploads, consent and unsupported controls may require your input.
+Review filled answers, AI drafts and attachments before submission. The form agent never clicks final Submit itself. Auto submit requires your explicit choice, including clicking Apply for a job in ApplyShortly through a one-time link, and uses a cancellable countdown. Sign-in, CAPTCHAs, uploads, consent and unsupported controls may require your input.
 
 Form questions and answers are processed for filling and assistant features. The current shared AI-led form agent sends structured visible page context to its AI provider, without screenshots. Earlier Platform AI versions could send transient screenshots; the server-browser agent still uses them. Filled information is visible to the employer website before submission; submitting sends the application and attachments to that employer or its application service.
 
@@ -137,7 +137,7 @@ No. Basic autofill uses saved profile details and answers. Optional AI features 
 
 **Does it submit applications automatically?**
 
-You can submit yourself or explicitly choose Auto apply, which checks detected required fields and browser validity before a three-second cancellable countdown. Clicking Apply for a job in ApplyShortly also chooses Auto apply through a one-time link. See the [usage guide](extension/README.md#use) for details, including optional Autopilot windows.
+You can submit yourself or explicitly choose Auto submit, which checks detected required fields and browser validity before a three-second cancellable countdown. Clicking Apply for a job in ApplyShortly also chooses Auto submit through a one-time link. See the [usage guide](extension/README.md#use) for details, including optional Autopilot windows.
 
 **Which application forms does it support?**
 
@@ -174,7 +174,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [LICENSE](LI
 
 ## Documentation
 
-- [Extension guide](extension/README.md): installation, account connection, autofill and Auto apply.
+- [Extension guide](extension/README.md): installation, account connection, autofill and Auto submit.
 - [API bridge](extension-bridge/README.md): authentication, contract and event semantics.
 - [Publishing](docs/operations/extension-publishing.md): packaging and release checks.
 - [Store copy](docs/operations/extension-store-auto-apply.md): versioned listing descriptions and permission disclosures.

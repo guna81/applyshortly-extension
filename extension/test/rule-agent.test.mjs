@@ -323,3 +323,38 @@ test("ruleAgent does not click an Apply button when application fields are alrea
   assert.equal(res.status, "ready_for_review");
   assert.deepEqual(res.actions, []);
 });
+
+test("ruleAgent skips lone newsletter Email address on a job listing page with an Apply link", async () => {
+  const listingFields = [
+    { ref: "0.1", role: "textbox", name: "Email address", value: "", required: true },
+    { ref: "0.2", role: "link", name: "Apply" },
+  ];
+  const autoStep = ruleAgent(PROFILE, null, { handoffOnly: true });
+  const handoff = await autoStep(obs(listingFields));
+  assert.equal(handoff.status, "handoff");
+  assert.equal(handoff.message, "");
+  assert.equal(handoff.handoff.hasFields, false);
+
+  const ruleStep = ruleAgent(PROFILE, null);
+  const nav = await ruleStep(obs(listingFields));
+  assert.equal(nav.status, "continue");
+  assert.equal(nav.actions.length, 1);
+  assert.equal(nav.actions[0].type, "click");
+  assert.equal(nav.actions[0].ref, "0.2");
+});
+
+test("ruleAgent skips newsletter/job-alert email inputs alongside real application fields", async () => {
+  const step = ruleAgent(PROFILE, null, { handoffOnly: true });
+  const fields = [
+    { ref: "0.1", role: "textbox", name: "First Name", value: "", required: true },
+    { ref: "0.2", role: "textbox", name: "Email address", section: "Subscribe to Job Alerts", value: "", required: false },
+  ];
+  const r1 = await step(obs(fields));
+  assert.equal(r1.status, "continue");
+  assert.equal(r1.actions[0].ref, "0.1");
+  fields[0].value = "Alex";
+
+  const r2 = await step({ ...obs(fields), results: [{ index: 0, ok: true, result: { verified: true } }] });
+  assert.equal(r2.status, "handoff");
+  assert.equal(r2.message, "Filled First Name.");
+});

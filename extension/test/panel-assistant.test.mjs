@@ -401,7 +401,7 @@ test("Auto apply submits a complete form after the countdown and reports the att
   assert.equal(page.win.document.getElementById("name").value, "Ada Lovelace");
   const attempts = page.sent.filter((m) => m.type === "report" && m.event.event === "submission_attempted");
   assert.equal(attempts.length, 1);
-  assert.match(attempts[0].event.note, /auto apply/);
+  assert.match(attempts[0].event.note, /auto submit/);
   await tick(2100);
   page.start({ autoSubmit: true });
   await tick(3500);

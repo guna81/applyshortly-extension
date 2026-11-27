@@ -799,7 +799,7 @@
     if (!state?.ctx || autoSubmitting || submittedReported) return;
     // A sign-in page (or account creation) is the user's to complete: the window stays for them.
     if (P.loginWall(location.pathname, [...document.querySelectorAll("input[type=password]")].some((el) => !isHidden(el)))) {
-      return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Auto apply”.");
+      return panel.stop("Not submitted: this page needs you to sign in. Sign in, then choose “Auto submit”.");
     }
     recheck();
     const blocked = P.autoApplyBlockers(state.results, state.ctx.app, state.readiness, state.captchaPending);
@@ -828,7 +828,7 @@
       return panel.stop("Not submitted: the form changed. Check it and try again.");
     }
     autoSubmitting = true;
-    await report("submission_attempted", { note: "auto apply clicked the form's submit button; confirmation not yet detected" });
+    await report("submission_attempted", { note: "auto submit clicked the form's submit button; confirmation not yet detected" });
     if (state.ctx.app) state.ctx.app = { ...state.ctx.app, status: "submission_unconfirmed" };
     button.click();
     // Autopilot's window, if this is one, closes shortly after.

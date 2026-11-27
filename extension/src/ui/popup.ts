@@ -111,10 +111,11 @@ async function render(s, { notFound = false } = {}) {
     : `${provider} · ${s.credits ?? 0} credits`;
   setConn("good", connSummary);
   $("conn").title = [s.name, connSummary].filter(Boolean).join(" — ");
-  const saved = await chrome.storage.local.get(["autoApply", "aiDrafts", "fillOptional", "extensionEngine"]);
+  const saved = await chrome.storage.local.get(["autoApply", "aiDrafts", "fillOptional", "autoShowLauncher", "extensionEngine"]);
   $("autoApply").checked = saved.autoApply === true;
   $("aiDrafts").checked = saved.aiDrafts != null ? saved.aiDrafts === true : Boolean(s.aiDrafts);
   $("fillOptional").checked = saved.fillOptional !== false;
+  $("autoShowLauncher").checked = saved.autoShowLauncher === true;
   $("prefs").hidden = false;
   const currentEngine = normEngine(saved.extensionEngine ?? s.extensionEngine);
   syncEngineUI(currentEngine);
@@ -176,8 +177,7 @@ async function render(s, { notFound = false } = {}) {
     profileNotice,
     el("div", { class: "card" },
       el("div", { class: "eyebrow" }, host || "This page"),
-      el("b", { class: "title" }, notFound ? "Not in ApplyShortly yet" : "Fill this page"),
-      el("p", { class: "muted" }, "Start the agent here, or add this job to ApplyShortly to track it."),
+      notFound ? el("b", { class: "title" }, "Not in ApplyShortly yet") : null,
       button("Start applying", (e) => void start(true, e.currentTarget), "primary block"),
       button("Add this job to ApplyShortly", () => openTab(`${s.baseUrl}/applications?${new URLSearchParams({ add: "1", url: tab.url })}`), "block"),
     ),
@@ -212,10 +212,15 @@ for (const b of $("engineSeg")?.querySelectorAll("button[data-engine]") ?? []) {
 }
 
 chrome.storage.onChanged?.addListener((changes, area) => {
-  if (area === "local" && "extensionEngine" in changes) syncEngineUI(changes.extensionEngine.newValue);
+  if (area !== "local") return;
+  if ("extensionEngine" in changes) syncEngineUI(changes.extensionEngine.newValue);
+  if ("autoShowLauncher" in changes) $("autoShowLauncher").checked = changes.autoShowLauncher.newValue === true;
+  if ("autoApply" in changes) $("autoApply").checked = changes.autoApply.newValue === true;
+  if ("aiDrafts" in changes) $("aiDrafts").checked = changes.aiDrafts.newValue === true;
+  if ("fillOptional" in changes) $("fillOptional").checked = changes.fillOptional.newValue !== false;
 });
 
-for (const key of ["autoApply", "aiDrafts", "fillOptional"]) {
+for (const key of ["autoApply", "aiDrafts", "fillOptional", "autoShowLauncher"]) {
   $(key).addEventListener("change", async (e: any) => {
     await chrome.storage.local.set({ [key]: (e.target as HTMLInputElement).checked });
   });

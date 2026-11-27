@@ -31,6 +31,8 @@ html { scroll-behavior: smooth; }
 .settings-page #logoutHint { margin: -4px 0 0; }
 .settings-page details { border: 1px solid var(--line); border-radius: 11px; padding: 0 14px; }
 .settings-page details[open] { padding-bottom: 15px; }
+.settings-page details:has(> summary:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-page details > summary:focus-visible { outline: none; }
 .settings-page summary { cursor: pointer; font-weight: 650; padding: 14px 0; }
 .settings-page summary span { display: block; padding-left: 17px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .settings-page details form { margin-top: 4px; }

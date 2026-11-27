@@ -294,7 +294,7 @@
     return [
       HANDOFF[reason] ?? HANDOFF.asked,
       "I'll ask here when I need you. Chrome shows a “started debugging” bar while I click through, and it uses one apply run of credits.",
-      autoSubmit ? "Once every required answer is complete, Auto apply will resume with its cancellable countdown." : "",
+      autoSubmit ? "Once every required answer is complete, Auto submit will resume with its cancellable countdown." : "",
     ].filter(Boolean).join(" ");
   }
 
